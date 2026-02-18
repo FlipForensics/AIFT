@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIFT Report | Flip Forensics - {{ case_id }}</title>
+  <style>
+    :root {
+      --bg: #0b1018;
+      --panel: #141d2a;
+      --panel-alt: #1b2638;
+      --border: #2d3a4c;
+      --text: #e6edf7;
+      --muted: #9fb1c7;
+      --accent: #57b3ff;
+      --pass: #22c55e;
+      --fail: #f04438;
+      --critical: #ef4444;
+      --high: #ff7a45;
+      --medium: #facc15;
+      --low: #60a5fa;
+      --unknown: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 20% 0%, #21324a 0%, transparent 40%),
+        radial-gradient(circle at 80% 10%, #1f2b3f 0%, transparent 35%),
+        var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", "Helvetica Neue", Tahoma, Arial, sans-serif;
+      line-height: 1.5;
+      padding: 24px;
+    }
+
+    .report-shell {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+
+    .panel {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent), var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+      margin: 0 0 16px;
+      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
+    }
+
+    .report-brand {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: 10px 16px;
+      margin: 0 0 12px;
+    }
+
+    .report-logo {
+      width: auto;
+      height: auto;
+      max-height: clamp(52px, 8vw, 90px);
+      max-width: min(56vw, 420px);
+      object-fit: contain;
+      flex: 0 0 auto;
+      display: block;
+    }
+
+    .report-heading {
+      min-width: 240px;
+    }
+
+    .report-heading h1 {
+      margin: 0;
+      font-size: 1.8rem;
+      letter-spacing: 0.02em;
+    }
+
+    .report-subtitle {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px 16px;
+    }
+
+    .meta-item {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(159, 177, 199, 0.15);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+
+    .meta-item strong {
+      display: block;
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 600;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 1.2rem;
+      color: #f4f8ff;
+    }
+
+    .mono {
+      font-family: "Consolas", "SFMono-Regular", "Liberation Mono", Menlo, monospace;
+      font-size: 0.95em;
+      word-break: break-word;
+    }
+
+    .kv-table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 8px;
+    }
+
+    .kv-table th,
+    .kv-table td {
+      border: 1px solid rgba(159, 177, 199, 0.2);
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .kv-table th {
+      width: 260px;
+      color: var(--muted);
+      font-weight: 600;
+      background: rgba(159, 177, 199, 0.06);
+    }
+
+    .hash-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      min-width: 180px;
+      justify-content: center;
+    }
+
+    .hash-status.pass {
+      color: #042e11;
+      background: linear-gradient(90deg, #67e8a7, var(--pass));
+      border: 1px solid rgba(34, 197, 94, 0.45);
+    }
+
+    .hash-status.fail {
+      color: #fff2f0;
+      background: linear-gradient(90deg, #f97360, var(--fail));
+      border: 1px solid rgba(240, 68, 56, 0.45);
+    }
+
+    .content-block {
+      background: var(--panel-alt);
+      border: 1px solid rgba(159, 177, 199, 0.2);
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .markdown-output > :first-child {
+      margin-top: 0;
+    }
+
+    .markdown-output > :last-child {
+      margin-bottom: 0;
+    }
+
+    .markdown-output h1,
+    .markdown-output h2,
+    .markdown-output h3,
+    .markdown-output h4,
+    .markdown-output h5,
+    .markdown-output h6 {
+      margin: 0 0 8px;
+      color: #f4f8ff;
+    }
+
+    .markdown-output p {
+      margin: 0 0 10px;
+    }
+
+    .markdown-output ul,
+    .markdown-output ol {
+      margin: 0 0 10px;
+      padding-left: 20px;
+    }
+
+    .markdown-output li {
+      margin: 0 0 4px;
+      line-height: 1.45;
+    }
+
+    .markdown-output code {
+      font-family: "Consolas", "SFMono-Regular", "Liberation Mono", Menlo, monospace;
+      font-size: 0.9em;
+      background: rgba(11, 16, 24, 0.75);
+      border: 1px solid rgba(159, 177, 199, 0.25);
+      border-radius: 5px;
+      padding: 1px 6px;
+    }
+
+    .markdown-output pre {
+      margin: 0 0 10px;
+      padding: 10px;
+      overflow-x: auto;
+      border: 1px solid rgba(159, 177, 199, 0.25);
+      border-radius: 8px;
+      background: rgba(11, 16, 24, 0.85);
+    }
+
+    .markdown-output pre code {
+      border: 0;
+      padding: 0;
+      background: transparent;
+      border-radius: 0;
+    }
+
+    .artifact-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    details.artifact-card,
+    details.audit-card {
+      border: 1px solid rgba(159, 177, 199, 0.2);
+      border-radius: 10px;
+      background: var(--panel-alt);
+      overflow: hidden;
+    }
+
+    details > summary {
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      font-weight: 600;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    details > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .artifact-content,
+    .audit-content {
+      padding: 12px 14px 14px;
+    }
+
+    .artifact-meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .artifact-meta .meta-item {
+      margin: 0;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .confidence-high {
+      color: #2f0d04;
+      background: #ffb38f;
+    }
+
+    .confidence-critical {
+      color: #fff1f0;
+      background: var(--critical);
+    }
+
+    .confidence-medium {
+      color: #302600;
+      background: #ffe47a;
+    }
+
+    .confidence-low {
+      color: #021a35;
+      background: #9ec9ff;
+    }
+
+    .confidence-unknown {
+      color: #132234;
+      background: #cbd5e1;
+    }
+
+    .confidence-inline {
+      padding: 1px 6px;
+      border-radius: 5px;
+      font-weight: 700;
+      font-size: 0.9em;
+      margin: 0 2px;
+    }
+
+    .key-point-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0 0 12px;
+    }
+
+    .key-point-table th,
+    .key-point-table td {
+      border: 1px solid rgba(159, 177, 199, 0.2);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .key-point-table th {
+      color: var(--muted);
+      background: rgba(159, 177, 199, 0.05);
+      font-weight: 600;
+    }
+
+    .audit-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .audit-table th,
+    .audit-table td {
+      border: 1px solid rgba(159, 177, 199, 0.2);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .audit-table th {
+      color: var(--muted);
+      font-weight: 600;
+      background: rgba(159, 177, 199, 0.05);
+    }
+
+    .empty-value {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    footer {
+      border-top: 1px solid var(--border);
+      margin-top: 18px;
+      padding-top: 12px;
+      color: #d3deed;
+      font-size: 0.92rem;
+    }
+
+    footer p {
+      margin: 0;
+    }
+
+    footer p + p {
+      margin-top: 8px;
+      color: var(--muted);
+    }
+
+    @media print {
+      :root {
+        --bg: #ffffff;
+        --panel: #ffffff;
+        --panel-alt: #ffffff;
+        --border: #d1d5db;
+        --text: #111827;
+        --muted: #475569;
+        --accent: #0f4c81;
+      }
+
+      body {
+        background: #ffffff !important;
+        color: var(--text);
+        padding: 0;
+        font-size: 11pt;
+      }
+
+      .panel,
+      details.artifact-card,
+      details.audit-card {
+        box-shadow: none !important;
+        border-color: var(--border) !important;
+        break-inside: avoid;
+      }
+
+      .hash-status.pass,
+      .hash-status.fail {
+        color: #111827 !important;
+      }
+
+      details {
+        page-break-inside: avoid;
+      }
+
+      /* Ensure collapsed findings and audit entries are fully visible in print output. */
+      details:not([open]) > *:not(summary) {
+        display: block !important;
+      }
+
+      a {
+        color: var(--text);
+        text-decoration: none;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .report-brand {
+        align-items: flex-start;
+      }
+
+      .report-logo {
+        max-height: clamp(44px, 11vw, 64px);
+        max-width: 84vw;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="report-shell">
+    <header class="panel header-panel">
+      <div class="report-brand">
+        {% if logo_data_uri %}
+          <img class="report-logo" src="{{ logo_data_uri }}" alt="AIFT logo">
+        {% endif %}
+        <div class="report-heading">
+          <h1>{{ case_name }}</h1>
+          <p class="report-subtitle">AIFT Forensic Report | Flip Forensics</p>
+        </div>
+      </div>
+      <div class="meta-grid">
+        <div class="meta-item">
+          <strong>Case ID</strong>
+          <span class="mono">{{ case_id }}</span>
+        </div>
+        <div class="meta-item">
+          <strong>Generated</strong>
+          <span class="mono">{{ generated_at }}</span>
+        </div>
+        <div class="meta-item">
+          <strong>Tool Version</strong>
+          <span class="mono">{{ tool_version }}</span>
+        </div>
+        <div class="meta-item">
+          <strong>AI Provider</strong>
+          <span class="mono">{{ ai_provider }}</span>
+        </div>
+      </div>
+    </header>
+
+    <section class="panel">
+      <h2>Evidence Summary</h2>
+      <table class="kv-table">
+        <tbody>
+          <tr>
+            <th>Filename</th>
+            <td class="mono">{{ evidence.filename }}</td>
+          </tr>
+          <tr>
+            <th>SHA-256</th>
+            <td class="mono">{{ evidence.sha256 }}</td>
+          </tr>
+          <tr>
+            <th>MD5</th>
+            <td class="mono">{{ evidence.md5 }}</td>
+          </tr>
+          <tr>
+            <th>File Size</th>
+            <td class="mono">{{ evidence.file_size }}</td>
+          </tr>
+          <tr>
+            <th>Hostname</th>
+            <td class="mono">{{ evidence.hostname }}</td>
+          </tr>
+          <tr>
+            <th>OS</th>
+            <td class="mono">{{ evidence.os_version }}</td>
+          </tr>
+          <tr>
+            <th>Domain</th>
+            <td class="mono">{{ evidence.domain }}</td>
+          </tr>
+          <tr>
+            <th>IPs</th>
+            <td class="mono">{{ evidence.ips }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <h2>Hash Verification Result</h2>
+      <div class="hash-status {% if hash_verification.passed %}pass{% else %}fail{% endif %}">
+        {{ hash_verification.label }}
+      </div>
+      <div class="content-block">{{ hash_verification.detail }}</div>
+    </section>
+
+    <section class="panel">
+      <h2>Investigation Context</h2>
+      <div class="content-block markdown-output">{{ investigation_context | format_markdown_block }}</div>
+    </section>
+
+    <section class="panel">
+      <h2>Executive Summary</h2>
+      <div class="content-block markdown-output">{{ executive_summary | format_markdown_block }}</div>
+    </section>
+
+    <section class="panel">
+      <h2>Per-Artifact Findings</h2>
+      {% if per_artifact_findings %}
+        <div class="artifact-list">
+          {% for finding in per_artifact_findings %}
+            <details class="artifact-card" {% if loop.first %}open{% endif %}>
+              <summary>
+                <span>{{ finding.artifact_name }}{% if finding.artifact_key %} ({{ finding.artifact_key }}){% endif %}</span>
+                <span class="pill {{ finding.confidence_class }}">{{ finding.confidence_label }}</span>
+              </summary>
+              <div class="artifact-content">
+                <div class="artifact-meta">
+                  <div class="meta-item">
+                    <strong>Record Count</strong>
+                    <span class="mono">{{ finding.record_count }}</span>
+                  </div>
+                  <div class="meta-item">
+                    <strong>Time Range Start</strong>
+                    <span class="mono">{{ finding.time_range_start }}</span>
+                  </div>
+                  <div class="meta-item">
+                    <strong>Time Range End</strong>
+                    <span class="mono">{{ finding.time_range_end }}</span>
+                  </div>
+                </div>
+
+                {% if finding.key_data_points %}
+                  <table class="key-point-table">
+                    <thead>
+                      <tr>
+                        <th>Timestamp</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for data_point in finding.key_data_points %}
+                        <tr>
+                          <td class="mono">{{ data_point.timestamp or "N/A" }}</td>
+                          <td class="mono">{{ data_point.value }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                {% endif %}
+
+                <div class="content-block markdown-output">{{ finding.analysis | format_markdown_block }}</div>
+              </div>
+            </details>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="content-block"><span class="empty-value">No per-artifact findings were provided.</span></div>
+      {% endif %}
+    </section>
+
+    <section class="panel">
+      <h2>Audit Trail</h2>
+      <details class="audit-card">
+        <summary>View Audit Entries ({{ audit_entries | length }})</summary>
+        <div class="audit-content">
+          {% if audit_entries %}
+            <table class="audit-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Action</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for entry in audit_entries %}
+                  <tr>
+                    <td class="mono">{{ entry.timestamp }}</td>
+                    <td>{{ entry.action }}</td>
+                    <td class="mono">{{ entry.details }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <span class="empty-value">No audit entries were provided.</span>
+          {% endif %}
+        </div>
+      </details>
+    </section>
+
+    <footer>
+      <p>This report was generated with AI assistance. All findings should be independently verified by a qualified forensic examiner before being used in any legal or formal proceeding.</p>
+      <p>©Flip Forensics</p>
+    </footer>
+  </div>
+</body>
+</html>

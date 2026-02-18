@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIFT | Flip Forensics</title>
+  {% if logo_filename %}
+    <link rel="icon" type="image/png" href="{{ url_for('routes.image_asset', filename=logo_filename) }}">
+    <link rel="apple-touch-icon" href="{{ url_for('routes.image_asset', filename=logo_filename) }}">
+  {% endif %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-bar">
+      <div class="brand-lockup">
+        {% if logo_filename %}
+          <img
+            class="app-logo"
+            src="{{ url_for('routes.image_asset', filename=logo_filename) }}"
+            alt="AIFT logo"
+          >
+        {% endif %}
+        <h1 class="app-title">AIFT by Flip Forensics</h1>
+      </div>
+      <button
+        id="settings-button"
+        type="button"
+        aria-label="Open settings"
+        aria-controls="settings-panel"
+        aria-expanded="false"
+      >
+        <span aria-hidden="true">&#9881;</span>
+      </button>
+    </div>
+    <nav aria-label="Wizard steps">
+      <ol class="step-indicator">
+        <li id="indicator-evidence" class="is-active" data-step-target="step-evidence" aria-current="step">Evidence</li>
+        <li id="indicator-artifacts" data-step-target="step-artifacts">Artifacts</li>
+        <li id="indicator-parsing" data-step-target="step-parsing">Parsing</li>
+        <li id="indicator-analysis" data-step-target="step-analysis">Analysis</li>
+        <li id="indicator-results" data-step-target="step-results">Results</li>
+      </ol>
+    </nav>
+  </header>
+
+  <main id="wizard" aria-live="polite">
+    <section id="step-evidence" class="wizard-step is-active" data-step="1" aria-labelledby="step-evidence-title">
+      <h2 id="step-evidence-title">Step 1: Evidence</h2>
+      <form id="evidence-form">
+        <div class="form-row">
+          <label for="case-name">Case name (optional)</label>
+          <input id="case-name" name="case_name" type="text" placeholder="Case reference">
+        </div>
+
+        <fieldset class="mode-toggle">
+          <legend>Evidence source</legend>
+          <label>
+            <input id="mode-upload" name="evidence_mode" type="radio" value="upload" checked>
+            Upload File
+          </label>
+          <label>
+            <input id="mode-path" name="evidence_mode" type="radio" value="path">
+            Local Path
+          </label>
+        </fieldset>
+
+        <section id="upload-mode-panel" data-mode="upload" aria-labelledby="upload-mode-title">
+          <h3 id="upload-mode-title">Upload File</h3>
+          <label id="dropzone" for="evidence-file">
+            <span id="dropzone-help">Drag and drop a forensic image here (.E01/.E02... or .zip)</span>
+            <input id="evidence-file" name="evidence_file" type="file" multiple>
+          </label>
+        </section>
+
+        <section id="path-mode-panel" data-mode="path" aria-labelledby="path-mode-title" hidden>
+          <h3 id="path-mode-title">Local Path</h3>
+          <label for="evidence-path">Filesystem path</label>
+          <input
+            id="evidence-path"
+            name="evidence_path"
+            type="text"
+            placeholder="C:\Evidence\disk-image.E01"
+            autocomplete="off"
+            spellcheck="false"
+          >
+        </section>
+
+        <button id="submit-evidence" type="submit">Submit</button>
+
+        <div id="evidence-intake-progress" hidden>
+          <label for="evidence-progress">Intake progress</label>
+          <progress id="evidence-progress" max="100" value="0">0%</progress>
+        </div>
+      </form>
+
+    </section>
+
+    <section id="step-artifacts" class="wizard-step" data-step="2" aria-labelledby="step-artifacts-title" hidden>
+      <h2 id="step-artifacts-title">Step 2: Artifacts</h2>
+
+      <article id="evidence-summary-card" class="summary-card" aria-live="polite" hidden>
+        <h3>Evidence Intake Summary</h3>
+        <dl>
+          <dt>Hostname</dt>
+          <dd id="summary-hostname">-</dd>
+          <dt>OS</dt>
+          <dd id="summary-os">-</dd>
+          <dt>Domain</dt>
+          <dd id="summary-domain">-</dd>
+          <dt>IPs</dt>
+          <dd id="summary-ips">-</dd>
+          <dt>SHA-256</dt>
+          <dd id="summary-sha256">-</dd>
+        </dl>
+      </article>
+
+      <div class="preset-actions">
+        <button id="preset-quick-triage" type="button">Recommended</button>
+        <button id="preset-clear-all" type="button">Clear All</button>
+      </div>
+
+      <section id="artifact-profiles" aria-labelledby="artifact-profiles-title">
+        <h3 id="artifact-profiles-title">Profiles</h3>
+        <div class="artifact-profile-grid">
+          <div class="form-row">
+            <label for="artifact-profile-select">Load profile</label>
+            <select id="artifact-profile-select" name="artifact_profile_select">
+              <option value="recommended">recommended</option>
+            </select>
+          </div>
+          <div class="profile-actions">
+            <button id="artifact-profile-load" type="button">Load Profile</button>
+          </div>
+          <div class="form-row">
+            <label for="artifact-profile-name">Save current artifact options</label>
+            <input
+              id="artifact-profile-name"
+              name="artifact_profile_name"
+              type="text"
+              maxlength="64"
+              placeholder="Profile name"
+              autocomplete="off"
+              spellcheck="false"
+            >
+          </div>
+          <div class="profile-actions">
+            <button id="artifact-profile-save" type="button">Save Profile</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="analysis-date-range" aria-labelledby="analysis-date-range-title">
+        <h3 id="analysis-date-range-title">AI Date Filter (Optional: MFT / Event Logs)</h3>
+        <p>
+          Optionally select a date range for AI analysis of large artifacts (`mft`, `evtx`, `*.evtx`). Leave both dates empty to use no time filter. Parsing still runs on full artifacts.
+        </p>
+        <div class="date-range-grid">
+          <div class="form-row">
+            <label for="analysis-date-start">Begin date</label>
+            <input id="analysis-date-start" name="analysis_date_start" type="date">
+          </div>
+          <div class="form-row">
+            <label for="analysis-date-end">End date</label>
+            <input id="analysis-date-end" name="analysis_date_end" type="date">
+          </div>
+        </div>
+      </section>
+
+      <form id="artifacts-form">
+        <fieldset class="artifact-category" data-category="persistence">
+          <legend>Persistence</legend>
+          <ul>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="runkeys"> Run/RunOnce Keys</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="tasks"> Scheduled Tasks</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="services"> Services</label>
+            </li>
+            <li class="artifact-unavailable" data-available="false" title="Not found in this image">
+              <label><input type="checkbox" data-artifact-key="cim" disabled> WMI Persistence</label>
+            </li>
+          </ul>
+        </fieldset>
+
+        <fieldset class="artifact-category" data-category="execution">
+          <legend>Execution</legend>
+          <ul>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="shimcache"> Shimcache</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="amcache"> Amcache</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="prefetch"> Prefetch</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="bam"> BAM/DAM</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="userassist"> UserAssist</label>
+            </li>
+          </ul>
+        </fieldset>
+
+        <fieldset class="artifact-category" data-category="event-logs">
+          <legend>Event Logs</legend>
+          <ul>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="evtx"> Windows Event Logs</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="defender.evtx"> Defender Logs</label>
+            </li>
+          </ul>
+        </fieldset>
+
+        <fieldset class="artifact-category" data-category="file-system">
+          <legend>File System</legend>
+          <ul>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="mft"> MFT</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="usnjrnl"> USN Journal</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="recyclebin"> Recycle Bin</label>
+            </li>
+          </ul>
+        </fieldset>
+
+        <fieldset class="artifact-category" data-category="user-activity">
+          <legend>User Activity</legend>
+          <ul>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="browser.history"> Browser History</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="browser.downloads"> Browser Downloads</label>
+            </li>
+            <li class="artifact-unavailable" data-available="false" title="Not found in this image">
+              <label><input type="checkbox" data-artifact-key="powershell_history" disabled> PowerShell History</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="activitiescache"> Activities Cache</label>
+            </li>
+          </ul>
+        </fieldset>
+
+        <fieldset class="artifact-category" data-category="network">
+          <legend>Network</legend>
+          <ul>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="sru.network_data"> SRUM Network Data</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="sru.application"> SRUM Application</label>
+            </li>
+          </ul>
+        </fieldset>
+
+        <fieldset class="artifact-category" data-category="registry">
+          <legend>Registry</legend>
+          <ul>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="shellbags"> Shellbags</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="usb"> USB History</label>
+            </li>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="muicache"> MUIcache</label>
+            </li>
+          </ul>
+        </fieldset>
+
+        <fieldset class="artifact-category" data-category="security">
+          <legend>Security</legend>
+          <ul>
+            <li data-available="true">
+              <label><input type="checkbox" data-artifact-key="sam"> SAM Users</label>
+            </li>
+            <li class="artifact-unavailable" data-available="false" title="Not found in this image">
+              <label><input type="checkbox" data-artifact-key="defender.quarantine" disabled> Defender Quarantine</label>
+            </li>
+          </ul>
+        </fieldset>
+
+        <button id="parse-selected" type="submit" disabled>Parse Selected</button>
+      </form>
+    </section>
+
+    <section
+      id="step-parsing"
+      class="wizard-step"
+      data-step="3"
+      data-auto-advance-target="step-analysis"
+      aria-labelledby="step-parsing-title"
+      hidden
+    >
+      <h2 id="step-parsing-title">Step 3: Parsing</h2>
+      <p>Selected artifacts are parsed in sequence. This screen auto-advances when parsing is complete.</p>
+      <p>
+        Parsing is performed by
+        <a href="https://github.com/fox-it/dissect" target="_blank" rel="noopener noreferrer">Dissect</a>
+        by Fox-IT.
+      </p>
+
+      <label for="parse-overall-progress">Overall progress</label>
+      <progress id="parse-overall-progress" max="100" value="0">0%</progress>
+
+      <p id="parse-error-message" role="alert" hidden></p>
+
+      <table>
+        <caption>Artifact parse status</caption>
+        <thead>
+          <tr>
+            <th scope="col">Artifact</th>
+            <th scope="col">Status</th>
+            <th scope="col">Records</th>
+          </tr>
+        </thead>
+        <tbody id="parse-progress-rows">
+          <tr>
+            <td>Awaiting selection</td>
+            <td>waiting</td>
+            <td>0</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="step-analysis" class="wizard-step" data-step="4" aria-labelledby="step-analysis-title" hidden>
+      <h2 id="step-analysis-title">Step 4: Analysis</h2>
+
+      <form id="analysis-form">
+        <label for="investigation-context">Investigation context</label>
+        <textarea
+          id="investigation-context"
+          name="investigation_context"
+          rows="9"
+          placeholder="We suspect unauthorized access between January 1-15, 2026. Look for new user accounts, remote access tools, and lateral movement.
+
+Malware infection suspected. Focus on persistence mechanisms and execution artifacts after December 15, 2025.
+
+Data exfiltration investigation. Look for large file transfers, USB device connections, and cloud storage access."
+        ></textarea>
+
+        <p id="provider-indicator">
+          AI provider:
+          <strong id="provider-name">Not configured</strong>
+          -
+          <a href="#settings-panel" id="provider-settings-link">Settings</a>
+        </p>
+
+        <button id="run-analysis" type="submit">Run Analysis</button>
+      </form>
+
+      <section id="analysis-stream" aria-live="polite" aria-labelledby="analysis-stream-title">
+        <h3 id="analysis-stream-title">Live Analysis Results</h3>
+        <div id="analysis-results-list">
+          <p>No analysis output yet.</p>
+        </div>
+      </section>
+    </section>
+
+    <section id="step-results" class="wizard-step" data-step="5" aria-labelledby="step-results-title" hidden>
+      <h2 id="step-results-title">Step 5: Results</h2>
+
+      <article id="executive-summary-card">
+        <h3>Executive Summary</h3>
+        <div id="executive-summary-content">Summary is generated after analysis completes.</div>
+      </article>
+
+      <section id="artifact-findings" aria-labelledby="artifact-findings-title">
+        <h3 id="artifact-findings-title">Per-Artifact Findings</h3>
+        <details open>
+          <summary>Run/RunOnce Keys</summary>
+          <p>Findings will appear here.</p>
+        </details>
+        <details>
+          <summary>Windows Event Logs</summary>
+          <p>Findings will appear here.</p>
+        </details>
+      </section>
+
+      <div class="result-actions">
+        <button id="download-report" type="button">Download Report (HTML)</button>
+        <button id="download-csvs" type="button">Download CSVs (ZIP)</button>
+        <button id="new-analysis" type="button">New Analysis</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <div class="app-footer-inner">©Flip Forensics</div>
+  </footer>
+
+  <aside id="settings-panel" hidden aria-labelledby="settings-title">
+    <h2 id="settings-title">Settings</h2>
+    <form id="settings-form">
+      <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+        <button
+          id="settings-tab-basic"
+          type="button"
+          class="settings-tab-button is-active"
+          role="tab"
+          data-settings-tab="basic"
+          aria-selected="true"
+          aria-controls="settings-basic-panel"
+        >
+          Basic
+        </button>
+        <button
+          id="settings-tab-advanced"
+          type="button"
+          class="settings-tab-button"
+          role="tab"
+          data-settings-tab="advanced"
+          aria-selected="false"
+          aria-controls="settings-advanced-panel"
+        >
+          Advanced
+        </button>
+      </div>
+
+      <section
+        id="settings-basic-panel"
+        class="settings-tab-panel"
+        role="tabpanel"
+        data-settings-panel="basic"
+        aria-labelledby="settings-tab-basic"
+      >
+        <div class="form-row">
+          <label for="setting-provider">AI Provider</label>
+          <select id="setting-provider" name="provider">
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="kimi">Kimi (Moonshot)</option>
+            <option value="local">Local Endpoint</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="setting-api-key">API Key</label>
+          <input id="setting-api-key" name="api_key" type="password" autocomplete="off">
+        </div>
+        <div class="form-row">
+          <label for="setting-local-url">Provider Endpoint URL</label>
+          <input id="setting-local-url" name="local_url" type="url" placeholder="http://127.0.0.1:11434/v1">
+        </div>
+        <div class="form-row">
+          <label for="setting-model">Model Name</label>
+          <input id="setting-model" name="model" type="text" placeholder="gpt-5.2">
+        </div>
+        <div class="form-row">
+          <label for="setting-port">Port</label>
+          <input id="setting-port" name="port" type="number" min="1" max="65535" value="5000">
+        </div>
+        <div class="form-row">
+          <label for="setting-size-threshold">Evidence Size Threshold (GB)</label>
+          <input id="setting-size-threshold" name="evidence_size_threshold" type="number" min="1" value="10">
+        </div>
+        <div class="form-row">
+          <label for="setting-csv-output-dir">CSV Output Directory</label>
+          <input
+            id="setting-csv-output-dir"
+            name="csv_output_dir"
+            type="text"
+            placeholder="Leave empty to use the case folder (default)"
+            autocomplete="off"
+            spellcheck="false"
+          >
+          <p id="setting-csv-output-help">When empty, CSVs are saved under `cases/&lt;case_id&gt;/parsed`.</p>
+        </div>
+      </section>
+
+      <section
+        id="settings-advanced-panel"
+        class="settings-tab-panel"
+        role="tabpanel"
+        data-settings-panel="advanced"
+        aria-labelledby="settings-tab-advanced"
+        hidden
+      >
+        <div class="settings-grid">
+          <div class="form-row">
+            <label for="setting-ai-max-tokens">Analysis Max Tokens</label>
+            <input id="setting-ai-max-tokens" name="ai_max_tokens" type="number" min="1" value="256000">
+          </div>
+          <div class="form-row">
+            <label for="setting-connection-max-tokens">Connection Test Max Tokens</label>
+            <input id="setting-connection-max-tokens" name="connection_test_max_tokens" type="number" min="1" value="256">
+          </div>
+          <div class="form-row">
+            <label for="setting-date-buffer-days">Date Buffer Days</label>
+            <input id="setting-date-buffer-days" name="date_buffer_days" type="number" min="0" value="7">
+          </div>
+          <div class="form-row">
+            <label for="setting-citation-spot-check-limit">Citation Spot-Check Limit</label>
+            <input id="setting-citation-spot-check-limit" name="citation_spot_check_limit" type="number" min="1" value="20">
+          </div>
+          <div class="form-row">
+            <label for="setting-artifact-deduplication-enabled">Compress Artifact Records For AI</label>
+            <input
+              id="setting-artifact-deduplication-enabled"
+              name="artifact_deduplication_enabled"
+              type="checkbox"
+              checked
+            >
+            <p>Deduplicate rows with matching event fields but different timestamp/ID values. Deduplicated CSVs are written to a separate `parsed_deduplicated` folder.</p>
+          </div>
+        </div>
+        <fieldset class="settings-attachment-flags">
+          <legend>CSV Attachment Mode (If Supported)</legend>
+          <label for="setting-attach-claude">
+            <input id="setting-attach-claude" name="attach_claude" type="checkbox" checked>
+            Claude
+          </label>
+          <label for="setting-attach-openai">
+            <input id="setting-attach-openai" name="attach_openai" type="checkbox" checked>
+            OpenAI
+          </label>
+          <label for="setting-attach-kimi">
+            <input id="setting-attach-kimi" name="attach_kimi" type="checkbox" checked>
+            Kimi
+          </label>
+          <label for="setting-attach-local">
+            <input id="setting-attach-local" name="attach_local" type="checkbox" checked>
+            Local
+          </label>
+        </fieldset>
+      </section>
+
+      <div class="settings-actions">
+        <button id="save-settings" type="submit">Save Settings</button>
+      </div>
+    </form>
+  </aside>
+</body>
+</html>

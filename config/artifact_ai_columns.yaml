@@ -1,0 +1,122 @@
+artifact_ai_columns:
+  runkeys:
+    - ts
+    - name
+    - command
+    - username
+  shimcache:
+    - last_modified
+    - name
+    - path
+  sam:
+    - ts
+    - rid
+    - fullname
+    - username
+    - admincomment
+    - lastlogin
+    - lastpasswordset
+    - lastincorrectlogin
+  services:
+    - ts
+    - name
+    - servicedll
+    - imagepath
+    - imagepath_args
+    - start
+  shellbags:
+    - ts_mtime
+    - ts_atime
+    - ts_btime
+    - type
+    - path
+    - username
+  amcache:
+    - mtime_regf
+    - path
+    - publisher
+    - version
+    - product_name
+    - size
+    - is_oscomponent
+  browser.downloads:
+    - ts_start
+    - ts_end
+    - browser
+    - path
+    - url
+    - size
+    - state
+    - username
+  browser.history:
+    - ts
+    - browser
+    - url
+    - title
+    - visit_count
+    - from_url
+    - username
+  prefetch:
+    - ts
+    - filename
+    - linkedfile
+  mft:
+    - ts
+    - ts_type
+    - path
+  usnjrnl:
+    - ts
+    - path
+    - reason
+  powershell_history:
+    - mtime
+    - order
+    - command
+    - username
+  bam:
+    - ts
+    - path
+  sru.application:
+    - ts
+    - app
+    - user
+    - foreground_cycle_time
+  tasks:
+    - task_path
+    - uri
+    - date
+    - user_id
+    - display_name
+    - run_level
+    - arguments
+    - command
+  userassist:
+    - ts
+    - path
+    - number_of_executions
+    - username
+  muicache:
+    - name
+    - value
+    - path
+    - username
+  recyclebin:
+    - ts
+    - path
+    - filesize
+    - username
+  evtx:
+    - ts
+    - EventID
+    - Provider_Name
+    - Action_Name
+    - Additional_Actions_String
+    - Channel
+    - Computer
+    - Process_Name
+    - Product_Name
+    - Security_UserID
+    - EventData_Name
+    - param1
+    - param2
+    - param3

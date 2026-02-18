@@ -1,0 +1,90 @@
+{
+  "name": "recommended",
+  "builtin": true,
+  "artifact_options": [
+    {
+      "artifact_key": "runkeys",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "tasks",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "services",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "cim",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "shimcache",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "amcache",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "prefetch",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "bam",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "userassist",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "recyclebin",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "browser.history",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "browser.downloads",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "powershell_history",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "activitiescache",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "sru.network_data",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "sru.application",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "shellbags",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "usb",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "muicache",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "sam",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "defender.quarantine",
+      "mode": "parse_and_ai"
+    }
+  ]
+}
