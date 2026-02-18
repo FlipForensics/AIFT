@@ -25,9 +25,7 @@ Upload E01 → Select Artifacts → Parse → AI Analysis → HTML Report
 
 No Elasticsearch. No Docker. No database. One Python script, one command.
 
-<p align="center">
-  <img src="AIFT.gif" alt="AIFT Demo" width="800">
-</p>
+![](images/AIFT.gif)
 
 ---
 
