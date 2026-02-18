@@ -35,9 +35,9 @@ A [publicly available test image](https://cfreds.nist.gov/all/BenjaminDonnachie/
 
 | Model | Cost | Runtime | Quality | Report |
 |-------|------|---------|---------|--------|
-| Kimi | $0.20 | ~5 min | :star::star::star::star: | [View report](example_reports/KIMI.html) |
-| OpenAI GPT | $0.94 | ~8 min | :star::star::star::star: | [View report](example_reports/ChatGPT5.2.html) |
-| Claude Opus 4.6 | $3.01 | ~20 min | :star::star::star::star::star: | [View report](example_reports/Opus4.6.html) |
+| Kimi | $0.20 | ~5 min | :star::star::star: | [View report](https://flipforensics.github.io/AIFT/example_reports/KIMI.html) |
+| OpenAI GPT | $0.94 | ~8 min | :star::star::star::star: | [View report](https://flipforensics.github.io/AIFT/example_reports/ChatGPT5.2.html) |
+| Claude Opus 4.6 | $3.01 | ~20 min | :star::star::star::star::star: | [View report](https://flipforensics.github.io/AIFT/example_reports/Opus4.6.html) |
 
 ---
 
