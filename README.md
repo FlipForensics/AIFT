@@ -22,7 +22,7 @@ Upload E01 → Select Artifacts → Parse → AI Analysis → HTML Report
 
 1. **Run the app** — a local web interface opens in your browser.
 2. **Upload evidence** — drag-and-drop an E01 file or point to a local path for large images.
-3. **Pick artifacts** — choose from 25+ Windows forensic artifacts, or use a preset like "Quick Triage."
+3. **Pick artifacts** — choose from 25+ Windows forensic artifacts.
 4. **Get results** — AI analyzes each artifact for indicators of compromise, correlates findings across artifacts, and generates a self-contained HTML report with evidence hashes and full audit trail.
 
 No Elasticsearch. No Docker. No database. One Python script, one command.
