@@ -1763,7 +1763,7 @@
   function applyAdvancedSettings(s) {
     if (!isObj(s)) return;
     const analysis = obj(s.analysis);
-    setNumberInput(el.setAiMaxTokens, num(analysis.ai_max_tokens, 256000), 256000);
+    setNumberInput(el.setAiMaxTokens, num(analysis.ai_max_tokens, 128000), 128000);
     setNumberInput(el.setConnectionMaxTokens, num(analysis.connection_test_max_tokens, 256), 256);
     setNumberInput(el.setDateBufferDays, num(analysis.date_buffer_days, 7), 7);
     setNumberInput(el.setCitationSpotCheckLimit, num(analysis.citation_spot_check_limit, 20), 20);
@@ -1919,7 +1919,7 @@
     if (typeof gb === "number" && Number.isFinite(gb) && gb > 0) base.evidence.large_file_threshold_mb = Math.round(gb * 1024);
     if (el.setCsvOutputDir) base.evidence.csv_output_dir = val(el.setCsvOutputDir);
 
-    base.analysis.ai_max_tokens = readIntInput(el.setAiMaxTokens, 256000, 1);
+    base.analysis.ai_max_tokens = readIntInput(el.setAiMaxTokens, 128000, 1);
     base.analysis.connection_test_max_tokens = readIntInput(el.setConnectionMaxTokens, 256, 1);
     base.analysis.date_buffer_days = readIntInput(el.setDateBufferDays, 7, 0);
     base.analysis.citation_spot_check_limit = readIntInput(el.setCitationSpotCheckLimit, 20, 1);

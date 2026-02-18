@@ -45,7 +45,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "csv_output_dir": "",
     },
     "analysis": {
-        "ai_max_tokens": 256000,
+        "ai_max_tokens": 128000,
         "connection_test_max_tokens": 256,
         "date_buffer_days": 7,
         "citation_spot_check_limit": 20,

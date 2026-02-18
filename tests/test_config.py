@@ -24,7 +24,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.get("server", {}).get("max_upload_mb"), 2048)
             self.assertEqual(config.get("evidence", {}).get("large_file_threshold_mb"), 2048)
             self.assertEqual(config.get("evidence", {}).get("csv_output_dir"), "")
-            self.assertEqual(config.get("analysis", {}).get("ai_max_tokens"), 256000)
+            self.assertEqual(config.get("analysis", {}).get("ai_max_tokens"), 128000)
             self.assertEqual(config.get("analysis", {}).get("date_buffer_days"), 7)
             self.assertEqual(config.get("analysis", {}).get("artifact_deduplication_enabled"), True)
             self.assertEqual(
@@ -36,7 +36,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(persisted.get("ai", {}).get("provider"), "claude")
             self.assertEqual(persisted.get("server", {}).get("port"), 5000)
             self.assertEqual(persisted.get("evidence", {}).get("large_file_threshold_mb"), 2048)
-            self.assertEqual(persisted.get("analysis", {}).get("ai_max_tokens"), 256000)
+            self.assertEqual(persisted.get("analysis", {}).get("ai_max_tokens"), 128000)
             self.assertEqual(persisted.get("analysis", {}).get("artifact_deduplication_enabled"), True)
             self.assertEqual(
                 persisted.get("analysis", {}).get("artifact_ai_columns_config_path"),
