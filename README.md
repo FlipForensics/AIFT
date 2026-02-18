@@ -219,4 +219,6 @@ When using a cloud-based AI provider, parsed artifact data is sent to external s
 
 ## License
 
-TBD
+AIFT is released as open source by Flip Forensics and made available at https://github.com/FlipForensics/AIFT. 
+
+License terms: AGPL3 (https://www.gnu.org/licenses/agpl-3.0.html).
