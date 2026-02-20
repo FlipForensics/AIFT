@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .version import TOOL_VERSION
+
 ACTION_TYPES = frozenset(
     {
         "case_created",
@@ -25,7 +27,7 @@ ACTION_TYPES = frozenset(
         "config_changed",
     }
 )
-DEFAULT_TOOL_VERSION = "1.0.0"
+DEFAULT_TOOL_VERSION = TOOL_VERSION
 
 
 def _utc_now_iso8601_ms() -> str:

@@ -69,8 +69,8 @@
         <section id="upload-mode-panel" data-mode="upload" aria-labelledby="upload-mode-title">
           <h3 id="upload-mode-title">Upload File</h3>
           <label id="dropzone" for="evidence-file">
-            <span id="dropzone-help">Drag and drop a forensic image here (.E01/.E02... or .zip)</span>
-            <input id="evidence-file" name="evidence_file" type="file" multiple>
+            <span id="dropzone-help">Drag and drop evidence here (.E01, .dd, .raw, .vmdk, .vhd, .vhdx, .vdi, .qcow2, .zip, .7z, .tar, ...)</span>
+            <input id="evidence-file" name="evidence_file" type="file" multiple accept=".e01,.e02,.e03,.e04,.e05,.e06,.e07,.e08,.e09,.ex01,.s01,.l01,.dd,.img,.raw,.bin,.iso,.000,.001,.vmdk,.vhd,.vhdx,.vdi,.qcow2,.hdd,.hds,.vmx,.vmwarevm,.vbox,.vmcx,.ovf,.ova,.pvm,.pvs,.utm,.xva,.vma,.vbk,.asdf,.asif,.ad1,.tar,.gz,.tgz,.zip,.7z">
           </label>
         </section>
 
@@ -81,10 +81,11 @@
             id="evidence-path"
             name="evidence_path"
             type="text"
-            placeholder="C:\Evidence\disk-image.E01"
+            placeholder="C:\Evidence\disk-image.E01 (or .dd, .vmdk, .vhd, .qcow2, folder, ...)"
             autocomplete="off"
             spellcheck="false"
           >
+          <p class="path-mode-hint">Evidence files (E01, VMDK, VHD, DD, etc.) are read in-place (read-only) &mdash; nothing is copied. Archives (ZIP, 7z, tar) are extracted into the case folder first.</p>
         </section>
 
         <button id="submit-evidence" type="submit">Submit</button>
@@ -399,7 +400,7 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
   </main>
 
   <footer class="app-footer">
-    <div class="app-footer-inner">©Flip Forensics</div>
+    <div class="app-footer-inner">©Flip Forensics <span class="mono">v{{ tool_version }}</span></div>
   </footer>
 
   <aside id="settings-panel" hidden aria-labelledby="settings-title">

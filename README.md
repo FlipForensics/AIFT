@@ -2,7 +2,7 @@
   <img src="images/AIFT Logo - White Text.png" alt="AIFT Logo" width="400">
 </p>
 
-# AIFT — AI Forensic Triage
+# AIFT — AI Forensic Triage V1.1
 
 **Automated Windows forensic triage, powered by AI.**
 
@@ -17,11 +17,11 @@ Built for incident responders who need fast answers, and simple enough for non-f
 ## How It Works
 
 ```
-Upload E01 → Select Artifacts → Parse → AI Analysis → HTML Report
+Upload Evidence → Select Artifacts → Parse → AI Analysis → HTML Report
 ```
 
 1. **Run the app** — a local web interface opens in your browser.
-2. **Upload evidence** — drag-and-drop an E01 file or point to a local path for large images.
+2. **Upload evidence** — drag-and-drop an E01, VMDK, VHD, raw image, or archive, or point to a local path for large images.
 3. **Pick artifacts** — choose from 25+ Windows forensic artifacts.
 4. **Get results** — AI analyzes each artifact for indicators of compromise, correlates findings across artifacts, and generates a self-contained HTML report with evidence hashes and full audit trail.
 
@@ -75,7 +75,7 @@ Click **Test Connection** to verify everything works. That's it — you're ready
 
 ### 4. Analyze your first image
 
-- Upload an E01 or ZIP file by dragging it into the upload area, or switch to **Path Mode** and enter the file path for large images.
+- Upload evidence by dragging it into the upload area (E01, VMDK, VHD, raw images, ZIP, 7z, tar), or switch to **Path Mode** and enter the file path for large images or directories.
 - AIFT opens the image or Triage Package.
 - Select artifacts manually or click **Recommended**. You have the option to save your selected artifacts as a profile, and load them in future cases.
 - Click **Parse**. Progress is shown in real time.
@@ -142,11 +142,26 @@ Only artifacts present in the image are shown. Unavailable artifacts are automat
 
 ## Supported Evidence Formats
 
-| Format | Notes |
-|--------|-------|
-| E01 (EnCase) | Single file — upload or provide the path |
-| Split E01 | Point to the `.E01` file — segments (`.E02`, `.E03`, ...) are auto-discovered |
-| ZIP | Containing a supported image or collected artifact files |
+AIFT uses [Dissect](https://github.com/fox-it/dissect) for evidence loading, which supports a wide range of forensic image and disk formats.
+
+| Category | Formats | Notes |
+|----------|---------|-------|
+| **EnCase (EWF)** | `.E01`, `.Ex01`, `.S01`, `.L01` | Split segments (`.E02`, `.E03`, ...) are auto-discovered in the same directory |
+| **Raw / DD** | `.dd`, `.img`, `.raw`, `.bin`, `.iso` | Bit-for-bit disk images |
+| **Split raw** | `.000`, `.001`, ... | Segmented raw images — pass the first segment |
+| **VMware** | `.vmdk`, `.vmx`, `.vmwarevm` | Virtual disk and VM config (auto-loads associated disks) |
+| **Hyper-V** | `.vhd`, `.vhdx`, `.vmcx` | Legacy and modern Hyper-V formats |
+| **VirtualBox** | `.vdi`, `.vbox` | VirtualBox disk and VM config |
+| **QEMU** | `.qcow2`, `.utm` | QEMU Copy-On-Write and UTM bundles |
+| **Parallels** | `.hdd`, `.hds`, `.pvm`, `.pvs` | Parallels Desktop images |
+| **OVA / OVF** | `.ova`, `.ovf` | Open Virtualization Format |
+| **XenServer** | `.xva`, `.vma` | Xen and Proxmox exports |
+| **Backup** | `.vbk` | Veeam Backup files |
+| **Dissect native** | `.asdf`, `.asif` | Dissect `acquire` output |
+| **FTK / AccessData** | `.ad1` | Logical images |
+| **Archives** | `.zip`, `.7z`, `.tar`, `.tar.gz` | Extracted and scanned for evidence files inside |
+
+Evidence can also be provided as a **directory path** (e.g., KAPE, Velociraptor, or UAC triage output).
 
 For images over 2 GB, use **Path Mode** instead of uploading — enter the local file path and AIFT reads it directly.
 

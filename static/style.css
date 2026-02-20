@@ -471,6 +471,13 @@ input[type="radio"] {
   color: var(--text-secondary);
 }
 
+.path-mode-hint {
+  margin: var(--space-2) 0 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
 /* ==========================================================================
    Artifact Checklist
    ========================================================================== */

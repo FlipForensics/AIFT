@@ -13,7 +13,10 @@ import threading
 import time
 from typing import Any
 from uuid import uuid4
+import tarfile
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
+
+import py7zr
 
 from flask import (
     Blueprint,
@@ -35,6 +38,7 @@ from .config import load_config, save_config
 from .hasher import compute_hashes, verify_hash
 from .parser import ARTIFACT_REGISTRY, ForensicParser
 from .reporter import ReportGenerator
+from .version import TOOL_VERSION
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,7 +48,42 @@ IMAGES_ROOT = PROJECT_ROOT / "images"
 SENSITIVE_KEYS = {"api_key", "token", "secret", "password"}
 MASKED = "********"
 SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
-EWF_SEGMENT_RE = re.compile(r"^(?P<base>.+)\.e(?P<segment>\d{2})$", re.IGNORECASE)
+EWF_SEGMENT_RE = re.compile(r"^(?P<base>.+)\.(?:e|ex|s|l)(?P<segment>\d{2})$", re.IGNORECASE)
+SPLIT_RAW_SEGMENT_RE = re.compile(r"^(?P<base>.+)\.(?P<segment>\d{3})$")
+
+# All file extensions Dissect's Target.open() can handle directly (containers + loaders).
+DISSECT_EVIDENCE_EXTENSIONS = frozenset({
+    # EWF / EnCase
+    ".e01", ".ex01", ".s01", ".l01",
+    # Raw / DD disk images
+    ".dd", ".img", ".raw", ".bin", ".iso",
+    # Split raw segments
+    ".000", ".001",
+    # Virtual disk formats
+    ".vmdk", ".vhd", ".vhdx", ".vdi", ".qcow2", ".hdd", ".hds",
+    # VM configuration (auto-loads associated disks)
+    ".vmx", ".vmwarevm", ".vbox", ".vmcx", ".ovf", ".ova", ".pvm", ".pvs", ".utm", ".xva", ".vma",
+    # Backup formats
+    ".vbk",
+    # Dissect-native containers
+    ".asdf", ".asif",
+    # Forensic logical images
+    ".ad1",
+    # Archives that Dissect loaders handle
+    ".tar", ".gz", ".tgz",
+    # Archives (handled by our own extraction + Dissect)
+    ".zip", ".7z",
+})
+
+# Extensions for evidence files we look for inside extracted archives.
+_EVIDENCE_FILE_EXTENSIONS = frozenset({
+    ".e01", ".ex01", ".s01", ".l01",
+    ".dd", ".img", ".raw", ".bin", ".iso",
+    ".vmdk", ".vhd", ".vhdx", ".vdi", ".qcow2", ".hdd", ".hds",
+    ".vmx", ".vbox", ".vmcx", ".ovf", ".ova",
+    ".asdf", ".asif", ".ad1",
+    ".000", ".001",
+})
 PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")
 
 MODE_PARSE_AND_AI = "parse_and_ai"
@@ -599,9 +638,114 @@ def _extract_zip(zip_path: Path, destination: Path) -> Path:
     files = sorted(path for path in destination.rglob("*") if path.is_file())
     if not files:
         raise ValueError("Evidence ZIP extraction produced no files.")
-    e01_files = [path for path in files if path.suffix.lower() == ".e01"]
-    if e01_files:
-        return e01_files[0]
+    evidence_files = [
+        path for path in files if path.suffix.lower() in _EVIDENCE_FILE_EXTENSIONS
+    ]
+    if evidence_files:
+        # Prefer E01 if present, otherwise return first match.
+        for ef in evidence_files:
+            if ef.suffix.lower() == ".e01":
+                return ef
+        return evidence_files[0]
+
+    top_level_entries: set[str] = set()
+    has_top_level_file = False
+    for file_path in files:
+        relative_parts = file_path.relative_to(destination).parts
+        if not relative_parts:
+            continue
+        top_level_entries.add(relative_parts[0])
+        if len(relative_parts) == 1:
+            has_top_level_file = True
+
+    if not has_top_level_file and len(top_level_entries) == 1:
+        wrapper_dir = destination / sorted(top_level_entries)[0]
+        if wrapper_dir.is_dir():
+            return wrapper_dir
+
+    return destination
+
+
+def _extract_tar(tar_path: Path, destination: Path) -> Path:
+    """Extract a tar (or tar.gz/tgz) archive and return the best Dissect target path."""
+    destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
+    try:
+        with tarfile.open(tar_path, "r:*") as archive:
+            members = [m for m in archive.getmembers() if m.isfile()]
+            if not members:
+                raise ValueError("Evidence tar archive is empty.")
+            for member in members:
+                target = (destination / member.name).resolve()
+                if root not in target.parents and target != root:
+                    raise ValueError("Evidence tar archive contains unsafe paths.")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                src = archive.extractfile(member)
+                if src is None:
+                    continue
+                with src, target.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+    except tarfile.TarError as error:
+        raise ValueError(f"Invalid tar evidence file: {tar_path.name}") from error
+
+    files = sorted(path for path in destination.rglob("*") if path.is_file())
+    if not files:
+        raise ValueError("Evidence tar extraction produced no files.")
+    evidence_files = [
+        path for path in files if path.suffix.lower() in _EVIDENCE_FILE_EXTENSIONS
+    ]
+    if evidence_files:
+        for ef in evidence_files:
+            if ef.suffix.lower() == ".e01":
+                return ef
+        return evidence_files[0]
+
+    top_level_entries: set[str] = set()
+    has_top_level_file = False
+    for file_path in files:
+        relative_parts = file_path.relative_to(destination).parts
+        if not relative_parts:
+            continue
+        top_level_entries.add(relative_parts[0])
+        if len(relative_parts) == 1:
+            has_top_level_file = True
+
+    if not has_top_level_file and len(top_level_entries) == 1:
+        wrapper_dir = destination / sorted(top_level_entries)[0]
+        if wrapper_dir.is_dir():
+            return wrapper_dir
+
+    return destination
+
+
+def _extract_7z(archive_path: Path, destination: Path) -> Path:
+    """Extract a 7z archive and return the best Dissect target path."""
+    destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
+    try:
+        with py7zr.SevenZipFile(archive_path, mode="r") as archive:
+            entries = [e for e in archive.getnames() if not e.endswith("/")]
+            if not entries:
+                raise ValueError("Evidence 7z archive is empty.")
+            for name in entries:
+                target = (destination / name).resolve()
+                if root not in target.parents and target != root:
+                    raise ValueError("Evidence 7z archive contains unsafe paths.")
+            archive.extractall(path=destination)
+    except py7zr.Bad7zFile as error:
+        raise ValueError(f"Invalid 7z evidence file: {archive_path.name}") from error
+
+    files = sorted(path for path in destination.rglob("*") if path.is_file())
+    if not files:
+        raise ValueError("Evidence 7z extraction produced no files.")
+    evidence_files = [
+        path for path in files if path.suffix.lower() in _EVIDENCE_FILE_EXTENSIONS
+    ]
+    if evidence_files:
+        for ef in evidence_files:
+            if ef.suffix.lower() == ".e01":
+                return ef
+        return evidence_files[0]
 
     top_level_entries: set[str] = set()
     has_top_level_file = False
@@ -649,13 +793,14 @@ def _resolve_uploaded_dissect_path(uploaded_paths: list[Path]) -> Path:
     if len(uploaded_paths) == 1:
         return uploaded_paths[0]
 
-    zip_paths = [path for path in uploaded_paths if path.suffix.lower() == ".zip"]
-    if zip_paths and len(uploaded_paths) > 1:
-        raise ValueError("Upload either one ZIP file or raw evidence segments, not both.")
+    archive_exts = {".zip", ".tar", ".gz", ".tgz", ".7z"}
+    archive_paths = [path for path in uploaded_paths if path.suffix.lower() in archive_exts]
+    if archive_paths and len(uploaded_paths) > 1:
+        raise ValueError("Upload either one archive file or raw evidence segments, not both.")
 
     segment_groups: dict[str, list[tuple[int, Path]]] = {}
     for path in uploaded_paths:
-        match = EWF_SEGMENT_RE.match(path.name)
+        match = EWF_SEGMENT_RE.match(path.name) or SPLIT_RAW_SEGMENT_RE.match(path.name)
         if not match:
             continue
         base_name = match.group("base").lower()
@@ -666,16 +811,14 @@ def _resolve_uploaded_dissect_path(uploaded_paths: list[Path]) -> Path:
         ordered_groups = sorted(
             segment_groups.values(),
             key=lambda group: (
-                0 if any(segment == 1 for segment, _ in group) else 1,
+                0 if any(segment <= 1 for segment, _ in group) else 1,
                 -len(group),
                 min(segment for segment, _ in group),
                 min(path.name.lower() for _, path in group),
             ),
         )
         chosen_group = ordered_groups[0]
-        for segment_number, path in sorted(chosen_group, key=lambda item: item[0]):
-            if segment_number == 1:
-                return path
+        # Return the lowest-numbered segment (E01=1, split raw=0).
         return min(chosen_group, key=lambda item: item[0])[1]
 
     return uploaded_paths[0]
@@ -722,15 +865,22 @@ def _resolve_evidence_payload(case_dir: Path) -> dict[str, Any]:
         source_path = Path(normalized_path).expanduser()
         if not source_path.exists():
             raise FileNotFoundError(f"Evidence path does not exist: {source_path}")
-        if not source_path.is_file():
-            raise ValueError(f"Evidence path is not a file: {source_path}")
+        if not source_path.is_file() and not source_path.is_dir():
+            raise ValueError(f"Evidence path is not a file or directory: {source_path}")
         uploaded_paths = []
         mode = "path"
 
     dissect_path = source_path
-    if source_path.suffix.lower() == ".zip":
+    suffix = source_path.suffix.lower()
+    if source_path.is_file() and suffix == ".zip":
         extract_dir = evidence_dir / f"extracted_{_safe_name(source_path.stem, 'evidence')}_{int(time.time())}"
         dissect_path = _extract_zip(source_path, extract_dir)
+    elif source_path.is_file() and suffix in {".tar", ".gz", ".tgz"}:
+        extract_dir = evidence_dir / f"extracted_{_safe_name(source_path.stem, 'evidence')}_{int(time.time())}"
+        dissect_path = _extract_tar(source_path, extract_dir)
+    elif source_path.is_file() and suffix == ".7z":
+        extract_dir = evidence_dir / f"extracted_{_safe_name(source_path.stem, 'evidence')}_{int(time.time())}"
+        dissect_path = _extract_7z(source_path, extract_dir)
 
     return {
         "mode": mode,
@@ -1077,7 +1227,11 @@ def _run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) ->
 
 @routes_bp.get("/")
 def index() -> str:
-    return render_template("index.html", logo_filename=_resolve_logo_filename())
+    return render_template(
+        "index.html",
+        logo_filename=_resolve_logo_filename(),
+        tool_version=TOOL_VERSION,
+    )
 
 
 @routes_bp.get("/favicon.ico")
@@ -1171,7 +1325,10 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
         source_path = Path(evidence_payload["source_path"])
         dissect_path = Path(evidence_payload["dissect_path"])
 
-        hashes = dict(compute_hashes(source_path))
+        if source_path.is_file():
+            hashes = dict(compute_hashes(source_path))
+        else:
+            hashes = {"sha256": "N/A (directory)", "md5": "N/A (directory)", "size_bytes": 0}
         hashes["filename"] = source_path.name
 
         parser = ForensicParser(
@@ -1397,17 +1554,21 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
     hashes = dict(case.get("evidence_hashes", {}))
     intake_sha256 = str(hashes.get("sha256", "")).strip()
     verification_path = _resolve_hash_verification_path(case)
-    if verification_path is None or not intake_sha256:
+
+    # Directory evidence cannot be hashed; skip verification.
+    if intake_sha256.startswith("N/A"):
+        hash_ok = True
+        computed_sha256 = intake_sha256
+    elif verification_path is None or not intake_sha256:
         return _error("Evidence hash context is missing for this case.", 400)
-
-    if not verification_path.exists():
+    elif not verification_path.exists():
         return _error("Evidence file is no longer available for hash verification.", 404)
-
-    hash_ok, computed_sha256 = verify_hash(
-        verification_path,
-        intake_sha256,
-        return_computed=True,
-    )
+    else:
+        hash_ok, computed_sha256 = verify_hash(
+            verification_path,
+            intake_sha256,
+            return_computed=True,
+        )
     case["audit"].log(
         "hash_verification",
         {

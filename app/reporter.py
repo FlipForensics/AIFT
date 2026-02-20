@@ -13,8 +13,10 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup, escape
 
+from .version import TOOL_VERSION
+
 DEFAULT_CASE_NAME = "Untitled Investigation"
-DEFAULT_TOOL_VERSION = "unknown"
+DEFAULT_TOOL_VERSION = TOOL_VERSION
 DEFAULT_AI_PROVIDER = "unknown"
 LOGO_FILE_CANDIDATES = (
     "AIFT Logo - White Text.png",

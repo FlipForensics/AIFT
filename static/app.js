@@ -6,7 +6,7 @@
   const MODE_PARSE_AND_AI = "parse_and_ai";
   const MODE_PARSE_ONLY = "parse_only";
   const RECOMMENDED_PROFILE = "recommended";
-  const DROP_HELP = "Drag and drop a forensic image here (.E01/.E02... or .zip)";
+  const DROP_HELP = "Drag and drop evidence here (.E01, .dd, .raw, .vmdk, .vhd, .vhdx, .vdi, .qcow2, .zip, .7z, .tar, ...)";
   const CONFIDENCE_TOKEN_PATTERN = /\b(CRITICAL|HIGH|MEDIUM|LOW)\b/gi;
   const CONFIDENCE_CLASS_MAP = {
     CRITICAL: "confidence-critical",

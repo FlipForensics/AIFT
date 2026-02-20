@@ -290,6 +290,7 @@ class RoutesTests(unittest.TestCase):
             html = index_resp.get_data(as_text=True)
             self.assertIn("AIFT%20Logo%20-%20White%20Text.png", html)
             self.assertIn("<title>AIFT | Flip Forensics</title>", html)
+            self.assertIn(f"v{routes.TOOL_VERSION}", html)
             self.assertIn("©Flip Forensics", html)
 
             image_resp = self.client.get("/images/AIFT%20Logo%20-%20White%20Text.png")
