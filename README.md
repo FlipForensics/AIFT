@@ -232,6 +232,8 @@ AIFT output is AI-assisted. All findings must be independently verified by a qua
 
 When using a cloud-based AI provider, parsed artifact data is sent to external servers for analysis. Be mindful of the sensitivity of the evidence — if the data is subject to privacy regulations, legal restrictions, or confidentiality requirements, consider using a local model instead.
 
+Contact: info@FlipForensics.com
+
 ---
 
 ## License
