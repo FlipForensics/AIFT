@@ -57,6 +57,18 @@ class TestResolveApiKey(unittest.TestCase):
         with patch.dict(os.environ, {"TEST_API_KEY": "sk-env"}):
             self.assertEqual(_resolve_api_key("", "TEST_API_KEY"), "sk-env")
 
+    def test_treats_none_config_key_as_missing(self) -> None:
+        with patch.dict(os.environ, {"TEST_API_KEY": "sk-env"}):
+            self.assertEqual(_resolve_api_key(None, "TEST_API_KEY"), "sk-env")
+
+    def test_treats_whitespace_config_key_as_missing(self) -> None:
+        with patch.dict(os.environ, {"TEST_API_KEY": "sk-env"}):
+            self.assertEqual(_resolve_api_key("   ", "TEST_API_KEY"), "sk-env")
+
+    def test_strips_env_var_value(self) -> None:
+        with patch.dict(os.environ, {"TEST_API_KEY": "  sk-env  "}):
+            self.assertEqual(_resolve_api_key("", "TEST_API_KEY"), "sk-env")
+
     def test_returns_empty_when_neither_set(self) -> None:
         env = os.environ.copy()
         env.pop("MISSING_KEY", None)
@@ -259,6 +271,11 @@ class TestClaudeProvider(unittest.TestCase):
     def test_rejects_empty_api_key(self) -> None:
         with self.assertRaises(AIProviderError) as ctx:
             ClaudeProvider(api_key="")
+        self.assertIn("API key is not configured", str(ctx.exception))
+
+    def test_rejects_whitespace_api_key(self) -> None:
+        with self.assertRaises(AIProviderError) as ctx:
+            ClaudeProvider(api_key="   ")
         self.assertIn("API key is not configured", str(ctx.exception))
 
     @patch("anthropic.Anthropic")
@@ -573,6 +590,11 @@ class TestOpenAIProvider(unittest.TestCase):
             OpenAIProvider(api_key="")
         self.assertIn("API key is not configured", str(ctx.exception))
 
+    def test_rejects_whitespace_api_key(self) -> None:
+        with self.assertRaises(AIProviderError) as ctx:
+            OpenAIProvider(api_key="   ")
+        self.assertIn("API key is not configured", str(ctx.exception))
+
     @patch("openai.OpenAI")
     def test_analyze_with_attachments_uses_responses_api_when_supported(
         self,
@@ -756,6 +778,11 @@ class TestKimiProvider(unittest.TestCase):
     def test_rejects_empty_api_key(self) -> None:
         with self.assertRaises(AIProviderError) as ctx:
             KimiProvider(api_key="")
+        self.assertIn("API key is not configured", str(ctx.exception))
+
+    def test_rejects_whitespace_api_key(self) -> None:
+        with self.assertRaises(AIProviderError) as ctx:
+            KimiProvider(api_key="   ")
         self.assertIn("API key is not configured", str(ctx.exception))
 
     @patch("openai.OpenAI")
@@ -978,6 +1005,50 @@ class TestLocalProvider(unittest.TestCase):
         self.assertNotIn("<think>", result)
 
     @patch("openai.OpenAI")
+    def test_analyze_with_progress_with_attachments_falls_back_to_stream_with_inlined_prompt(
+        self,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_client.files.create.return_value = SimpleNamespace(id="file-unsupported")
+        mock_client.responses.create.side_effect = RuntimeError("404 page not found")
+        chunk = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="Local streamed fallback result"),
+                )
+            ]
+        )
+        mock_client.chat.completions.create.return_value = [chunk]
+
+        with TemporaryDirectory(prefix="aift-ai-provider-test-") as temp_dir:
+            csv_path = Path(temp_dir) / "runkeys.csv"
+            csv_path.write_text("ts,name\n2026-01-15T12:00:00Z,EntryA\n", encoding="utf-8")
+            attachments = [{"path": str(csv_path), "name": "runkeys.csv", "mime_type": "text/csv"}]
+
+            provider = LocalProvider(
+                base_url="http://localhost:11434/v1", model="llama3.1:70b"
+            )
+            result = provider.analyze_with_progress(
+                "system",
+                "user",
+                progress_callback=lambda _payload: None,
+                attachments=attachments,
+            )
+
+        self.assertEqual(result, "Local streamed fallback result")
+        self.assertEqual(mock_client.files.create.call_count, 1)
+        self.assertEqual(mock_client.responses.create.call_count, 1)
+        self.assertEqual(mock_client.chat.completions.create.call_count, 1)
+        stream_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        self.assertTrue(stream_kwargs["stream"])
+        stream_prompt = stream_kwargs["messages"][1]["content"]
+        self.assertIn("File attachments were unavailable", stream_prompt)
+        self.assertIn("--- BEGIN ATTACHMENT: runkeys.csv ---", stream_prompt)
+        self.assertIn("ts,name", stream_prompt)
+
+    @patch("openai.OpenAI")
     def test_analyze_strips_leading_think_block_in_non_stream_mode(
         self,
         mock_openai_cls: MagicMock,
@@ -1050,6 +1121,14 @@ class TestLocalProvider(unittest.TestCase):
         self.assertEqual(mock_client.files.create.call_count, 1)
         self.assertEqual(mock_client.responses.create.call_count, 1)
         self.assertGreaterEqual(mock_client.chat.completions.create.call_count, 2)
+        first_prompt = mock_client.chat.completions.create.call_args_list[0].kwargs["messages"][1]["content"]
+        second_prompt = mock_client.chat.completions.create.call_args_list[1].kwargs["messages"][1]["content"]
+        self.assertIn("File attachments were unavailable", first_prompt)
+        self.assertIn("--- BEGIN ATTACHMENT: runkeys.csv ---", first_prompt)
+        self.assertIn("ts,name", first_prompt)
+        self.assertIn("File attachments were unavailable", second_prompt)
+        self.assertIn("--- BEGIN ATTACHMENT: runkeys.csv ---", second_prompt)
+        self.assertIn("ts,name", second_prompt)
 
 
 # ---------------------------------------------------------------------------
@@ -1196,9 +1275,25 @@ class TestCreateProvider(unittest.TestCase):
         self.assertIsInstance(provider, ClaudeProvider)
         self.assertEqual(provider.api_key, "sk-from-env")
 
+    @patch("anthropic.Anthropic")
+    def test_env_var_fallback_for_none_claude_key(self, _mock: MagicMock) -> None:
+        config = {"ai": {"provider": "claude", "claude": {"api_key": None}}}
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-from-env"}):
+            provider = create_provider(config)
+        self.assertIsInstance(provider, ClaudeProvider)
+        self.assertEqual(provider.api_key, "sk-from-env")
+
     @patch("openai.OpenAI")
     def test_env_var_fallback_for_openai(self, _mock: MagicMock) -> None:
         config = {"ai": {"provider": "openai", "openai": {"api_key": ""}}}
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-from-env"}):
+            provider = create_provider(config)
+        self.assertIsInstance(provider, OpenAIProvider)
+        self.assertEqual(provider.api_key, "sk-from-env")
+
+    @patch("openai.OpenAI")
+    def test_env_var_fallback_for_none_openai_key(self, _mock: MagicMock) -> None:
+        config = {"ai": {"provider": "openai", "openai": {"api_key": None}}}
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-from-env"}):
             provider = create_provider(config)
         self.assertIsInstance(provider, OpenAIProvider)
@@ -1211,6 +1306,23 @@ class TestCreateProvider(unittest.TestCase):
             provider = create_provider(config)
         self.assertIsInstance(provider, KimiProvider)
         self.assertEqual(provider.api_key, "sk-from-env")
+
+    @patch("openai.OpenAI")
+    def test_env_var_fallback_for_none_kimi_key(self, _mock: MagicMock) -> None:
+        config = {"ai": {"provider": "kimi", "kimi": {"api_key": None}}}
+        with patch.dict(os.environ, {"MOONSHOT_API_KEY": "sk-from-env"}):
+            provider = create_provider(config)
+        self.assertIsInstance(provider, KimiProvider)
+        self.assertEqual(provider.api_key, "sk-from-env")
+
+    @patch("openai.OpenAI")
+    def test_rejects_blank_openai_key_before_client_call(self, mock_openai_cls: MagicMock) -> None:
+        config = {"ai": {"provider": "openai", "openai": {"api_key": "   "}}}
+        with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
+            with self.assertRaises(AIProviderError) as ctx:
+                create_provider(config)
+        self.assertIn("API key is not configured", str(ctx.exception))
+        mock_openai_cls.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

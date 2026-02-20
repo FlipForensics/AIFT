@@ -17,9 +17,16 @@ import yaml
 
 from .ai_providers import AIProviderError, create_provider
 
+LOGGER = logging.getLogger(__name__)
+
 try:
     from .parser import ARTIFACT_REGISTRY
-except Exception:
+except Exception as error:
+    LOGGER.warning(
+        "Failed to import artifact registry from app.parser: %s. "
+        "Artifact metadata lookups will be unavailable.",
+        error,
+    )
     ARTIFACT_REGISTRY: dict[str, dict[str, str]] = {}
 
 TOKEN_CHAR_RATIO = 4
@@ -235,6 +242,7 @@ class ForensicAnalyzer:
             case_dir = None
 
         self.case_dir = Path(case_dir) if case_dir is not None and not isinstance(case_dir, Mapping) else None
+        self.logger = LOGGER
         self.config = dict(config) if isinstance(config, Mapping) else {}
         self.audit_logger = audit_logger
         self.artifact_csv_paths = {
@@ -370,14 +378,32 @@ class ForensicAnalyzer:
         try:
             with config_path.open("r", encoding="utf-8") as handle:
                 parsed = yaml.safe_load(handle) or {}
-        except (OSError, yaml.YAMLError):
+        except (OSError, yaml.YAMLError) as error:
+            self.logger.warning(
+                "Failed to load AI column projection config from %s: %s. "
+                "AI column projection is disabled.",
+                config_path,
+                error,
+            )
             return {}
 
         if not isinstance(parsed, Mapping):
+            self.logger.warning(
+                "Invalid AI column projection config in %s: expected a mapping at the document root, "
+                "got %s. AI column projection is disabled.",
+                config_path,
+                type(parsed).__name__,
+            )
             return {}
 
         source: Any = parsed.get("artifact_ai_columns", parsed)
         if not isinstance(source, Mapping):
+            self.logger.warning(
+                "Invalid AI column projection config in %s: 'artifact_ai_columns' must be a mapping, "
+                "got %s. AI column projection is disabled.",
+                config_path,
+                type(source).__name__,
+            )
             return {}
 
         projections: dict[str, tuple[str, ...]] = {}
@@ -480,7 +506,7 @@ class ForensicAnalyzer:
                 last_error = error
                 if attempt < AI_RETRY_ATTEMPTS - 1:
                     delay = AI_RETRY_BASE_DELAY * (2 ** attempt)
-                    logging.getLogger(__name__).warning(
+                    self.logger.warning(
                         "AI provider call failed (attempt %d/%d), retrying in %.1fs: %s",
                         attempt + 1,
                         AI_RETRY_ATTEMPTS,
@@ -813,7 +839,7 @@ class ForensicAnalyzer:
             return []
 
         # Build lookup sets from the source CSV (only the columns/rows we need).
-        csv_timestamps: set[str] = set()
+        csv_timestamp_lookup: set[str] = set()
         csv_row_refs: set[str] = set()
         try:
             with csv_path.open("r", newline="", encoding="utf-8-sig", errors="replace") as fh:
@@ -825,7 +851,7 @@ class ForensicAnalyzer:
                     for col in ts_columns:
                         val = self._stringify_value(raw_row.get(col))
                         if val:
-                            csv_timestamps.add(val)
+                            csv_timestamp_lookup.update(self._timestamp_lookup_keys(val))
         except OSError:
             return []
 
@@ -833,7 +859,7 @@ class ForensicAnalyzer:
 
         # Spot-check timestamps (up to limit).
         for ts in cited_timestamps[: self.citation_spot_check_limit]:
-            if not self._timestamp_found_in_csv(ts, csv_timestamps):
+            if not self._timestamp_found_in_csv(ts, csv_timestamp_lookup):
                 warnings.append(
                     f"Note: AI cited timestamp {ts} which could not be verified in the source data."
                 )
@@ -859,24 +885,68 @@ class ForensicAnalyzer:
         return warnings
 
     @staticmethod
-    def _timestamp_found_in_csv(cited: str, csv_timestamps: set[str]) -> bool:
-        """Check whether a cited timestamp matches any value in the CSV timestamp set.
+    def _timestamp_lookup_keys(value: str) -> set[str]:
+        """Build comparable lookup keys for a timestamp string."""
+        text = value.strip()
+        if not text:
+            return set()
 
-        Handles minor formatting differences (trailing Z vs +00:00, fractional
-        seconds present/absent) by normalizing before comparison.
+        normalized = text.replace(" ", "T")
+        keys: set[str] = {text, normalized}
+
+        match = _CITED_ISO_TIMESTAMP_RE.search(normalized)
+        if match:
+            token = match.group()
+            keys.add(token)
+            normalized_token = token.replace(" ", "T")
+            keys.add(normalized_token)
+
+            if normalized_token.endswith("Z"):
+                keys.add(f"{normalized_token[:-1]}+00:00")
+
+            token_without_tz = normalized_token
+            suffix = ""
+            if token_without_tz.endswith("Z"):
+                suffix = "Z"
+                token_without_tz = token_without_tz[:-1]
+            elif len(token_without_tz) >= 6 and token_without_tz[-6] in {"+", "-"} and token_without_tz[-3] == ":":
+                suffix = token_without_tz[-6:]
+                token_without_tz = token_without_tz[:-6]
+
+            if "." in token_without_tz:
+                base_seconds = token_without_tz.split(".", 1)[0]
+                keys.add(base_seconds)
+                if suffix:
+                    keys.add(f"{base_seconds}{suffix}")
+            else:
+                keys.add(token_without_tz)
+
+        try:
+            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+
+        if parsed is not None:
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            keys.add(parsed.isoformat(timespec="seconds"))
+            keys.add(parsed.isoformat(timespec="microseconds"))
+
+        return {key for key in keys if key}
+
+    @staticmethod
+    def _timestamp_found_in_csv(cited: str, csv_timestamp_lookup: set[str]) -> bool:
+        """Check whether a cited timestamp matches preloaded CSV timestamp lookup keys.
+
+        Lookup keys are generated once from CSV data, so each citation check is
+        a small constant-time membership test.
         """
-        normalized_cited = cited.replace("Z", "+00:00").rstrip("0").rstrip(".")
-        # Direct or substring match in raw CSV values.
-        for csv_val in csv_timestamps:
-            if cited in csv_val or csv_val in cited:
-                return True
-            normalized_csv = csv_val.replace("Z", "+00:00").rstrip("0").rstrip(".")
-            if normalized_cited == normalized_csv:
-                return True
-            # Match ignoring fractional seconds entirely.
-            if normalized_cited.split(".")[0] == normalized_csv.split(".")[0]:
-                return True
-        return False
+        if not csv_timestamp_lookup:
+            return False
+        return any(
+            key in csv_timestamp_lookup
+            for key in ForensicAnalyzer._timestamp_lookup_keys(cited)
+        )
 
     def _register_artifact_paths_from_metadata(self, metadata: Mapping[str, Any] | None) -> None:
         if not isinstance(metadata, Mapping):
@@ -1246,6 +1316,11 @@ class ForensicAnalyzer:
             filter_start = min(context_dates) - timedelta(days=self.date_buffer_days)
             filter_end = max(context_dates) + timedelta(days=self.date_buffer_days)
             filter_source = "investigation_context"
+        if filter_start is not None and filter_end is not None:
+            # Normalize both bounds in case any upstream caller provided
+            # timezone-aware datetimes.
+            filter_start = self._normalize_datetime(filter_start)
+            filter_end = self._normalize_datetime(filter_end)
 
         rows: list[dict[str, str]] = []
         source_row_count = 0
@@ -1273,7 +1348,8 @@ class ForensicAnalyzer:
                         rows_without_timestamp += 1
                         rows.append(row)
                         continue
-                    if not (filter_start <= row_timestamp <= filter_end):
+                    normalized_row_timestamp = self._normalize_datetime(row_timestamp)
+                    if not (filter_start <= normalized_row_timestamp <= filter_end):
                         continue
 
                 rows.append(row)

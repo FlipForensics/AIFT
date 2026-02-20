@@ -7,6 +7,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 import re
 import traceback
+from types import TracebackType
 from time import perf_counter
 from typing import Any, Callable
 
@@ -412,6 +413,33 @@ class ForensicParser:
         self.parsed_dir = Path(parsed_dir) if parsed_dir is not None else self.case_dir / "parsed"
         self.parsed_dir.mkdir(parents=True, exist_ok=True)
         self.target = Target.open(self.evidence_path)
+        self._closed = False
+
+    def close(self) -> None:
+        """Close the underlying Dissect target handle."""
+        if self._closed:
+            return
+
+        try:
+            close_method = getattr(self.target, "close", None)
+        except Exception:
+            close_method = None
+        if callable(close_method):
+            close_method()
+        self._closed = True
+
+    def __enter__(self) -> ForensicParser:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> bool:
+        del exc_type, exc_val, exc_tb
+        self.close()
+        return False
 
     def get_image_metadata(self) -> dict[str, str]:
         """Return key metadata fields from the Dissect Target object."""
@@ -709,7 +737,11 @@ class ForensicParser:
                 if writer_state["fieldnames"] is None:
                     fieldnames = [str(key) for key in record_dict.keys()]
                     writer_state["fieldnames"] = fieldnames
-                    writer_state["writer"] = csv.DictWriter(writer_state["handle"], fieldnames=fieldnames)
+                    writer_state["writer"] = csv.DictWriter(
+                        writer_state["handle"],
+                        fieldnames=fieldnames,
+                        extrasaction="ignore",
+                    )
                     writer_state["writer"].writeheader()
 
                 fieldnames = writer_state["fieldnames"]

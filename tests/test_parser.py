@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from app.parser import ARTIFACT_REGISTRY, EVTX_MAX_RECORDS_PER_FILE, ForensicParser, UnsupportedPluginError
 
@@ -69,6 +69,33 @@ class ParserTests(unittest.TestCase):
 
             self.assertEqual(parser.parsed_dir, parsed_dir)
             self.assertTrue(parsed_dir.exists())
+
+    def test_close_closes_target_once(self) -> None:
+        class ClosableTarget:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        target = ClosableTarget()
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(target, Path(temp_dir), audit)
+            parser.close()
+            parser.close()
+
+        self.assertEqual(target.close_calls, 1)
+
+    def test_context_manager_closes_target(self) -> None:
+        target = Mock()
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            with patch("app.parser.Target.open", return_value=target):
+                with ForensicParser("sample.E01", Path(temp_dir), audit) as parser:
+                    self.assertIs(parser.target, target)
+
+        target.close.assert_called_once_with()
 
     def test_get_image_metadata_handles_missing_attributes(self) -> None:
         class MetadataTarget:

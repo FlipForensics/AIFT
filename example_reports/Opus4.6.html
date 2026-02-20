@@ -236,6 +236,30 @@
       border-radius: 0;
     }
 
+    .markdown-output table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0 0 10px;
+    }
+
+    .markdown-output th,
+    .markdown-output td {
+      border: 1px solid rgba(159, 177, 199, 0.28);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .markdown-output th {
+      background: rgba(255, 255, 255, 0.04);
+      color: #e9f0ff;
+      font-weight: 600;
+    }
+
+    .markdown-output td {
+      background: rgba(0, 0, 0, 0.08);
+    }
+
     .artifact-list {
       display: grid;
       gap: 10px;
@@ -536,54 +560,223 @@
 <p><strong>This Domain Controller (WIN-NI9FBK23SLO) is confirmed compromised.</strong> A threat actor operating under a non-default &#34;admin&#34; account conducted a multi-day intrusion between approximately 2024-02-05 and 2024-02-09, involving credential harvesting from a file share, network reconnaissance (Nmap), data exfiltration to an external FTP server (185.239.106.67), disabling of Windows Defender, deployment of PsExec for lateral movement across at least six workstations, and staging of at least two suspicious binaries (<code>rename.exe</code>, <code>dir.exe</code>) — one of which is almost certainly the ransomware payload renamed from <code>redpetya.exe</code>. A Ryuk ransom note was also found on the Desktop, suggesting multiple ransomware variants were present or tested. The ransomware detonated on or before 2024-02-12, rendering the server non-functional. Confidence in the overall compromise assessment is <strong><span class="confidence-inline confidence-high">HIGH</span></strong>; severity is <strong><span class="confidence-inline confidence-critical">CRITICAL</span></strong> given this is a Domain Controller with evidence of domain-wide lateral movement and data exfiltration.</p>
 <p>---</p>
 <h2>Timeline</h2>
-<p>| Timestamp (UTC) | Source Artifact(s) | Event | Confidence |<br>
-|---|---|---|---|<br>
-| <strong>2023-11-04 15:25–15:33</strong> | Browser Downloads, Shellbags, UserAssist | <code>Administrator</code> account downloads and extracts SysinternalsSuite.zip. PsExec64.exe present in profile. | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2023-11-16 12:03–12:13</strong> | Shimcache | Multiple Windows binaries (regedit, notepad, splwow64, bfsvc) accessed via <code>\\10.44.24.9\admin$</code> — earliest evidence of remote admin$ share interaction. | <span class="confidence-inline confidence-medium">MEDIUM</span> |<br>
-| <strong>2024-02-05 23:09</strong> | Browser History | <code>admin</code> account accesses <code>C:\share\Clark.Nicholson\Documents\account_password.xlsx</code> and <code>account_edit.docx</code> — credential harvesting from file share. | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2024-02-05 23:13–23:14</strong> | Browser Downloads, Browser History, Shellbags, Shimcache, Recycle Bin | <code>admin</code> downloads SysinternalsSuite.zip, extracts it to Downloads folder. ZIP deleted to Recycle Bin at 23:14:49. PsShutdown64.exe executed directly from temp-extracted ZIP. | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2024-02-05 23:25</strong> | Shimcache | <code>\\10.44.24.9\admin$\PSEXESVC.exe</code> appears in shimcache — PsExec service binary deployed to remote host, ~11 minutes after Sysinternals extraction. | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2024-02-05 23:36</strong> | Browser History | <code>admin</code> accesses <code>C:\Users\admin\Desktop\share.zip</code> — likely compressed file share data staged for exfiltration. | <span class="confidence-inline confidence-medium">MEDIUM</span> |<br>
-| <strong>2024-02-05 23:40–23:43</strong> | Browser History, Browser Downloads, BAM, Shimcache, Amcache | Nmap 7.93 downloaded from Softonic, installed (Npcap driver at 23:42:42), Zenmap shortcut created. | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2024-02-06 ~20:09</strong> | Browser History | <code>admin</code> accesses <code>important.zip</code> on Desktop. | <span class="confidence-inline confidence-medium">MEDIUM</span> |<br>
-| <strong>2024-02-06 20:53</strong> | Browser History | <code>admin</code> opens <code>C:\Users\admin\Desktop\RyukReadMe.txt</code> — Ryuk ransomware ransom note. | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2024-02-06 21:09</strong> | UserAssist, BAM | Zenmap (Nmap GUI) executed — 2 total runs. Network reconnaissance activity. | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2024-02-06 21:31–21:32</strong> | Services | Windows Defender components demoted: WinDefend Auto→Manual, WdBoot Boot→Manual, WdFilter Boot→Manual. Defense evasion. | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2024-02-06 21:49</strong> | Scheduled Tasks | Malicious scheduled task <strong>&#34;Enterpries backup&#34;</strong> created. Command: PsExec.exe pushing <code>rename.exe</code> to Desktop-001 through Desktop-006 with plaintext credentials (<code>-u admin -p letmein</code>), REALTIME priority, <code>-c -d</code> flags. | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2024-02-06 22:14</strong> | BAM, UserAssist, Amcache, Shimcache | Both <code>PsExec.exe</code> and <code>PsExec64.exe</code> executed from <code>C:\Users\admin\Downloads\SysinternalsSuite\</code>. BAM, UserAssist, and Amcache all confirm execution within seconds. | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2024-02-06 22:14:44</strong> | Recycle Bin | <code>share.zip</code> (0.65 GB) deleted from Desktop — post-exfiltration cleanup. | <span class="confidence-inline confidence-medium">MEDIUM</span> |<br>
-| <strong>2024-02-06 22:22–22:32</strong> | BAM, UserAssist, Browser History | Rapid system enumeration: msinfo32, msconfig, Task Manager, Date/Time settings accessed. | <span class="confidence-inline confidence-medium">MEDIUM</span> |<br>
-| <strong>2024-02-07 16:50</strong> | Browser History | <code>admin</code> accesses <code>C:\scripts\activeDirectory_user_import.csv</code> (visit_count=2) — AD user enumeration. | <span class="confidence-inline confidence-medium">MEDIUM</span> |<br>
-| <strong>2024-02-07 16:57</strong> | Browser History | FTP connection to <code>ftp://185.239.106.67/branchoffice.example.com/</code> (9 visits) — <strong>data exfiltration to external attacker infrastructure</strong>. Directory named after internal domain. | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2024-02-07 ~21:00</strong> | Amcache | <code>PsExec64.exe</code> recorded under <code>Administrator</code> profile; <code>dir.exe</code> and <code>rename.exe</code> on admin Desktop inventoried (both unsigned, no metadata). | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2024-02-08 08:16–08:39</strong> | Shellbags | <code>admin</code> browses C$ administrative shares on five internal hosts (10.44.24.1, .6, .7, .8, .9) — systematic user profile enumeration within 22-minute window. Also browses <code>admin$</code> on 10.44.24.9 and desktop-005. | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2024-02-08 19:02–19:06</strong> | BAM, UserAssist, SRUM | Remote Desktop client (<code>mstsc.exe</code>) and Zenmap executed — lateral movement and continued reconnaissance. | <span class="confidence-inline confidence-medium">MEDIUM</span> |<br>
-| <strong>2024-02-09 20:59–22:56</strong> | BAM, UserAssist, SRUM | Final burst of activity: <code>rundll32.exe</code> (5 instances), <code>cmd.exe</code> (7 executions), <code>conhost.exe</code>, <code>mmc.exe</code>, Task Scheduler (3 accesses), <code>PsExec.exe</code> at 22:55:44 (last BAM entry). <code>rename.exe</code> executes at 22:56 per SRUM with ~13.3 billion foreground CPU cycles. | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>2024-02-09 22:56 → 2024-02-12</strong> | All artifacts | <strong>Complete activity gap.</strong> No artifact records any activity after 22:56 on Feb 9. Ransomware discovered on screen Feb 12. System likely rendered non-functional by MBR/disk encryption shortly after last recorded activity. | <span class="confidence-inline confidence-high">HIGH</span> |</p>
+<table>
+<thead>
+<tr>
+<th>Timestamp (UTC)</th>
+<th>Source Artifact(s)</th>
+<th>Event</th>
+<th>Confidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>2023-11-04 15:25–15:33</strong></td>
+<td>Browser Downloads, Shellbags, UserAssist</td>
+<td><code>Administrator</code> account downloads and extracts SysinternalsSuite.zip. PsExec64.exe present in profile.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2023-11-16 12:03–12:13</strong></td>
+<td>Shimcache</td>
+<td>Multiple Windows binaries (regedit, notepad, splwow64, bfsvc) accessed via <code>\\10.44.24.9\admin$</code> — earliest evidence of remote admin$ share interaction.</td>
+<td><span class="confidence-inline confidence-medium">MEDIUM</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-05 23:09</strong></td>
+<td>Browser History</td>
+<td><code>admin</code> account accesses <code>C:\share\Clark.Nicholson\Documents\account_password.xlsx</code> and <code>account_edit.docx</code> — credential harvesting from file share.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-05 23:13–23:14</strong></td>
+<td>Browser Downloads, Browser History, Shellbags, Shimcache, Recycle Bin</td>
+<td><code>admin</code> downloads SysinternalsSuite.zip, extracts it to Downloads folder. ZIP deleted to Recycle Bin at 23:14:49. PsShutdown64.exe executed directly from temp-extracted ZIP.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-05 23:25</strong></td>
+<td>Shimcache</td>
+<td><code>\\10.44.24.9\admin$\PSEXESVC.exe</code> appears in shimcache — PsExec service binary deployed to remote host, ~11 minutes after Sysinternals extraction.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-05 23:36</strong></td>
+<td>Browser History</td>
+<td><code>admin</code> accesses <code>C:\Users\admin\Desktop\share.zip</code> — likely compressed file share data staged for exfiltration.</td>
+<td><span class="confidence-inline confidence-medium">MEDIUM</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-05 23:40–23:43</strong></td>
+<td>Browser History, Browser Downloads, BAM, Shimcache, Amcache</td>
+<td>Nmap 7.93 downloaded from Softonic, installed (Npcap driver at 23:42:42), Zenmap shortcut created.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-06 ~20:09</strong></td>
+<td>Browser History</td>
+<td><code>admin</code> accesses <code>important.zip</code> on Desktop.</td>
+<td><span class="confidence-inline confidence-medium">MEDIUM</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-06 20:53</strong></td>
+<td>Browser History</td>
+<td><code>admin</code> opens <code>C:\Users\admin\Desktop\RyukReadMe.txt</code> — Ryuk ransomware ransom note.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-06 21:09</strong></td>
+<td>UserAssist, BAM</td>
+<td>Zenmap (Nmap GUI) executed — 2 total runs. Network reconnaissance activity.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-06 21:31–21:32</strong></td>
+<td>Services</td>
+<td>Windows Defender components demoted: WinDefend Auto→Manual, WdBoot Boot→Manual, WdFilter Boot→Manual. Defense evasion.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-06 21:49</strong></td>
+<td>Scheduled Tasks</td>
+<td>Malicious scheduled task <strong>&#34;Enterpries backup&#34;</strong> created. Command: PsExec.exe pushing <code>rename.exe</code> to Desktop-001 through Desktop-006 with plaintext credentials (<code>-u admin -p letmein</code>), REALTIME priority, <code>-c -d</code> flags.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-06 22:14</strong></td>
+<td>BAM, UserAssist, Amcache, Shimcache</td>
+<td>Both <code>PsExec.exe</code> and <code>PsExec64.exe</code> executed from <code>C:\Users\admin\Downloads\SysinternalsSuite\</code>. BAM, UserAssist, and Amcache all confirm execution within seconds.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-06 22:14:44</strong></td>
+<td>Recycle Bin</td>
+<td><code>share.zip</code> (0.65 GB) deleted from Desktop — post-exfiltration cleanup.</td>
+<td><span class="confidence-inline confidence-medium">MEDIUM</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-06 22:22–22:32</strong></td>
+<td>BAM, UserAssist, Browser History</td>
+<td>Rapid system enumeration: msinfo32, msconfig, Task Manager, Date/Time settings accessed.</td>
+<td><span class="confidence-inline confidence-medium">MEDIUM</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-07 16:50</strong></td>
+<td>Browser History</td>
+<td><code>admin</code> accesses <code>C:\scripts\activeDirectory_user_import.csv</code> (visit_count=2) — AD user enumeration.</td>
+<td><span class="confidence-inline confidence-medium">MEDIUM</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-07 16:57</strong></td>
+<td>Browser History</td>
+<td>FTP connection to <code>ftp://185.239.106.67/branchoffice.example.com/</code> (9 visits) — <strong>data exfiltration to external attacker infrastructure</strong>. Directory named after internal domain.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-07 ~21:00</strong></td>
+<td>Amcache</td>
+<td><code>PsExec64.exe</code> recorded under <code>Administrator</code> profile; <code>dir.exe</code> and <code>rename.exe</code> on admin Desktop inventoried (both unsigned, no metadata).</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-08 08:16–08:39</strong></td>
+<td>Shellbags</td>
+<td><code>admin</code> browses C$ administrative shares on five internal hosts (10.44.24.1, .6, .7, .8, .9) — systematic user profile enumeration within 22-minute window. Also browses <code>admin$</code> on 10.44.24.9 and desktop-005.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-08 19:02–19:06</strong></td>
+<td>BAM, UserAssist, SRUM</td>
+<td>Remote Desktop client (<code>mstsc.exe</code>) and Zenmap executed — lateral movement and continued reconnaissance.</td>
+<td><span class="confidence-inline confidence-medium">MEDIUM</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-09 20:59–22:56</strong></td>
+<td>BAM, UserAssist, SRUM</td>
+<td>Final burst of activity: <code>rundll32.exe</code> (5 instances), <code>cmd.exe</code> (7 executions), <code>conhost.exe</code>, <code>mmc.exe</code>, Task Scheduler (3 accesses), <code>PsExec.exe</code> at 22:55:44 (last BAM entry). <code>rename.exe</code> executes at 22:56 per SRUM with ~13.3 billion foreground CPU cycles.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>2024-02-09 22:56 → 2024-02-12</strong></td>
+<td>All artifacts</td>
+<td><strong>Complete activity gap.</strong> No artifact records any activity after 22:56 on Feb 9. Ransomware discovered on screen Feb 12. System likely rendered non-functional by MBR/disk encryption shortly after last recorded activity.</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <h2>IOC Status</h2>
 <h3><code>redpetya.exe</code></h3>
 <p>**Status: Not Directly Observed — but strongly correlated to <code>rename.exe</code>**</p>
 <p><code>redpetya.exe</code> does not appear by filename in any artifact (shimcache, amcache, BAM, UserAssist, scheduled tasks, browser history, SRUM, recycle bin, services, or run keys). However, the binary <code>C:\Users\admin\Desktop\rename.exe</code> is present across <strong>four independent artifacts</strong>:</p>
-<p>| Artifact | Evidence |<br>
-|---|---|<br>
-| <strong>Scheduled Tasks</strong> | Task &#34;Enterpries backup&#34; pushes <code>rename.exe</code> via PsExec to 6 workstations at REALTIME priority |<br>
-| <strong>Shimcache</strong> | <code>rename.exe</code> on Desktop, last_modified <code>2016-03-24T00:00:00</code> (suspicious exact-midnight timestamp suggesting timestomping or custom compilation) |<br>
-| <strong>Amcache</strong> | <code>rename.exe</code>, 0.22 MB, no publisher/version/product metadata — unsigned and unattributed |<br>
-| <strong>SRUM</strong> | <code>rename.exe</code> executed 2024-02-09T22:56:00 with ~13.3 billion foreground CPU cycles — significant processing |</p>
+<table>
+<thead>
+<tr>
+<th>Artifact</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Scheduled Tasks</strong></td>
+<td>Task &#34;Enterpries backup&#34; pushes <code>rename.exe</code> via PsExec to 6 workstations at REALTIME priority</td>
+</tr>
+<tr>
+<td><strong>Shimcache</strong></td>
+<td><code>rename.exe</code> on Desktop, last_modified <code>2016-03-24T00:00:00</code> (suspicious exact-midnight timestamp suggesting timestomping or custom compilation)</td>
+</tr>
+<tr>
+<td><strong>Amcache</strong></td>
+<td><code>rename.exe</code>, 0.22 MB, no publisher/version/product metadata — unsigned and unattributed</td>
+</tr>
+<tr>
+<td><strong>SRUM</strong></td>
+<td><code>rename.exe</code> executed 2024-02-09T22:56:00 with ~13.3 billion foreground CPU cycles — significant processing</td>
+</tr>
+</tbody>
+</table>
 <p>The combination of: (1) being pushed via PsExec to six workstations, (2) having no legitimate metadata, (3) having a suspicious old timestamp, (4) executing with <span class="confidence-inline confidence-high">HIGH</span> CPU consumption days before ransomware detonation, and (5) being named after a common Windows internal command (defense evasion) makes <code>rename.exe</code> the <strong>overwhelmingly likely candidate for the ransomware payload</strong> — almost certainly <code>redpetya.exe</code> renamed. <strong>Confidence: <span class="confidence-inline confidence-high">HIGH</span>. Hash comparison is required for definitive confirmation.</strong></p>
 <p>A second suspicious binary, <code>C:\Users\admin\Desktop\dir.exe</code> (0.77 MB, unsigned, no metadata, same suspicious 2016 timestamp pattern) is also present and warrants analysis.</p>
 <h3><code>PsExec</code></h3>
 <p><strong>Status: Observed — Confirmed across 7 independent artifacts</strong></p>
-<p>| Artifact | Evidence |<br>
-|---|---|<br>
-| <strong>Scheduled Tasks</strong> | <code>C:\Users\admin\Downloads\SysinternalsSuite\PsExec.exe</code> configured as command for &#34;Enterpries backup&#34; task |<br>
-| <strong>Shimcache</strong> | <code>PsExec.exe</code>, <code>PsExec64.exe</code> at 2024-02-05T23:14:39; <code>PSEXESVC.exe</code> at <code>\\10.44.24.9\admin$</code> at 23:25:15 |<br>
-| <strong>Amcache</strong> | <code>psexec.exe</code> (admin, Feb 6), <code>psexec64.exe</code> (admin, Feb 6; administrator, Feb 7) — v2.43 |<br>
-| <strong>BAM</strong> | <code>PsExec64.exe</code> executed 2024-02-06T22:14:12; <code>PsExec.exe</code> executed 2024-02-09T22:55:44 |<br>
-| <strong>UserAssist</strong> | Both variants executed 2024-02-06T22:14:10–12 |<br>
-| <strong>Browser Downloads</strong> | <code>SysinternalsSuite.zip</code> downloaded 2024-02-05T23:13:32 |<br>
-| <strong>Recycle Bin</strong> | <code>SysinternalsSuite.zip</code> deleted 2024-02-05T23:14:49 |</p>
+<table>
+<thead>
+<tr>
+<th>Artifact</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Scheduled Tasks</strong></td>
+<td><code>C:\Users\admin\Downloads\SysinternalsSuite\PsExec.exe</code> configured as command for &#34;Enterpries backup&#34; task</td>
+</tr>
+<tr>
+<td><strong>Shimcache</strong></td>
+<td><code>PsExec.exe</code>, <code>PsExec64.exe</code> at 2024-02-05T23:14:39; <code>PSEXESVC.exe</code> at <code>\\10.44.24.9\admin$</code> at 23:25:15</td>
+</tr>
+<tr>
+<td><strong>Amcache</strong></td>
+<td><code>psexec.exe</code> (admin, Feb 6), <code>psexec64.exe</code> (admin, Feb 6; administrator, Feb 7) — v2.43</td>
+</tr>
+<tr>
+<td><strong>BAM</strong></td>
+<td><code>PsExec64.exe</code> executed 2024-02-06T22:14:12; <code>PsExec.exe</code> executed 2024-02-09T22:55:44</td>
+</tr>
+<tr>
+<td><strong>UserAssist</strong></td>
+<td>Both variants executed 2024-02-06T22:14:10–12</td>
+</tr>
+<tr>
+<td><strong>Browser Downloads</strong></td>
+<td><code>SysinternalsSuite.zip</code> downloaded 2024-02-05T23:13:32</td>
+</tr>
+<tr>
+<td><strong>Recycle Bin</strong></td>
+<td><code>SysinternalsSuite.zip</code> deleted 2024-02-05T23:14:49</td>
+</tr>
+</tbody>
+</table>
 <p>PsExec was downloaded, extracted, executed multiple times over 4 days, and configured in a scheduled task to deploy the ransomware payload to six named workstations. <strong>Confidence: <span class="confidence-inline confidence-high">HIGH</span>.</strong></p>
 <p>---</p>
 <h2>Attack Narrative</h2>
@@ -613,26 +806,104 @@
 <p>---</p>
 <h2>Gaps and Unknowns</h2>
 <h3><span class="confidence-inline confidence-critical">CRITICAL</span> Unknowns</h3>
-<p>| Question | Why It Matters | Resolving Evidence |<br>
-|---|---|---|<br>
-| **What is the SHA256 hash of <code>rename.exe</code> and <code>dir.exe</code>?** | Definitively links these to <code>redpetya.exe</code> found on other server. | File system extraction + hash comparison. This is the <strong>#1 priority</strong>. |<br>
-| <strong>When was the &#34;admin&#34; domain account (RID 2611) created, and by whom?</strong> | Determines if attacker created the account or compromised an existing one. | AD Security logs (Event ID 4720), domain controller NTDS.dit, SAM on DC. |<br>
-| <strong>What happened between Feb 9 22:56 and Feb 12?</strong> | Determines exact ransomware detonation time and whether additional hosts were compromised. | MBR/VBR disk-level analysis, MFT timestamps (if recoverable), event logs from other hosts. |<br>
-| <strong>What was exfiltrated to 185.239.106.67?</strong> | Determines breach scope for notification/legal obligations. | Firewall/proxy logs, FTP client artifacts, packet captures, threat intel on IP. |<br>
-| <strong>Were the six target workstations (Desktop-001 through 006) successfully compromised?</strong> | Determines blast radius of the ransomware deployment. | Triage imaging of all six workstations. |<br>
-| <strong>What is the role of 10.44.24.9?</strong> | This IP had PSEXESVC.exe deployed and extensive admin$ access. Possible earlier compromised host or attacker pivot point. | Image and triage 10.44.24.9. |</p>
+<table>
+<thead>
+<tr>
+<th>Question</th>
+<th>Why It Matters</th>
+<th>Resolving Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>**What is the SHA256 hash of <code>rename.exe</code> and <code>dir.exe</code>?**</td>
+<td>Definitively links these to <code>redpetya.exe</code> found on other server.</td>
+<td>File system extraction + hash comparison. This is the <strong>#1 priority</strong>.</td>
+</tr>
+<tr>
+<td><strong>When was the &#34;admin&#34; domain account (RID 2611) created, and by whom?</strong></td>
+<td>Determines if attacker created the account or compromised an existing one.</td>
+<td>AD Security logs (Event ID 4720), domain controller NTDS.dit, SAM on DC.</td>
+</tr>
+<tr>
+<td><strong>What happened between Feb 9 22:56 and Feb 12?</strong></td>
+<td>Determines exact ransomware detonation time and whether additional hosts were compromised.</td>
+<td>MBR/VBR disk-level analysis, MFT timestamps (if recoverable), event logs from other hosts.</td>
+</tr>
+<tr>
+<td><strong>What was exfiltrated to 185.239.106.67?</strong></td>
+<td>Determines breach scope for notification/legal obligations.</td>
+<td>Firewall/proxy logs, FTP client artifacts, packet captures, threat intel on IP.</td>
+</tr>
+<tr>
+<td><strong>Were the six target workstations (Desktop-001 through 006) successfully compromised?</strong></td>
+<td>Determines blast radius of the ransomware deployment.</td>
+<td>Triage imaging of all six workstations.</td>
+</tr>
+<tr>
+<td><strong>What is the role of 10.44.24.9?</strong></td>
+<td>This IP had PSEXESVC.exe deployed and extensive admin$ access. Possible earlier compromised host or attacker pivot point.</td>
+<td>Image and triage 10.44.24.9.</td>
+</tr>
+</tbody>
+</table>
 <h3>Anti-Forensic Indicators</h3>
-<p>| Indicator | Evidence | Confidence |<br>
-|---|---|---|<br>
-| <strong>Windows Defender deliberately disabled</strong> | Three Defender services demoted to Manual on Feb 6 21:31 (Services artifact) + empty Defender Quarantine store | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>Tool archive deleted post-extraction</strong> | SysinternalsSuite.zip deleted to Recycle Bin within 1 minute of extraction (Recycle Bin artifact) | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>Staging archive deleted post-exfiltration</strong> | share.zip (0.65 GB) deleted ~23 hours after creation (Recycle Bin artifact) | <span class="confidence-inline confidence-medium">MEDIUM</span> |<br>
-| <strong>Payload renamed to blend in</strong> | <code>rename.exe</code> and <code>dir.exe</code> named after internal Windows commands, no publisher metadata (Amcache) | <span class="confidence-inline confidence-high">HIGH</span> |<br>
-| <strong>Possible timestomping</strong> | <code>rename.exe</code> last_modified <code>2016-03-24T00:00:00</code>, <code>dir.exe</code> <code>2016-04-01T00:00:00</code> — exact midnight values from 8 years ago (Shimcache) | <span class="confidence-inline confidence-medium">MEDIUM</span> |<br>
-| <strong>Empty SRUM network data</strong> | Expected to contain ~30-60 days of per-app network usage; completely empty | <span class="confidence-inline confidence-medium">MEDIUM</span> |<br>
-| <strong>Empty Activities Cache</strong> | Expected to contain user activity records; completely empty | <span class="confidence-inline confidence-medium">MEDIUM</span> |<br>
-| <strong>Empty WMI repository</strong> | Could indicate corruption from MBR/MFT overwrite by Petya, or deliberate clearing | <span class="confidence-inline confidence-medium">MEDIUM</span> |<br>
-| <strong>Date/time settings accessed during attack</strong> | <code>ms-settings:dateandtime</code> opened Feb 6 22:32 (Browser History) — possible timestamp manipulation | <span class="confidence-inline confidence-low">LOW</span> |</p>
+<table>
+<thead>
+<tr>
+<th>Indicator</th>
+<th>Evidence</th>
+<th>Confidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Windows Defender deliberately disabled</strong></td>
+<td>Three Defender services demoted to Manual on Feb 6 21:31 (Services artifact) + empty Defender Quarantine store</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>Tool archive deleted post-extraction</strong></td>
+<td>SysinternalsSuite.zip deleted to Recycle Bin within 1 minute of extraction (Recycle Bin artifact)</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>Staging archive deleted post-exfiltration</strong></td>
+<td>share.zip (0.65 GB) deleted ~23 hours after creation (Recycle Bin artifact)</td>
+<td><span class="confidence-inline confidence-medium">MEDIUM</span></td>
+</tr>
+<tr>
+<td><strong>Payload renamed to blend in</strong></td>
+<td><code>rename.exe</code> and <code>dir.exe</code> named after internal Windows commands, no publisher metadata (Amcache)</td>
+<td><span class="confidence-inline confidence-high">HIGH</span></td>
+</tr>
+<tr>
+<td><strong>Possible timestomping</strong></td>
+<td><code>rename.exe</code> last_modified <code>2016-03-24T00:00:00</code>, <code>dir.exe</code> <code>2016-04-01T00:00:00</code> — exact midnight values from 8 years ago (Shimcache)</td>
+<td><span class="confidence-inline confidence-medium">MEDIUM</span></td>
+</tr>
+<tr>
+<td><strong>Empty SRUM network data</strong></td>
+<td>Expected to contain ~30-60 days of per-app network usage; completely empty</td>
+<td><span class="confidence-inline confidence-medium">MEDIUM</span></td>
+</tr>
+<tr>
+<td><strong>Empty Activities Cache</strong></td>
+<td>Expected to contain user activity records; completely empty</td>
+<td><span class="confidence-inline confidence-medium">MEDIUM</span></td>
+</tr>
+<tr>
+<td><strong>Empty WMI repository</strong></td>
+<td>Could indicate corruption from MBR/MFT overwrite by Petya, or deliberate clearing</td>
+<td><span class="confidence-inline confidence-medium">MEDIUM</span></td>
+</tr>
+<tr>
+<td><strong>Date/time settings accessed during attack</strong></td>
+<td><code>ms-settings:dateandtime</code> opened Feb 6 22:32 (Browser History) — possible timestamp manipulation</td>
+<td><span class="confidence-inline confidence-low">LOW</span></td>
+</tr>
+</tbody>
+</table>
 <h3>Artifact Conflicts / Ambiguities</h3>
 <ul><li><strong>Two user accounts with Sysinternals</strong>: The <code>Administrator</code> account downloaded Sysinternals in November 2023 (3 months prior). It is unclear whether this represents an earlier compromise phase or legitimate admin activity unrelated to the February attack. The November shimcache entries showing remote binaries accessed via <code>\\10.44.24.9\admin$</code> (regedit, notepad, etc.) may link the earlier activity to the same threat actor.</li><li><strong>Ryuk vs. Red Petya</strong>: A Ryuk ransom note (<code>RyukReadMe.txt</code>) was opened on Feb 6, but the incident report states Red Petya was on screen on Feb 12. This could indicate: (a) the attacker tested multiple ransomware variants, (b) Ryuk was deployed to other hosts while Red Petya hit this DC, or (c) the note was from a previous/separate incident. This is unresolved.</li><li>**<code>sethc.exe</code> running as SYSTEM**: 42 SRUM intervals of Sticky Keys execution under SYSTEM from December 2023 could indicate an accessibility-feature backdoor, but could also be benign. Requires hash verification.</li></ul>
 <p>---</p>
@@ -672,16 +943,50 @@
 <p>No suspicious entries are present in the Run/RunOnce registry keys. Both entries are legitimate Windows/VirtualBox components.</p>
 <p>---</p>
 <p><strong>IOC Status</strong></p>
-<p>| IOC | Status | Detail |<br>
-|---|---|---|<br>
-| <code>redpetya.exe</code> | <strong>Not Observed</strong> | No Run/RunOnce entry references this binary. |<br>
-| <code>psexec</code> (or PsExec-related persistence) | <strong>Not Observed</strong> | No Run/RunOnce entry references PsExec or related tools. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redpetya.exe</code></td>
+<td><strong>Not Observed</strong></td>
+<td>No Run/RunOnce entry references this binary.</td>
+</tr>
+<tr>
+<td><code>psexec</code> (or PsExec-related persistence)</td>
+<td><strong>Not Observed</strong></td>
+<td>No Run/RunOnce entry references PsExec or related tools.</td>
+</tr>
+</tbody>
+</table>
 <p><strong>DFIR Default Checks (Run/RunOnce scope)</strong></p>
-<p>| Check | Status |<br>
-|---|---|<br>
-| Malicious program persistence | Not Observed — only two benign entries present. |<br>
-| Privilege escalation / credential access | Not Assessable from this artifact. |<br>
-| Lateral movement / evasion / exfiltration | Not Assessable from this artifact. |</p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Malicious program persistence</td>
+<td>Not Observed — only two benign entries present.</td>
+</tr>
+<tr>
+<td>Privilege escalation / credential access</td>
+<td>Not Assessable from this artifact.</td>
+</tr>
+<tr>
+<td>Lateral movement / evasion / exfiltration</td>
+<td>Not Assessable from this artifact.</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <p><strong>Data Gaps</strong></p>
 <ol><li><strong>Temporal mismatch.</strong> The Run key data is timestamped <strong>2023-09-24</strong>, approximately <strong>4.5 months before</strong> the incident date of <strong>2024-02-12</strong>. Run key timestamps typically reflect the last-modified time of the parent registry key, not individual value writes. If the attacker added and later removed a persistence entry, or if the image was parsed at a point where the key was already cleaned, this artifact would not capture it. The absence of malicious entries does <strong>not</strong> rule out prior persistence via Run keys.</li></ol>
@@ -721,10 +1026,27 @@
 <ul><li><strong>[SEVERITY: <span class="confidence-inline confidence-medium">MEDIUM</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>] Npcap presence may indicate network sniffing/reconnaissance tooling.</strong></li><li>Evidence: Row 14–16. Task <code>npcapwatchdog</code>, command <code>C:\Program Files\Npcap\CheckStatus.bat</code>, user_id <code>S-1-5-18</code> (SYSTEM).</li><li>Why it matters: Npcap is the packet capture library used by Wireshark and Nmap. While it has legitimate uses, its presence on a server that was subsequently hit by ransomware may indicate the attacker installed network sniffing or scanning tools for <strong>reconnaissance</strong> (T1046 – Network Service Discovery) prior to deploying the ransomware.</li><li>Alternative explanation: Npcap could have been installed by IT staff for legitimate network diagnostics or monitoring.</li><li>Verify: Check Npcap installation timestamp and whether Wireshark/Nmap binaries are present. Correlate with software installation logs and admin activity records.</li></ul>
 <p>---</p>
 <h2>IOC Status</h2>
-<p>| IOC | Status | Evidence |<br>
-|-----|--------|----------|<br>
-| <strong>redpetya.exe</strong> | <strong>Not Directly Observed, but strongly correlated</strong> | The filename <code>redpetya.exe</code> does not appear in any task definition. However, the payload <code>C:\Users\admin\Desktop\rename.exe</code> (row 5) is almost certainly a renamed copy — the file is being pushed via PsExec at REALTIME priority to six workstations 6 days before the ransomware incident. Must verify by hash comparison. |<br>
-| <strong>PsExec</strong> | <strong>Observed</strong> | Row 5: <code>C:\Users\admin\Downloads\SysinternalsSuite\PsExec.exe</code> is the explicit command for the &#34;Enterpries backup&#34; task. Confirmed as the delivery mechanism for lateral ransomware deployment. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>redpetya.exe</strong></td>
+<td><strong>Not Directly Observed, but strongly correlated</strong></td>
+<td>The filename <code>redpetya.exe</code> does not appear in any task definition. However, the payload <code>C:\Users\admin\Desktop\rename.exe</code> (row 5) is almost certainly a renamed copy — the file is being pushed via PsExec at REALTIME priority to six workstations 6 days before the ransomware incident. Must verify by hash comparison.</td>
+</tr>
+<tr>
+<td><strong>PsExec</strong></td>
+<td><strong>Observed</strong></td>
+<td>Row 5: <code>C:\Users\admin\Downloads\SysinternalsSuite\PsExec.exe</code> is the explicit command for the &#34;Enterpries backup&#34; task. Confirmed as the delivery mechanism for lateral ransomware deployment.</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <h2>Data Gaps</h2>
 <ul><li><strong>Task execution history is absent.</strong> Scheduled task definitions show what was configured, but not whether/when tasks actually ran. Task Scheduler operational logs (<code>Microsoft-Windows-TaskScheduler/Operational</code>) with Event IDs 106 (registered), 140 (updated), 200 (action started), 201 (action completed) are needed to determine execution times.</li><li><strong>No trigger details visible.</strong> The CSV does not include trigger type, start boundary, repetition interval, or enabled/disabled status. We cannot determine if the &#34;Enterpries backup&#34; task was set for one-time execution, recurring, or triggered by logon/event.</li><li><strong>Time gap between task creation and incident.</strong> The task was created on 2024-02-06; the incident was discovered on 2024-02-12. What happened in those 6 days cannot be determined from this artifact alone.</li><li><strong>No file hashes or file metadata.</strong> Cannot confirm <code>rename.exe</code> = <code>redpetya.exe</code> from this data alone. File system analysis (MFT, hash comparison) is required.</li><li><strong>Credential-access / Mimikatz-like behavior</strong>: <strong>Not Assessable</strong> from scheduled task definitions. Requires memory analysis, process execution logs, or prefetch data.</li><li><strong>Exfiltration</strong>: <strong>Not Assessable</strong> from this artifact. No tasks suggest data staging or exfiltration, but network logs and process execution data are needed.</li><li><strong>Other persistence mechanisms</strong>: Only scheduled tasks are visible here. Registry Run keys, services, WMI subscriptions, and startup folder items should also be examined.</li><li><strong>Additional artifacts needed</strong>: Windows Event Logs (Security, System, TaskScheduler), Prefetch files, NTFS $MFT (for <code>rename.exe</code> and <code>redpetya.exe</code> timestamps/hashes), Amcache/Shimcache, PowerShell logs, and network connection logs.</li></ul></div>
@@ -759,10 +1081,27 @@
 <ul><li><strong>[SEVERITY: <span class="confidence-inline confidence-low">LOW</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>]</strong> RemoteRegistry service set to Auto Start, which is atypical for hardened servers and facilitates remote access to the registry.</li><li>Evidence: <code>RemoteRegistry</code> service, start type <code>Auto Start (2)</code>, timestamp <code>2023-09-24T14:57:31</code> (row 375).</li><li>Why it matters: RemoteRegistry is often exploited during lateral movement for remote configuration changes; it is typically disabled on hardened DCs.</li><li>Alternative explanation: This may be the default or an intentional organizational policy setting.</li><li>Verify: Confirm if RemoteRegistry Auto Start is the organization&#39;s baseline and check for remote registry access in Security logs.</li></ul>
 <ul><li><strong>[SEVERITY: <span class="confidence-inline confidence-low">LOW</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>]</strong> WinRM service set to Auto Start, enabling remote management—a potential lateral movement vector.</li><li>Evidence: <code>WinRM</code> service, start type <code>Auto Start (2)</code>, timestamp <code>2023-09-24T14:57:31</code> (row 579).</li><li>Why it matters: WinRM provides PowerShell Remoting capability which attackers use for lateral movement on Domain Controllers.</li><li>Alternative explanation: WinRM Auto Start is common in managed enterprise environments for legitimate administration.</li><li>Verify: Review WinRM connection logs (Microsoft-Windows-WinRM/Operational) for suspicious remote sessions around the incident timeframe.</li></ul>
 <h2>IOC Status</h2>
-<p>| IOC | Status | Evidence |<br>
-|---|---|---|<br>
-| <strong>redpetya.exe</strong> | <strong>Not Observed</strong> | No service entry references <code>redpetya.exe</code> or any variant in imagepath or servicedll fields. |<br>
-| <strong>PsExec (PSEXESVC)</strong> | <strong>Not Observed</strong> | No service named <code>PSEXESVC</code> or any imagepath containing <code>psexec</code> is present in this dataset. PsExec creates and typically removes its service; absence does not rule out use. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>redpetya.exe</strong></td>
+<td><strong>Not Observed</strong></td>
+<td>No service entry references <code>redpetya.exe</code> or any variant in imagepath or servicedll fields.</td>
+</tr>
+<tr>
+<td><strong>PsExec (PSEXESVC)</strong></td>
+<td><strong>Not Observed</strong></td>
+<td>No service named <code>PSEXESVC</code> or any imagepath containing <code>psexec</code> is present in this dataset. PsExec creates and typically removes its service; absence does not rule out use.</td>
+</tr>
+</tbody>
+</table>
 <h2>Data Gaps</h2>
 <ul><li><strong>PsExec service likely cleaned up.</strong> PsExec creates a transient service (<code>PSEXESVC</code>) that is deleted after use. The services registry artifact would only capture it if the registry hive was imaged while the service existed or if cleanup failed. <strong>System event logs (Event ID 7045) are needed</strong> to detect service creation/deletion events.</li><li><strong>No service account information.</strong> The data lacks the <code>ObjectName</code>/<code>ServiceAccount</code> field, so we cannot determine if any service runs under a suspicious or compromised account.</li><li><strong>Data ends 2024-02-07, incident is 2024-02-12.</strong> The artifact&#39;s time range ends ~5 days before the ransomware discovery. Any services created between Feb 7–12 (including a potential ransomware deployment service) are <strong>not captured</strong>.</li><li><strong>No service named for redpetya.exe</strong>, but Petya-family ransomware may overwrite the MBR directly without registering a persistent service, so this artifact type may not capture the execution mechanism.</li><li><strong>Recommended additional artifacts:</strong> System event log (service install events 7045/7036), Prefetch files, NTFS MFT timeline, Amcache/ShimCache for evidence of <code>redpetya.exe</code> and <code>psexec</code> execution, and SAM/Security logs for account activity.</li></ul></div>
               </div>
@@ -793,17 +1132,51 @@
 <p>No suspicious findings can be identified from this artifact — the dataset contains <strong>zero records</strong>.</p>
 <p>---</p>
 <p><strong>IOC Status</strong></p>
-<p>| IOC | Status | Detail |<br>
-|---|---|---|<br>
-| <code>redpetya.exe</code> | <strong>Not Assessable</strong> | WMI repository data is empty; cannot determine if this binary was referenced in any WMI event consumer (e.g., CommandLineEventConsumer executing redpetya.exe). |<br>
-| <code>psexec</code> | <strong>Not Assessable</strong> | No WMI records to evaluate for PsExec-related persistence or execution triggers. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redpetya.exe</code></td>
+<td><strong>Not Assessable</strong></td>
+<td>WMI repository data is empty; cannot determine if this binary was referenced in any WMI event consumer (e.g., CommandLineEventConsumer executing redpetya.exe).</td>
+</tr>
+<tr>
+<td><code>psexec</code></td>
+<td><strong>Not Assessable</strong></td>
+<td>No WMI records to evaluate for PsExec-related persistence or execution triggers.</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <p><strong>Data Gaps</strong></p>
-<p>| Gap | Impact |<br>
-|---|---|<br>
-| <strong>Empty WMI repository extract (0 records)</strong> | This is the most significant gap. A completely empty CIM repository is itself noteworthy — either (1) the extraction/parsing tool failed to recover data, (2) the WMI repository was never used for persistence on this host, or (3) the repository was <strong>deliberately cleared or corrupted</strong> as an anti-forensic measure. Red Petya / NotPetya variants have been known to corrupt disk structures, which could destroy the WMI repository (<code>C:\Windows\System32\wbem\Repository\OBJECTS.DATA</code>, <code>MAPPING*.MAP</code>, <code>INDEX.BTR</code>). |<br>
-| <strong>No event filters, consumers, or bindings assessable</strong> | Cannot evaluate for fileless persistence, scheduled WMI backdoors, or ActiveScriptEventConsumer / CommandLineEventConsumer abuse — all standard DFIR checks for this artifact. |<br>
-| <strong>Cannot assess any default DFIR checks</strong> | Privilege escalation, credential access, lateral movement, and evasion via WMI are all <strong>Not Assessable</strong>. |</p>
+<table>
+<thead>
+<tr>
+<th>Gap</th>
+<th>Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Empty WMI repository extract (0 records)</strong></td>
+<td>This is the most significant gap. A completely empty CIM repository is itself noteworthy — either (1) the extraction/parsing tool failed to recover data, (2) the WMI repository was never used for persistence on this host, or (3) the repository was <strong>deliberately cleared or corrupted</strong> as an anti-forensic measure. Red Petya / NotPetya variants have been known to corrupt disk structures, which could destroy the WMI repository (<code>C:\Windows\System32\wbem\Repository\OBJECTS.DATA</code>, <code>MAPPING*.MAP</code>, <code>INDEX.BTR</code>).</td>
+</tr>
+<tr>
+<td><strong>No event filters, consumers, or bindings assessable</strong></td>
+<td>Cannot evaluate for fileless persistence, scheduled WMI backdoors, or ActiveScriptEventConsumer / CommandLineEventConsumer abuse — all standard DFIR checks for this artifact.</td>
+</tr>
+<tr>
+<td><strong>Cannot assess any default DFIR checks</strong></td>
+<td>Privilege escalation, credential access, lateral movement, and evasion via WMI are all <strong>Not Assessable</strong>.</td>
+</tr>
+</tbody>
+</table>
 <p><strong>Recommended follow-up:</strong></p>
 <ol><li><strong>Verify WMI repository integrity</strong> — Check whether <code>C:\Windows\System32\wbem\Repository\</code> files exist on the disk image and whether they are intact or corrupted (consistent with ransomware disk-level damage).</li><li><strong>Re-parse with alternative tooling</strong> — Attempt recovery with <code>python-cim</code> or <code>WMI_Forensics.py</code> directly against the raw repository files to rule out a parsing failure.</li><li><strong>Compensating artifacts</strong> — Review <strong>SYSMON Event ID 19/20/21</strong> (WMI activity), <strong>Microsoft-Windows-WMI-Activity/Operational</strong> event log, and <strong>Autoruns</strong> output to detect WMI persistence through alternate evidence sources.</li><li><strong>Assess anti-forensic activity</strong> — Cross-reference with MBR/disk analysis; if Red Petya overwrote the MBR/MFT, repository corruption would be expected and the empty result is explained by ransomware damage rather than deliberate WMI cleanup.</li></ol></div>
               </div>
@@ -841,10 +1214,27 @@
 <ul><li><strong>[SEVERITY: <span class="confidence-inline confidence-medium">MEDIUM</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>] Credential-access and reconnaissance tools from SysinternalsSuite present in shimcache on Feb 5.</strong></li><li>Evidence: Multiple tools with dual-use potential appeared at <code>2024-02-05T23:14:*</code>:</li><li><code>procdump.exe</code> / <code>procdump64.exe</code> (rows 62, 70) — commonly used for LSASS memory dumping</li><li><code>PsLoggedon.exe</code> / <code>PsLoggedon64.exe</code> (rows 46, 49) — enumerates logged-on users</li><li><code>logonsessions.exe</code> / <code>logonsessions64.exe</code> (rows 20, 21) — lists active logon sessions</li><li><code>PsInfo.exe</code> / <code>PsInfo64.exe</code> (rows 48, 53) — system enumeration</li><li><code>ADExplorer.exe</code> / <code>ADExplorer64.exe</code> (rows 138, 139) — Active Directory browsing</li><li><code>ADInsight.exe</code> / <code>ADInsight64.exe</code> (rows 125, 126) — AD traffic monitoring</li><li><code>accesschk.exe</code> / <code>accesschk64.exe</code> (rows 141, 142) — permission enumeration</li><li>Why it matters: While shimcache presence does not prove execution, these tools in combination with confirmed PsExec usage and Nmap installation on the same day create a comprehensive attack toolkit for credential theft, domain reconnaissance, and lateral movement on a domain controller.</li><li>Alternative explanation: These arrived as part of the full Sysinternals Suite ZIP extraction; shimcache may have recorded them during extraction without execution.</li><li>Verify: Check Prefetch files for execution evidence of procdump, logonsessions, ADExplorer. Check for LSASS dump files.</li></ul>
 <ul><li><strong>[SEVERITY: <span class="confidence-inline confidence-low">LOW</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>] Certutil.exe present in shimcache — potential dual-use for file download or decoding.</strong></li><li>Evidence: Row 107 — <code>C:\Windows\SysWOW64\certutil.exe</code>, <code>2023-07-07T21:21:32</code>. Row 108 — <code>C:\Windows\SYSTEM32\certutil.exe</code>, <code>2023-07-07T21:21:32</code>.</li><li>Why it matters: Certutil is commonly abused to download payloads or decode Base64-encoded files. The timestamp predates the attack but should be checked.</li><li>Alternative explanation: Certutil is a standard Windows binary; the timestamp aligns with a general OS activity period.</li><li>Verify: Check command-line logging for certutil invocations with <code>-urlcache</code> or <code>-decode</code> flags.</li></ul>
 <h2>IOC Status</h2>
-<p>| IOC | Status | Evidence |<br>
-|-----|--------|----------|<br>
-| <strong>redpetya.exe</strong> | <strong>Not Observed</strong> | No entry matching <code>redpetya.exe</code> exists anywhere in the 514 shimcache records. This does not mean it was never present — it may have been executed after the last shimcache write, or the cache may have been flushed by the reboot caused by the ransomware. |<br>
-| <strong>PsExec (tool usage)</strong> | <strong>Observed</strong> | <code>PsExec.exe</code> (row 120), <code>PsExec64.exe</code> (row 122) at <code>C:\Users\admin\Downloads\SysinternalsSuite\</code> with timestamps <code>2024-02-05T23:14:39</code>. <code>PSEXESVC.exe</code> (row 8) at <code>\10.44.24.9\admin$\</code> with timestamp <code>2024-02-05T23:25:15</code>. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>redpetya.exe</strong></td>
+<td><strong>Not Observed</strong></td>
+<td>No entry matching <code>redpetya.exe</code> exists anywhere in the 514 shimcache records. This does not mean it was never present — it may have been executed after the last shimcache write, or the cache may have been flushed by the reboot caused by the ransomware.</td>
+</tr>
+<tr>
+<td><strong>PsExec (tool usage)</strong></td>
+<td><strong>Observed</strong></td>
+<td><code>PsExec.exe</code> (row 120), <code>PsExec64.exe</code> (row 122) at <code>C:\Users\admin\Downloads\SysinternalsSuite\</code> with timestamps <code>2024-02-05T23:14:39</code>. <code>PSEXESVC.exe</code> (row 8) at <code>\10.44.24.9\admin$\</code> with timestamp <code>2024-02-05T23:25:15</code>.</td>
+</tr>
+</tbody>
+</table>
 <h2>Data Gaps</h2>
 <ol><li><strong>No evidence of redpetya.exe execution.</strong> Shimcache is written to the registry on shutdown/reboot. If the ransomware was deployed after the last clean shutdown (and the ransomware-induced reboot corrupted or did not properly flush the cache), the execution would not appear here. <strong>Prefetch, MFT, USN Journal, and NTFS $I30 entries</strong> are needed to confirm redpetya.exe presence and execution on this host.</li></ol>
 <ol><li><strong>Shimcache does not prove execution.</strong> Entries indicate the OS &#34;observed&#34; these files (e.g., during directory listing, file copy, or execution). Prefetch, Amcache, or event logs are required to confirm actual execution of PsExec, Nmap, procdump, or any other tool.</li></ol>
@@ -885,20 +1275,66 @@
 <ul><li><strong>[SEVERITY: <span class="confidence-inline confidence-low">LOW</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>]</strong> This system is a Domain Controller.</li><li>Evidence: Active Directory administrative shortcuts present in Amcache (rows 539–543, 546, 558, 560, 564): &#34;Active Directory Domains and Trusts&#34;, &#34;Active Directory Users and Computers&#34;, &#34;DHCP&#34;, &#34;DNS&#34;, &#34;Group Policy Management&#34;, etc.</li><li>Why it matters: A compromised DC means full domain compromise — the attacker had access to the most <span class="confidence-inline confidence-critical">CRITICAL</span> server in the environment, enabling credential theft, GPO manipulation, and mass lateral movement (consistent with PsExec + ransomware deployment).</li><li>Alternative explanation: N/A — this is contextual rather than suspicious.</li><li>Verify: Review NTDS.dit for evidence of DCSync/extraction, and check for GPO modifications around the attack timeframe.</li></ul>
 <p>---</p>
 <h2>IOC Status</h2>
-<p>| IOC | Status | Evidence |<br>
-|---|---|---|<br>
-| <strong>redpetya.exe</strong> | <strong>Not Observed</strong> | No file named <code>redpetya.exe</code> appears anywhere in the Amcache data. However, <code>dir.exe</code> and <code>rename.exe</code> (unsigned, no metadata, on admin&#39;s desktop) should be investigated as possible renamed copies. |<br>
-| <strong>PsExec</strong> | <strong>Observed</strong> | Three instances confirmed: <code>psexec.exe</code> (row 71, admin profile, 2024-02-06 22:14:12), <code>psexec64.exe</code> (row 73, admin profile, 2024-02-06 22:14:14), <code>psexec64.exe</code> (row 72, administrator profile, 2024-02-07 21:00:11). Product name &#34;sysinternals psexec&#34; v2.43. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>redpetya.exe</strong></td>
+<td><strong>Not Observed</strong></td>
+<td>No file named <code>redpetya.exe</code> appears anywhere in the Amcache data. However, <code>dir.exe</code> and <code>rename.exe</code> (unsigned, no metadata, on admin&#39;s desktop) should be investigated as possible renamed copies.</td>
+</tr>
+<tr>
+<td><strong>PsExec</strong></td>
+<td><strong>Observed</strong></td>
+<td>Three instances confirmed: <code>psexec.exe</code> (row 71, admin profile, 2024-02-06 22:14:12), <code>psexec64.exe</code> (row 73, admin profile, 2024-02-06 22:14:14), <code>psexec64.exe</code> (row 72, administrator profile, 2024-02-07 21:00:11). Product name &#34;sysinternals psexec&#34; v2.43.</td>
+</tr>
+</tbody>
+</table>
 <h3>Default DFIR Checks</h3>
-<p>| Check | Assessment |<br>
-|---|---|<br>
-| <strong>Privilege Escalation</strong> | Not Assessable — Amcache does not record privilege context. The &#34;admin&#34; account operating on a DC implies <span class="confidence-inline confidence-high">HIGH</span> privilege. |<br>
-| <strong>Credential Access / Mimikatz</strong> | Not Observed — No mimikatz, procdump, comsvcs.dll, or similar credential-dumping tools in the data. Autologon presence is noted. |<br>
-| <strong>Malicious Program Execution</strong> | Observed — <code>dir.exe</code> and <code>rename.exe</code> (unsigned, no metadata) and PsExec executed. Amcache entry confirms these binaries were at minimum inventoried by the system. |<br>
-| <strong>Persistence</strong> | Possible — Autologon64.exe present but execution not confirmed from this artifact alone. |<br>
-| <strong>Evasion</strong> | Possible — <code>dir.exe</code> and <code>rename.exe</code> naming convention suggests attempts to blend in with legitimate Windows commands. |<br>
-| <strong>Lateral Movement</strong> | Observed — PsExec (known lateral movement tool) present under both user profiles. |<br>
-| <strong>Exfiltration</strong> | Not Assessable — Ncat could facilitate exfiltration but no direct evidence from Amcache. |</p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Assessment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Privilege Escalation</strong></td>
+<td>Not Assessable — Amcache does not record privilege context. The &#34;admin&#34; account operating on a DC implies <span class="confidence-inline confidence-high">HIGH</span> privilege.</td>
+</tr>
+<tr>
+<td><strong>Credential Access / Mimikatz</strong></td>
+<td>Not Observed — No mimikatz, procdump, comsvcs.dll, or similar credential-dumping tools in the data. Autologon presence is noted.</td>
+</tr>
+<tr>
+<td><strong>Malicious Program Execution</strong></td>
+<td>Observed — <code>dir.exe</code> and <code>rename.exe</code> (unsigned, no metadata) and PsExec executed. Amcache entry confirms these binaries were at minimum inventoried by the system.</td>
+</tr>
+<tr>
+<td><strong>Persistence</strong></td>
+<td>Possible — Autologon64.exe present but execution not confirmed from this artifact alone.</td>
+</tr>
+<tr>
+<td><strong>Evasion</strong></td>
+<td>Possible — <code>dir.exe</code> and <code>rename.exe</code> naming convention suggests attempts to blend in with legitimate Windows commands.</td>
+</tr>
+<tr>
+<td><strong>Lateral Movement</strong></td>
+<td>Observed — PsExec (known lateral movement tool) present under both user profiles.</td>
+</tr>
+<tr>
+<td><strong>Exfiltration</strong></td>
+<td>Not Assessable — Ncat could facilitate exfiltration but no direct evidence from Amcache.</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <h2>Data Gaps</h2>
 <ol><li><strong>No SHA256 hashes in the projected data.</strong> Amcache typically stores file hashes — the column was not included in the projection. This prevents direct comparison of <code>dir.exe</code>, <code>rename.exe</code>, or any other binary against the known <code>redpetya.exe</code> hash. <strong>This is the single most <span class="confidence-inline confidence-critical">CRITICAL</span> gap</strong> for this investigation.</li></ol>
@@ -941,22 +1377,81 @@
 <ul><li><strong>[SEVERITY: <span class="confidence-inline confidence-low">LOW</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>] No BAM activity recorded between Feb 9 22:55 and the ransomware discovery on Feb 12.</strong></li><li>Evidence: Last BAM timestamp is <code>2024-02-09T22:55:44</code> (row 23, PsExec.exe). Ransomware discovered Feb 12.</li><li>Why it matters: A ~2.5 day gap may indicate the ransomware was deployed shortly after the last PsExec execution, rendering the system non-functional (consistent with Petya-style MBR/bootloader encryption which prevents normal OS boot).</li><li>Verify: Check MFT timestamps, $LogFile, and event logs for any activity between Feb 10–12. Examine MBR/VBR for overwrite timestamps.</li></ul>
 <p>---</p>
 <h2>IOC Status</h2>
-<p>| IOC | Status | Evidence |<br>
-|-----|--------|----------|<br>
-| <strong>redpetya.exe</strong> | <strong>Not Observed</strong> | No BAM entry for <code>redpetya.exe</code>. This does not mean it was not executed — it may have run under a different user context (BAM tracks per-SID), or the BAM entry may have been overwritten, or the binary was executed via a method that doesn&#39;t generate BAM entries (e.g., service execution via PsExec on a <em>remote</em> target). |<br>
-| <strong>PsExec</strong> | <strong>Observed</strong> | Both <code>PsExec64.exe</code> (row 13, 2024-02-06T22:14:12) and <code>PsExec.exe</code> (row 23, 2024-02-09T22:55:44) executed from <code>\Users\admin\Downloads\SysinternalsSuite\</code>. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>redpetya.exe</strong></td>
+<td><strong>Not Observed</strong></td>
+<td>No BAM entry for <code>redpetya.exe</code>. This does not mean it was not executed — it may have run under a different user context (BAM tracks per-SID), or the BAM entry may have been overwritten, or the binary was executed via a method that doesn&#39;t generate BAM entries (e.g., service execution via PsExec on a <em>remote</em> target).</td>
+</tr>
+<tr>
+<td><strong>PsExec</strong></td>
+<td><strong>Observed</strong></td>
+<td>Both <code>PsExec64.exe</code> (row 13, 2024-02-06T22:14:12) and <code>PsExec.exe</code> (row 23, 2024-02-09T22:55:44) executed from <code>\Users\admin\Downloads\SysinternalsSuite\</code>.</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <h2>Data Gaps</h2>
-<p>| Gap | Impact | Recommended Artifact |<br>
-|-----|--------|---------------------|<br>
-| <strong>User SID not shown in projected data</strong> | Cannot confirm which user account executed each binary. The path <code>\Users\admin\</code> suggests the <code>admin</code> account, but BAM keys are SID-based and this was projected out. | Re-examine raw BAM registry keys to confirm SID-to-user mapping. |<br>
-| <strong>No redpetya.exe in BAM</strong> | Cannot confirm ransomware binary execution on <em>this</em> host from BAM alone. If deployed via PsExec to a <em>remote</em> host, BAM on the remote target would capture it, not this one. | Check Prefetch, Amcache, and ShimCache on this host and the remote server where redpetya.exe was found. |<br>
-| <strong>No command-line arguments</strong> | BAM records only binary paths, not arguments. Cannot determine what PsExec targeted (remote hostname, command pushed), what rundll32 loaded, or what Nmap scanned. | Security Event 4688 (Process Creation with command-line logging), Prefetch, and Sysmon if installed. |<br>
-| <strong>Activity gap Feb 10–12</strong> | Cannot determine what happened between last BAM entry and ransomware discovery. System may have been non-bootable. | Analyze raw MFT $STANDARD<em>INFORMATION and $FILE</em>NAME timestamps, $UsnJrnl, and disk-level MBR analysis. |<br>
-| <strong>No lateral movement targets visible</strong> | BAM shows PsExec ran locally but not which remote hosts were targeted. | PSEXESVC service install events on other hosts, Windows Security logs (logon events 4624 type 3), network flow data. |<br>
-| <strong>Credential access / privilege escalation</strong> | Not assessable from BAM alone. No Mimikatz-like tools observed, but absence is not evidence of absence. | Check for lsass.exe memory dumps, credential-harvesting tools in Amcache/Prefetch, and Security event 4672 (special privilege logon). |<br>
-| <strong>Persistence mechanisms</strong> | Not assessable. BAM does not reveal registry Run keys, scheduled tasks, or services. | Examine SYSTEM and NTUSER.DAT hives for persistence, Autoruns output, and scheduled task files. |<br>
-| <strong>Exfiltration</strong> | Not assessable from BAM. | Network logs, proxy logs, browser history, and any archive/compression tool execution in Prefetch. |</p></div>
+<table>
+<thead>
+<tr>
+<th>Gap</th>
+<th>Impact</th>
+<th>Recommended Artifact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>User SID not shown in projected data</strong></td>
+<td>Cannot confirm which user account executed each binary. The path <code>\Users\admin\</code> suggests the <code>admin</code> account, but BAM keys are SID-based and this was projected out.</td>
+<td>Re-examine raw BAM registry keys to confirm SID-to-user mapping.</td>
+</tr>
+<tr>
+<td><strong>No redpetya.exe in BAM</strong></td>
+<td>Cannot confirm ransomware binary execution on <em>this</em> host from BAM alone. If deployed via PsExec to a <em>remote</em> host, BAM on the remote target would capture it, not this one.</td>
+<td>Check Prefetch, Amcache, and ShimCache on this host and the remote server where redpetya.exe was found.</td>
+</tr>
+<tr>
+<td><strong>No command-line arguments</strong></td>
+<td>BAM records only binary paths, not arguments. Cannot determine what PsExec targeted (remote hostname, command pushed), what rundll32 loaded, or what Nmap scanned.</td>
+<td>Security Event 4688 (Process Creation with command-line logging), Prefetch, and Sysmon if installed.</td>
+</tr>
+<tr>
+<td><strong>Activity gap Feb 10–12</strong></td>
+<td>Cannot determine what happened between last BAM entry and ransomware discovery. System may have been non-bootable.</td>
+<td>Analyze raw MFT $STANDARD<em>INFORMATION and $FILE</em>NAME timestamps, $UsnJrnl, and disk-level MBR analysis.</td>
+</tr>
+<tr>
+<td><strong>No lateral movement targets visible</strong></td>
+<td>BAM shows PsExec ran locally but not which remote hosts were targeted.</td>
+<td>PSEXESVC service install events on other hosts, Windows Security logs (logon events 4624 type 3), network flow data.</td>
+</tr>
+<tr>
+<td><strong>Credential access / privilege escalation</strong></td>
+<td>Not assessable from BAM alone. No Mimikatz-like tools observed, but absence is not evidence of absence.</td>
+<td>Check for lsass.exe memory dumps, credential-harvesting tools in Amcache/Prefetch, and Security event 4672 (special privilege logon).</td>
+</tr>
+<tr>
+<td><strong>Persistence mechanisms</strong></td>
+<td>Not assessable. BAM does not reveal registry Run keys, scheduled tasks, or services.</td>
+<td>Examine SYSTEM and NTUSER.DAT hives for persistence, Autoruns output, and scheduled task files.</td>
+</tr>
+<tr>
+<td><strong>Exfiltration</strong></td>
+<td>Not assessable from BAM.</td>
+<td>Network logs, proxy logs, browser history, and any archive/compression tool execution in Prefetch.</td>
+</tr>
+</tbody>
+</table>
+</div>
               </div>
             </details>
             <details class="artifact-card" >
@@ -993,20 +1488,71 @@
 <ul><li><strong>[SEVERITY: <span class="confidence-inline confidence-low">LOW</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>] cmd.exe is the last recorded UserAssist activity before the ransomware incident — 7 executions, last at 2024-02-09 22:53:05.</strong></li><li>Evidence: Row 13 — <code>cmd.exe</code>, 7 executions, <code>2024-02-09T22:53:05.400000</code>, user <code>admin</code>.</li><li>Why it matters: Heavy command-line usage is the last observable GUI activity, ~2.5 days before the ransomware screen was discovered on Feb 12. Command prompt is commonly used to execute PsExec and deploy payloads.</li><li>Alternative explanation: Routine administration.</li><li>Verify: Command-line audit logs, PowerShell transcription logs, console host history (<code>ConsoleHost_history.txt</code>).</li></ul>
 <p>---</p>
 <h2>IOC Status</h2>
-<p>| IOC | Status | Evidence |<br>
-|-----|--------|----------|<br>
-| <strong>redpetya.exe</strong> | <strong>Not Observed</strong> | No entry for <code>redpetya.exe</code> in any UserAssist records for either user. This is expected if the binary was deployed and executed via PsExec remotely (which would not create a UserAssist entry), or executed non-interactively (e.g., via scheduled task or command line without Explorer GUI interaction). |<br>
-| <strong>PsExec</strong> | <strong>Observed</strong> | Two variants executed by <code>admin</code> on 2024-02-06: <code>PsExec.exe</code> (row 27, 22:14:10) and <code>PsExec64.exe</code> (row 14, 22:14:12). Also present in <code>Administrator</code> profile (row 81, 2023-11-04). |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>redpetya.exe</strong></td>
+<td><strong>Not Observed</strong></td>
+<td>No entry for <code>redpetya.exe</code> in any UserAssist records for either user. This is expected if the binary was deployed and executed via PsExec remotely (which would not create a UserAssist entry), or executed non-interactively (e.g., via scheduled task or command line without Explorer GUI interaction).</td>
+</tr>
+<tr>
+<td><strong>PsExec</strong></td>
+<td><strong>Observed</strong></td>
+<td>Two variants executed by <code>admin</code> on 2024-02-06: <code>PsExec.exe</code> (row 27, 22:14:10) and <code>PsExec64.exe</code> (row 14, 22:14:12). Also present in <code>Administrator</code> profile (row 81, 2023-11-04).</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <h2>Data Gaps</h2>
-<p>| Gap | Impact | Recommended Artifact |<br>
-|-----|--------|---------------------|<br>
-| <strong>No activity between 2024-02-09 22:53 and 2024-02-12 (incident discovery)</strong> | UserAssist records only GUI (Explorer-shell) executions. The ~2.5 day gap before ransomware detonation is not covered — the actual deployment and detonation likely occurred in this window. | Prefetch, $MFT timestamps, SRUM, Event Logs (Security/System). |<br>
-| <strong>UserAssist does not capture command-line arguments</strong> | We know PsExec was launched but cannot determine what payload was pushed, to which hosts, or with what credentials. | Process auditing (Event ID 4688 with command line), Prefetch, Shimcache/Amcache. |<br>
-| **No <code>redpetya.exe</code> in UserAssist** | Cannot confirm GUI-based execution of the ransomware binary on this host. If deployed via PsExec or scheduled task, it would bypass UserAssist entirely. | Prefetch (<code>REDPETYA.EXE-*.pf</code>), Amcache, $MFT, Shimcache. |<br>
-| **<code>admin</code> account origin unknown** | All attack activity is under <code>admin</code> (distinct from <code>Administrator</code>). We cannot determine from UserAssist when this account was created or if it is attacker-controlled. | SAM registry hive, AD event logs (4720 - account creation), ProfileList registry key. |<br>
-| <strong>Run counts of 0 with valid timestamps (Administrator profile)</strong> | The <code>Administrator</code> entries all show <code>number_of_executions: 0</code> despite having timestamps. This may indicate a UserAssist counter format discrepancy, or that focus tracking was reset. This limits confidence in how many times those tools were actually used interactively. | Cross-reference with Prefetch run counts and Amcache. |<br>
-| <strong>No visibility into non-GUI executions</strong> | Services, scheduled tasks, command-line-only tools, and scripts do not appear in UserAssist. <span class="confidence-inline confidence-critical">CRITICAL</span> attack phases (payload deployment, encryption) likely occurred outside GUI context. | Windows Event Logs, Prefetch, SRUM, $MFT timeline, Scheduled Tasks folder. |</p></div>
+<table>
+<thead>
+<tr>
+<th>Gap</th>
+<th>Impact</th>
+<th>Recommended Artifact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>No activity between 2024-02-09 22:53 and 2024-02-12 (incident discovery)</strong></td>
+<td>UserAssist records only GUI (Explorer-shell) executions. The ~2.5 day gap before ransomware detonation is not covered — the actual deployment and detonation likely occurred in this window.</td>
+<td>Prefetch, $MFT timestamps, SRUM, Event Logs (Security/System).</td>
+</tr>
+<tr>
+<td><strong>UserAssist does not capture command-line arguments</strong></td>
+<td>We know PsExec was launched but cannot determine what payload was pushed, to which hosts, or with what credentials.</td>
+<td>Process auditing (Event ID 4688 with command line), Prefetch, Shimcache/Amcache.</td>
+</tr>
+<tr>
+<td>**No <code>redpetya.exe</code> in UserAssist**</td>
+<td>Cannot confirm GUI-based execution of the ransomware binary on this host. If deployed via PsExec or scheduled task, it would bypass UserAssist entirely.</td>
+<td>Prefetch (<code>REDPETYA.EXE-*.pf</code>), Amcache, $MFT, Shimcache.</td>
+</tr>
+<tr>
+<td>**<code>admin</code> account origin unknown**</td>
+<td>All attack activity is under <code>admin</code> (distinct from <code>Administrator</code>). We cannot determine from UserAssist when this account was created or if it is attacker-controlled.</td>
+<td>SAM registry hive, AD event logs (4720 - account creation), ProfileList registry key.</td>
+</tr>
+<tr>
+<td><strong>Run counts of 0 with valid timestamps (Administrator profile)</strong></td>
+<td>The <code>Administrator</code> entries all show <code>number_of_executions: 0</code> despite having timestamps. This may indicate a UserAssist counter format discrepancy, or that focus tracking was reset. This limits confidence in how many times those tools were actually used interactively.</td>
+<td>Cross-reference with Prefetch run counts and Amcache.</td>
+</tr>
+<tr>
+<td><strong>No visibility into non-GUI executions</strong></td>
+<td>Services, scheduled tasks, command-line-only tools, and scripts do not appear in UserAssist. <span class="confidence-inline confidence-critical">CRITICAL</span> attack phases (payload deployment, encryption) likely occurred outside GUI context.</td>
+<td>Windows Event Logs, Prefetch, SRUM, $MFT timeline, Scheduled Tasks folder.</td>
+</tr>
+</tbody>
+</table>
+</div>
               </div>
             </details>
             <details class="artifact-card" >
@@ -1037,10 +1583,27 @@
 <ul><li><strong>[SEVERITY: <span class="confidence-inline confidence-medium">MEDIUM</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>]</strong> Both deletions occur within a ~23-hour window (Feb 5–6), well before the Feb 12 ransomware detonation, suggesting a deliberate cleanup phase during an active intrusion.</li><li>Evidence: Row 2 deleted 2024-02-05T23:14:49; Row 1 deleted 2024-02-06T22:14:44. Ransomware discovered 2024-02-12.</li><li>Why it matters: Attackers commonly stage tools and data, then delete artifacts days before deploying ransomware to reduce forensic footprint. The gap between cleanup (Feb 5–6) and detonation (Feb 12) is consistent with a multi-day intrusion lifecycle.</li><li>Verify: Correlate with $MFT, USN Journal, and event logs for the Feb 5–6 window to identify additional file creation, tool execution, or lateral movement activity.</li></ul>
 <p>---</p>
 <p><strong>IOC Status</strong></p>
-<p>| IOC | Status | Evidence |<br>
-|---|---|---|<br>
-| <code>redpetya.exe</code> | <strong>Not Observed</strong> | No Recycle Bin entry for this filename. It may have been executed in-place without deletion, or deleted and the Recycle Bin record was overwritten/purged. |<br>
-| <code>PsExec</code> / Sysinternals | <strong>Observed (indirect)</strong> | <code>SysinternalsSuite.zip</code> (which contains PsExec) was downloaded to <code>C:\Users\admin\Downloads\</code> and deleted on 2024-02-05T23:14:49 (row 2). This strongly corroborates the hypothesis that PsExec was obtained and used from this host. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redpetya.exe</code></td>
+<td><strong>Not Observed</strong></td>
+<td>No Recycle Bin entry for this filename. It may have been executed in-place without deletion, or deleted and the Recycle Bin record was overwritten/purged.</td>
+</tr>
+<tr>
+<td><code>PsExec</code> / Sysinternals</td>
+<td><strong>Observed (indirect)</strong></td>
+<td><code>SysinternalsSuite.zip</code> (which contains PsExec) was downloaded to <code>C:\Users\admin\Downloads\</code> and deleted on 2024-02-05T23:14:49 (row 2). This strongly corroborates the hypothesis that PsExec was obtained and used from this host.</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <p><strong>Data Gaps</strong></p>
 <ul><li><strong>Only 2 records spanning Feb 5–6.</strong> The Recycle Bin on this system contains no entries between Feb 7–12 (the period leading up to and including ransomware detonation). This could mean no further files were deleted to the Recycle Bin, or the Recycle Bin was partially cleared, or ransomware execution corrupted later <code>$I</code> files.</li><li><strong>No file contents or hashes.</strong> Cannot confirm whether <code>share.zip</code> contained exfiltrated data or <code>SysinternalsSuite.zip</code> was the legitimate Microsoft distribution vs. a trojanized version.</li><li><strong>Execution not provable from this artifact.</strong> Recycle Bin only shows download and deletion of the Sysinternals archive, not whether PsExec was actually executed. <strong>Prefetch, AmCache, ShimCache, and Windows Event Logs (Security 4688, System 7045 for PSEXESVC)</strong> are required to confirm execution.</li><li>**No visibility into <code>redpetya.exe</code> lifecycle.** Need $MFT, Prefetch, AmCache, and USN Journal to determine if it was present on this host.</li><li>**<code>admin</code> account context unknown.** Cannot determine from this artifact alone whether the <code>admin</code> account was used legitimately or was compromised. Authentication logs (Event ID 4624/4625) are needed.</li></ul></div>
@@ -1082,32 +1645,127 @@
 <ul><li>**[SEVERITY: <span class="confidence-inline confidence-low">LOW</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>] New <code>admin</code> account appeared suddenly with intense activity — possible attacker-created account.**</li><li>Evidence: The <code>Administrator</code> account is active from 2023-11-04 through 2024-01-16. The <code>admin</code> account appears for the first time on 2024-02-05 and performs all suspicious activity (credential access, tool downloads, exfiltration, ransom note viewing).</li><li>Why it matters: The <code>admin</code> account may have been created by the attacker to avoid using the built-in Administrator account. Its sudden appearance coinciding with the start of the attack chain is notable.</li><li>Alternative explanation: Could be a pre-existing service or secondary admin account that simply didn&#39;t generate browser history before Feb 5.</li><li>Verify: Check SAM/AD for account creation date of <code>admin</code>. Review Security Event Logs for Event ID 4720 (account creation).</li></ul>
 <p>---</p>
 <h2>Attack Timeline Reconstruction (from browser history)</h2>
-<p>| Time | Activity | User |<br>
-|------|----------|------|<br>
-| 2024-02-05 23:09 | Credential file harvested (<code>account_password.xlsx</code>) | admin |<br>
-| 2024-02-05 23:13 | Edge first run → Sysinternals Suite searched &amp; downloaded | admin |<br>
-| 2024-02-05 23:36 | <code>share.zip</code> accessed (likely data staging) | admin |<br>
-| 2024-02-05 23:40 | Nmap searched &amp; downloaded | admin |<br>
-| 2024-02-06 20:09 | <code>important.zip</code> accessed | admin |<br>
-| 2024-02-06 20:53 | <code>RyukReadMe.txt</code> opened | admin |<br>
-| 2024-02-06 21:23 | MMC console used | admin |<br>
-| 2024-02-06 22:32 | Date/time settings accessed | admin |<br>
-| 2024-02-07 16:50 | AD user import CSV accessed | admin |<br>
-| 2024-02-07 16:57 | FTP exfiltration to <code>185.239.106.67</code> | admin |<br>
-| 2024-02-12 | Ransomware detonation (per investigation context) | — |</p>
+<table>
+<thead>
+<tr>
+<th>Time</th>
+<th>Activity</th>
+<th>User</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2024-02-05 23:09</td>
+<td>Credential file harvested (<code>account_password.xlsx</code>)</td>
+<td>admin</td>
+</tr>
+<tr>
+<td>2024-02-05 23:13</td>
+<td>Edge first run → Sysinternals Suite searched &amp; downloaded</td>
+<td>admin</td>
+</tr>
+<tr>
+<td>2024-02-05 23:36</td>
+<td><code>share.zip</code> accessed (likely data staging)</td>
+<td>admin</td>
+</tr>
+<tr>
+<td>2024-02-05 23:40</td>
+<td>Nmap searched &amp; downloaded</td>
+<td>admin</td>
+</tr>
+<tr>
+<td>2024-02-06 20:09</td>
+<td><code>important.zip</code> accessed</td>
+<td>admin</td>
+</tr>
+<tr>
+<td>2024-02-06 20:53</td>
+<td><code>RyukReadMe.txt</code> opened</td>
+<td>admin</td>
+</tr>
+<tr>
+<td>2024-02-06 21:23</td>
+<td>MMC console used</td>
+<td>admin</td>
+</tr>
+<tr>
+<td>2024-02-06 22:32</td>
+<td>Date/time settings accessed</td>
+<td>admin</td>
+</tr>
+<tr>
+<td>2024-02-07 16:50</td>
+<td>AD user import CSV accessed</td>
+<td>admin</td>
+</tr>
+<tr>
+<td>2024-02-07 16:57</td>
+<td>FTP exfiltration to <code>185.239.106.67</code></td>
+<td>admin</td>
+</tr>
+<tr>
+<td>2024-02-12</td>
+<td>Ransomware detonation (per investigation context)</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <h2>IOC Status</h2>
-<p>| IOC | Status | Evidence |<br>
-|-----|--------|----------|<br>
-| <code>redpetya.exe</code> | <strong>Not Observed</strong> | No reference to this filename in any browser history URL, title, or file path. |<br>
-| <code>PsExec</code> | <strong>Not Directly Observed, but Strongly Supported</strong> | PsExec is not mentioned by name, but the Sysinternals Suite (which contains PsExec) was downloaded twice: by Administrator on 2023-11-04 (row 57) and by admin on 2024-02-05 (row 43). The Feb 5 download is within the attack session. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redpetya.exe</code></td>
+<td><strong>Not Observed</strong></td>
+<td>No reference to this filename in any browser history URL, title, or file path.</td>
+</tr>
+<tr>
+<td><code>PsExec</code></td>
+<td><strong>Not Directly Observed, but Strongly Supported</strong></td>
+<td>PsExec is not mentioned by name, but the Sysinternals Suite (which contains PsExec) was downloaded twice: by Administrator on 2023-11-04 (row 57) and by admin on 2024-02-05 (row 43). The Feb 5 download is within the attack session.</td>
+</tr>
+</tbody>
+</table>
 <h3>Additional IOCs Identified in This Artifact</h3>
-<p>| IOC | Type | Details |<br>
-|-----|------|---------|<br>
-| <code>185.239.106.67</code> | External IP (C2/Exfil) | FTP exfiltration target, rows 50–51 |<br>
-| <code>RyukReadMe.txt</code> | Ransomware indicator | Second ransomware family, row 48 |<br>
-| <code>account_password.xlsx</code> | Credential file | Harvested from user share, row 46 |<br>
-| <code>share.zip</code> | Staging artifact | Probable compressed share data, row 44 |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Type</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>185.239.106.67</code></td>
+<td>External IP (C2/Exfil)</td>
+<td>FTP exfiltration target, rows 50–51</td>
+</tr>
+<tr>
+<td><code>RyukReadMe.txt</code></td>
+<td>Ransomware indicator</td>
+<td>Second ransomware family, row 48</td>
+</tr>
+<tr>
+<td><code>account_password.xlsx</code></td>
+<td>Credential file</td>
+<td>Harvested from user share, row 46</td>
+</tr>
+<tr>
+<td><code>share.zip</code></td>
+<td>Staging artifact</td>
+<td>Probable compressed share data, row 44</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <h2>Data Gaps</h2>
 <ul><li><strong>No download completion records</strong>: Browser history shows navigation to download pages but does not confirm successful downloads. Need Prefetch, file system timeline, or Downloads folder analysis to confirm Nmap and Sysinternals installation.</li><li><strong>No browser history from Feb 8–12</strong>: There is a complete gap between the last record (Feb 7) and ransomware detonation (Feb 12). This could indicate the attacker stopped using the browser, used other tools, or browser data was partially destroyed.</li><li><strong>No typed URLs vs. clicked URLs distinction</strong>: Cannot determine if the FTP URL was typed manually or accessed via a bookmark/script.</li><li><strong>No data on actual PsExec execution</strong>: Browser history can only show the Sysinternals download. Need Windows Event Logs (Event ID 7045 for PSEXESVC service installation), Prefetch files, and NTFS artifacts to confirm PsExec usage.</li><li><strong>No data on redpetya.exe</strong>: Browser history is not the expected artifact for this IOC. Need filesystem, Prefetch, Amcache, or ShimCache analysis.</li><li><strong>FTP transfer contents unknown</strong>: Browser history records FTP URL visits but not what was uploaded/downloaded. FTP client logs, packet captures, or proxy logs are needed.</li><li><strong>Missing artifacts needed</strong>: Prefetch files, Windows Event Logs (Security, System, PowerShell), MFT timeline, Registry (SAM, SYSTEM), Amcache/ShimCache, and network logs are <span class="confidence-inline confidence-critical">CRITICAL</span> to corroborate these findings.</li></ul></div>
@@ -1143,10 +1801,27 @@
 <ul><li>**[SEVERITY: <span class="confidence-inline confidence-medium">MEDIUM</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>] Two distinct user accounts (<code>admin</code> and <code>Administrator</code>) used on what appears to be a server, suggesting possible unauthorized account usage.**</li><li>Evidence: Rows 1–2 use <code>admin</code>; Rows 3–4 use <code>Administrator</code>. Both profiles have browser download histories on a server that experienced a ransomware attack.</li><li>Why it matters: Interactive browsing on a server under two accounts may indicate an attacker using a compromised or newly created <code>admin</code> account alongside the built-in <code>Administrator</code>.</li><li>Alternative explanation: Both accounts may be legitimately used by operations staff.</li><li>Verify: Check SAM/AD for the <code>admin</code> account creation date and properties; review logon events for both accounts around 2024-02-05 for source IPs and logon types.</li></ul>
 <p>---</p>
 <h2>IOC Status</h2>
-<p>| IOC | Status | Evidence |<br>
-|---|---|---|<br>
-| <code>redpetya.exe</code> | <strong>Not Observed</strong> | No browser download record for this filename or any <code>.exe</code> matching this name. The binary was likely delivered via another vector (e.g., PsExec push from another host, not browser download). |<br>
-| <code>PsExec</code> (SuspiciousTool) | <strong>Observed (Indirect)</strong> | <code>SysinternalsSuite.zip</code> (which contains PsExec) was downloaded twice — Row 1 (<code>admin</code>, 2024-02-05) and Row 3 (<code>Administrator</code>, 2023-11-04). PsExec itself was not downloaded as a standalone binary but is included in the suite. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redpetya.exe</code></td>
+<td><strong>Not Observed</strong></td>
+<td>No browser download record for this filename or any <code>.exe</code> matching this name. The binary was likely delivered via another vector (e.g., PsExec push from another host, not browser download).</td>
+</tr>
+<tr>
+<td><code>PsExec</code> (SuspiciousTool)</td>
+<td><strong>Observed (Indirect)</strong></td>
+<td><code>SysinternalsSuite.zip</code> (which contains PsExec) was downloaded twice — Row 1 (<code>admin</code>, 2024-02-05) and Row 3 (<code>Administrator</code>, 2023-11-04). PsExec itself was not downloaded as a standalone binary but is included in the suite.</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <h2>Data Gaps</h2>
 <ul><li><strong>Only 4 download records across ~3 months.</strong> Browser history may have been cleared between November 2023 and February 2024. The gap from 2023-11-04 to 2024-02-05 is notable — investigate whether download history was deleted.</li><li>**No download record for <code>redpetya.exe</code>.** The ransomware binary was likely delivered via a non-browser vector (PsExec remote copy, SMB share, or other tool). File system timeline, Prefetch, and MFT analysis are needed.</li><li><strong>No execution evidence in this artifact.</strong> Browser downloads show acquisition, not execution. Prefetch, ShimCache, AmCache, and Windows Event Logs (especially Event ID 7045 for PsExec service installation) are essential to confirm tool usage.</li><li><strong>No source IP / logon context.</strong> Cannot determine whether these downloads were from a local console session or an RDP session. RDP/logon event logs are needed to identify the attacker&#39;s origin.</li><li><strong>Cannot assess:</strong> credential access/Mimikatz, persistence mechanisms, privilege escalation, or exfiltration from this artifact alone. These require process execution, registry, scheduled task, and network flow artifacts.</li><li><strong>Nmap binary integrity unknown.</strong> The download came from a third-party CDN (Softonic), not the official source. The file hash should be compared against the known-good Nmap 7.93 release hash to rule out a trojanized installer.</li></ul></div>
@@ -1212,10 +1887,27 @@
 <h2>Findings</h2>
 <p>No findings — the artifact contains zero records and no columns. There is no data to analyze.</p>
 <h2>IOC Status</h2>
-<p>| IOC | Status | Detail |<br>
-|---|---|---|<br>
-| <code>redpetya.exe</code> | <strong>Not Assessable</strong> | SRUM network data is empty; cannot determine whether this binary generated any network traffic. |<br>
-| <code>psexec</code> / PsExec | <strong>Not Assessable</strong> | SRUM network data is empty; cannot determine whether PsExec-related network activity (e.g., connections over SMB/TCP 445, or the PSEXESVC service) occurred. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redpetya.exe</code></td>
+<td><strong>Not Assessable</strong></td>
+<td>SRUM network data is empty; cannot determine whether this binary generated any network traffic.</td>
+</tr>
+<tr>
+<td><code>psexec</code> / PsExec</td>
+<td><strong>Not Assessable</strong></td>
+<td>SRUM network data is empty; cannot determine whether PsExec-related network activity (e.g., connections over SMB/TCP 445, or the PSEXESVC service) occurred.</td>
+</tr>
+</tbody>
+</table>
 <h2>Data Gaps</h2>
 <ul><li><strong>Empty artifact.</strong> The SRUM Network Data table contains <strong>0 records, 0 columns, and no time range</strong>. This means no per-application network usage information is available from this source.</li></ul>
 <ul><li><strong>Possible reasons for absence:</strong></li><li>The SRUM database (<code>SRUDB.dat</code>) may not have been collected or was corrupted.</li><li>The ransomware (Red Petya) may have destroyed or encrypted the SRUM database as part of its disk-level encryption activity (Petya variants typically overwrite the MBR and encrypt the MFT, which could render SRUM data unrecoverable).</li><li>The SRUM database may have been intentionally cleared as an anti-forensic measure prior to or during the attack.</li><li><strong>The absence itself is noteworthy</strong> — on a functioning Windows 8+ system, SRUM should contain network telemetry going back up to 30–60 days. A completely empty result warrants investigation into whether the database was tampered with or destroyed. <strong>[<span class="confidence-inline confidence-medium">MEDIUM</span> CONFIDENCE]</strong></li></ul>
@@ -1254,19 +1946,62 @@
 <ul><li><strong>[SEVERITY: <span class="confidence-inline confidence-medium">MEDIUM</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>] PowerShell executed under SYSTEM context with significant resource consumption.</strong></li><li>Evidence: Row 33 — <code>\Windows\System32\WindowsPowerShell\v1.0\powershell.exe</code>, user <code>S-1-5-18</code> (SYSTEM), foreground<em>cycle</em>time <code>25120791860</code> (~25B cycles), deduplicated across 11 records.</li><li>Why it matters: SYSTEM-level PowerShell with <span class="confidence-inline confidence-high">HIGH</span> cycle time across multiple time slices may indicate scheduled-task-based or service-based malicious scripting (common for initial access, persistence, or payload delivery in ransomware campaigns).</li><li>Alternative explanation: Windows Update or DSC configuration scripts running as SYSTEM.</li><li>Verify: Review PowerShell transcription/script-block logs, scheduled tasks, and ConsoleHost_history files.</li></ul>
 <ul><li><strong>[SEVERITY: <span class="confidence-inline confidence-low">LOW</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>] sethc.exe (Sticky Keys) execution under SYSTEM on 2023-12-12.</strong></li><li>Evidence: Row 638 — <code>sethc.exe</code>, user <code>S-1-5-18</code>, timestamp <code>2023-12-12T10:01:00</code>, foreground<em>cycle</em>time <code>320635024</code>, deduplicated across 42 records.</li><li>Why it matters: <code>sethc.exe</code> running as SYSTEM with persistence across 42 SRUM intervals is unusual. Sticky Keys binary replacement is a classic backdoor technique (Image File Execution Options hijack). However, this could also be normal accessibility feature activation.</li><li>Alternative explanation: Normal accessibility feature triggered at logon screen.</li><li>Verify: Compare hash of <code>sethc.exe</code> on disk against known-good Microsoft hash. Check IFEO registry keys for debugger redirects.</li></ul>
 <h2>IOC Status</h2>
-<p>| IOC | Status | Evidence |<br>
-|---|---|---|<br>
-| <code>redpetya.exe</code> | <strong>Not Observed</strong> (directly) | No SRUM entry for a binary named <code>redpetya.exe</code>. However, <code>rename.exe</code> on the Desktop (row 73965, 2024-02-09) is a strong candidate for the renamed payload. Requires hash comparison. |<br>
-| <code>PsExec</code> / <code>psexec</code> | <strong>Not Observed</strong> | No SRUM entry for <code>psexec.exe</code>, <code>PSEXESVC.exe</code>, or any PsExec-related binary. Note: SRUM may not capture short-lived service processes reliably, especially if PsExec was used to push to <em>other</em> servers from this host rather than being received here. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redpetya.exe</code></td>
+<td><strong>Not Observed</strong> (directly)</td>
+<td>No SRUM entry for a binary named <code>redpetya.exe</code>. However, <code>rename.exe</code> on the Desktop (row 73965, 2024-02-09) is a strong candidate for the renamed payload. Requires hash comparison.</td>
+</tr>
+<tr>
+<td><code>PsExec</code> / <code>psexec</code></td>
+<td><strong>Not Observed</strong></td>
+<td>No SRUM entry for <code>psexec.exe</code>, <code>PSEXESVC.exe</code>, or any PsExec-related binary. Note: SRUM may not capture short-lived service processes reliably, especially if PsExec was used to push to <em>other</em> servers from this host rather than being received here.</td>
+</tr>
+</tbody>
+</table>
 <h2>DFIR Check Summary</h2>
-<p>| Check | Status |<br>
-|---|---|<br>
-| Privilege Escalation | Not Assessable — SRUM lacks process privilege/token data |<br>
-| Credential Access / Mimikatz | Not Observed — no <code>mimikatz.exe</code>, <code>sekurlsa</code>, <code>procdump</code>, or similar |<br>
-| Malicious Execution | <strong>Observed</strong> — <code>rename.exe</code> (Desktop), Nmap suite |<br>
-| Persistence | Not Assessable — SRUM cannot show registry/scheduled task changes; <code>sethc.exe</code> warrants investigation |<br>
-| Lateral Movement | <strong>Indicators present</strong> — <code>mstsc.exe</code>, Nmap scanning, <code>cmd.exe</code> usage under -2611 |<br>
-| Exfiltration | Not Assessable — no network byte data in provided columns |</p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Privilege Escalation</td>
+<td>Not Assessable — SRUM lacks process privilege/token data</td>
+</tr>
+<tr>
+<td>Credential Access / Mimikatz</td>
+<td>Not Observed — no <code>mimikatz.exe</code>, <code>sekurlsa</code>, <code>procdump</code>, or similar</td>
+</tr>
+<tr>
+<td>Malicious Execution</td>
+<td><strong>Observed</strong> — <code>rename.exe</code> (Desktop), Nmap suite</td>
+</tr>
+<tr>
+<td>Persistence</td>
+<td>Not Assessable — SRUM cannot show registry/scheduled task changes; <code>sethc.exe</code> warrants investigation</td>
+</tr>
+<tr>
+<td>Lateral Movement</td>
+<td><strong>Indicators present</strong> — <code>mstsc.exe</code>, Nmap scanning, <code>cmd.exe</code> usage under -2611</td>
+</tr>
+<tr>
+<td>Exfiltration</td>
+<td>Not Assessable — no network byte data in provided columns</td>
+</tr>
+</tbody>
+</table>
 <h2>Data Gaps</h2>
 <ol><li><strong>SRUM data ends 2024-02-09T22:56:00</strong> — there is a <strong>~2.5 day gap before the Feb 12 ransomware discovery</strong>. The ransomware execution itself (Feb 10–12) is not captured. This may indicate the SRUM database was not updated after the system was encrypted, or the last write was at that boundary.</li><li><strong>No network usage columns</strong> — SRUM network resource usage (bytes sent/received per app) would reveal data exfiltration and Nmap scan volumes but was not included in this projection.</li><li><strong>PsExec as a push tool</strong> — If PsExec was used <em>from</em> this DC to deploy ransomware to other hosts, the <code>PSEXESVC.exe</code> service would appear on the <em>target</em>, not necessarily here. The <code>cmd.exe</code> usage under the -2611 account may have hosted PsExec invocations, but SRUM records the shell, not the child processes.</li><li><strong>No process command-line or parent-process information</strong> — SRUM records application identity only, not arguments. Cannot determine what <code>powershell.exe</code>, <code>cmd.exe</code>, <code>rundll32.exe</code>, or <code>rename.exe</code> were actually doing.</li><li><strong>Recommended corroborating artifacts</strong>: Prefetch files (for <code>rename.exe</code>, <code>psexec.exe</code>, <code>nmap.exe</code> execution counts/timestamps), Windows Event Logs (Security 4720/4624/4688, PowerShell ScriptBlock), MFT timeline, Amcache/Shimcache, browser history for download sources, and the <code>rename.exe</code> binary itself for hash comparison with <code>redpetya.exe</code>.</li></ol></div>
               </div>
@@ -1307,10 +2042,27 @@
 <ul><li><strong>[SEVERITY: <span class="confidence-inline confidence-low">LOW</span>] [CONFIDENCE: <span class="confidence-inline confidence-medium">MEDIUM</span>] Extensive browsing of local share user folders by &#34;Administrator&#34; — ~30 distinct user profiles enumerated.</strong></li><li>Evidence: Rows 130–191 — The &#34;Administrator&#34; account browsed <code>C:\share\&lt;username&gt;</code> and <code>\Documents</code> or <code>\Downloads</code> for approximately 30 individual users between 2023-09-24 and 2024-01-15.</li><li>Why it matters: While this may be normal file server administration, the breadth of access could indicate pre-attack data survey.</li><li>Alternative explanation: Routine file server management, home directory provisioning.</li><li>Verify: Determine if this server&#39;s intended role is a file server; check if this level of access is normal for the Administrator account.</li></ul>
 <p>---</p>
 <h2>IOC Status</h2>
-<p>| IOC | Status | Evidence |<br>
-|-----|--------|----------|<br>
-| <strong>redpetya.exe</strong> | <strong>Not Observed</strong> | No shellbag entry references <code>redpetya.exe</code> or any <code>.exe</code> file. Shellbags track folder navigation, not individual file access, so this is expected — the binary would not typically appear in shellbags unless browsed to in Explorer as a folder-like object. |<br>
-| <strong>PsExec</strong> | <strong>Observed (Indirect — <span class="confidence-inline confidence-high">HIGH</span> confidence)</strong> | Sysinternals Suite (which contains PsExec) was downloaded and extracted by the &#34;admin&#34; account on 2024-02-05 (rows 60–61). Two ADMIN$ shares were browsed (rows 35, 66), which is the default share PsExec uses for remote service deployment. No direct shellbag entry for <code>PsExec.exe</code> itself, but the combination is strongly indicative. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>redpetya.exe</strong></td>
+<td><strong>Not Observed</strong></td>
+<td>No shellbag entry references <code>redpetya.exe</code> or any <code>.exe</code> file. Shellbags track folder navigation, not individual file access, so this is expected — the binary would not typically appear in shellbags unless browsed to in Explorer as a folder-like object.</td>
+</tr>
+<tr>
+<td><strong>PsExec</strong></td>
+<td><strong>Observed (Indirect — <span class="confidence-inline confidence-high">HIGH</span> confidence)</strong></td>
+<td>Sysinternals Suite (which contains PsExec) was downloaded and extracted by the &#34;admin&#34; account on 2024-02-05 (rows 60–61). Two ADMIN$ shares were browsed (rows 35, 66), which is the default share PsExec uses for remote service deployment. No direct shellbag entry for <code>PsExec.exe</code> itself, but the combination is strongly indicative.</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <h2>Data Gaps</h2>
 <ul><li><strong>No file-level visibility.</strong> Shellbags record folder navigation only. We cannot confirm whether <code>redpetya.exe</code>, <code>PsExec.exe</code>, or any other specific file was opened, copied, or executed from this data alone. <strong>Required:</strong> Prefetch, Amcache, MFT, USN Journal, NTFS $LogFile.</li><li><strong>No ts<em>atime or ts</em>btime populated.</strong> All access and creation timestamps are empty across all 157 records, which limits timeline precision to mtime only.</li><li><strong>No activity after 2024-02-08.</strong> The latest timestamps are from Feb 8, four days before the Feb 12 ransomware discovery. Either the attacker did not use Explorer-based browsing after Feb 8, or shellbags were not updated due to non-interactive sessions (consistent with PsExec-based deployment). <strong>Required:</strong> Event logs, Prefetch, and MFT for Feb 9–12 activity.</li><li><strong>Two user profiles present (&#34;admin&#34; and &#34;Administrator&#34;).</strong> It is unclear if these represent two distinct accounts or the same person with different logon contexts. <strong>Required:</strong> SAM registry hive or Active Directory account records.</li><li><strong>No exfiltration confirmation.</strong> The Documents/Downloads folder browsing across remote hosts is suggestive but shellbags cannot show what files were copied. <strong>Required:</strong> SMB session logs, firewall/proxy logs, USN Journal on source and destination hosts.</li><li><strong>ADMIN$ access entries lack timestamps.</strong> The NETWORK-type entries for <code>admin$</code> shares (rows 35, 66) have no mtime, so we cannot definitively place them in the attack timeline. <strong>Required:</strong> Correlate with Windows Security logs (Event ID 5140/5145) for share access times.</li><li><strong>&#34;desktop-005&#34; not resolved.</strong> This hostname appears in ADMIN$ access but its IP and role in the environment are unknown from this data alone.</li></ul></div>
@@ -1345,19 +2097,62 @@
 <ul><li>[<span class="confidence-inline confidence-low">LOW</span>] [<span class="confidence-inline confidence-medium">MEDIUM</span>] <strong>PowerShell and PowerShell ISE executed under the Administrator account.</strong> While legitimate on a server, these are common post-exploitation tools and could have been used to stage or execute the ransomware payload.</li><li>Evidence: Row 37 — <code>powershell_ise.exe</code> under <code>Administrator</code>; Row 39 — <code>powershell.exe</code> under <code>Administrator</code>.</li><li>Why it matters: PowerShell is a primary execution vector for ransomware deployment and lateral movement. In the context of a Red Petya incident, this warrants timeline correlation.</li><li>Alternative explanation: Routine administrative use on a Windows Server (domain controller, based on AD DS tools present).</li><li>Verify: Examine PowerShell event logs (Microsoft-Windows-PowerShell/Operational, ScriptBlock logging) and ConsoleHost_history.txt for both <code>Administrator</code> and <code>admin</code> profiles.</li></ul>
 <ul><li>[<span class="confidence-inline confidence-low">LOW</span>] [<span class="confidence-inline confidence-medium">MEDIUM</span>] <strong>Registry Editor executed under Administrator account.</strong></li><li>Evidence: Row 41 — <code>C:\Windows\regedit.exe</code>, username <code>Administrator</code>.</li><li>Why it matters: Regedit can be used to modify security settings, disable defenses, or establish persistence. Petya variants are known to modify the MBR/boot record, and registry changes may support that chain.</li><li>Alternative explanation: Routine administrative use.</li><li>Verify: Examine Registry transaction logs and USN journal for registry hive modifications around the incident timeframe.</li></ul>
 <h2>IOC Status</h2>
-<p>| IOC | Status | Detail |<br>
-|---|---|---|<br>
-| <code>redpetya.exe</code> | <strong>Not Observed</strong> | No MUIcache entry exists for <code>redpetya.exe</code> or any non-standard executable path. This is expected if the binary was executed non-interactively (e.g., via PsExec as a service), since MUIcache is populated by shell (Explorer) interaction, not service-based or command-line execution. |<br>
-| <code>PsExec</code> | <strong>Not Observed</strong> | No MUIcache entry for <code>psexec.exe</code>, <code>PSEXESVC.exe</code>, or any Sysinternals tool. Same caveat applies — PsExec typically runs from command line or remotely, which would not generate MUIcache entries. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redpetya.exe</code></td>
+<td><strong>Not Observed</strong></td>
+<td>No MUIcache entry exists for <code>redpetya.exe</code> or any non-standard executable path. This is expected if the binary was executed non-interactively (e.g., via PsExec as a service), since MUIcache is populated by shell (Explorer) interaction, not service-based or command-line execution.</td>
+</tr>
+<tr>
+<td><code>PsExec</code></td>
+<td><strong>Not Observed</strong></td>
+<td>No MUIcache entry for <code>psexec.exe</code>, <code>PSEXESVC.exe</code>, or any Sysinternals tool. Same caveat applies — PsExec typically runs from command line or remotely, which would not generate MUIcache entries.</td>
+</tr>
+</tbody>
+</table>
 <h2>Default DFIR Checks</h2>
-<p>| Check | Result |<br>
-|---|---|<br>
-| Privilege escalation | Not assessable from MUIcache alone. |<br>
-| Credential access / Mimikatz | Not observed. No entries for mimikatz.exe, sekurlsa, procdump, or similar. |<br>
-| Malicious program execution | Not observed. All paths are standard Windows system locations. |<br>
-| Persistence / evasion | Not assessable. No unusual binaries or non-standard paths detected. |<br>
-| Lateral movement | Not observed directly, though this is a domain controller (AD DS, Kerberos KDC, DNS Server services all present), making it a <span class="confidence-inline confidence-high">HIGH</span>-value lateral movement target. |<br>
-| Exfiltration | Not assessable from this artifact. |</p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Privilege escalation</td>
+<td>Not assessable from MUIcache alone.</td>
+</tr>
+<tr>
+<td>Credential access / Mimikatz</td>
+<td>Not observed. No entries for mimikatz.exe, sekurlsa, procdump, or similar.</td>
+</tr>
+<tr>
+<td>Malicious program execution</td>
+<td>Not observed. All paths are standard Windows system locations.</td>
+</tr>
+<tr>
+<td>Persistence / evasion</td>
+<td>Not assessable. No unusual binaries or non-standard paths detected.</td>
+</tr>
+<tr>
+<td>Lateral movement</td>
+<td>Not observed directly, though this is a domain controller (AD DS, Kerberos KDC, DNS Server services all present), making it a <span class="confidence-inline confidence-high">HIGH</span>-value lateral movement target.</td>
+</tr>
+<tr>
+<td>Exfiltration</td>
+<td>Not assessable from this artifact.</td>
+</tr>
+</tbody>
+</table>
 <h2>Data Gaps</h2>
 <ol><li><strong>MUIcache does not record timestamps.</strong> No temporal correlation with the 12 Feb 2024 incident is possible from this artifact alone.</li><li><strong>MUIcache only captures shell-launched executables.</strong> Binaries executed via services (PsExec/PSEXESVC), scheduled tasks, command-line only, or non-interactive sessions will <strong>not</strong> appear. This is the most likely reason both <code>redpetya.exe</code> and <code>PsExec</code> are absent — their absence does <strong>not</strong> rule out execution.</li><li><strong>This system is a Domain Controller</strong> (evidenced by AD DS, KDC, DNS Server, NTDS, Netlogon services — rows 368, 395, 423, etc.). Compromise of this host is <strong><span class="confidence-inline confidence-critical">CRITICAL</span></strong> — it implies potential domain-wide credential exposure.</li><li>**Two user profiles present: <code>admin</code> (237 records) and <code>Administrator</code> (318 records).** The <code>admin</code> account is non-default and should be investigated for legitimacy and whether it was created by the threat actor.</li><li><strong>Recommended corroborating artifacts:</strong> Prefetch, Shimcache/Amcache (for <code>redpetya.exe</code> and <code>PSEXESVC.exe</code> execution evidence), Windows Event Logs (Security 4688 process creation, System 7045 service install for PsExec), NTFS $MFT/USN journal, and MBR/VBR for Petya bootloader modification.</li></ol></div>
               </div>
@@ -1388,31 +2183,97 @@
 <p>No suspicious findings were identified in the SAM user data. The four accounts present (Administrator RID 500, Guest RID 501, DefaultAccount RID 503, WDAGUtilityAccount RID 504) are all default Windows accounts with sequential, expected RIDs. No rogue or attacker-created local accounts are evident.</p>
 <p>---</p>
 <h2>IOC Status</h2>
-<p>| IOC | Status | Detail |<br>
-|---|---|---|<br>
-| <code>redpetya.exe</code> | <strong>Not Assessable</strong> | SAM artifact contains no file or process execution data. |<br>
-| <code>psexec</code> | <strong>Not Assessable</strong> | SAM artifact contains no service or execution data. However, note that PsExec typically authenticates using existing credentials rather than creating new local accounts, so its absence here is expected regardless. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redpetya.exe</code></td>
+<td><strong>Not Assessable</strong></td>
+<td>SAM artifact contains no file or process execution data.</td>
+</tr>
+<tr>
+<td><code>psexec</code></td>
+<td><strong>Not Assessable</strong></td>
+<td>SAM artifact contains no service or execution data. However, note that PsExec typically authenticates using existing credentials rather than creating new local accounts, so its absence here is expected regardless.</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <h2>Noteworthy Observations</h2>
 <ul><li><strong>All timestamp fields (lastlogin, lastpasswordset, lastincorrectlogin) are null (epoch 1601-01-01).</strong> This applies to every account including the built-in Administrator (row 1). On a server that was actively in use until 12 Feb 2024, one would expect the Administrator account to show a non-null <code>lastlogin</code> and <code>lastpasswordset</code>. <strong>Confidence: <span class="confidence-inline confidence-medium">MEDIUM</span>.</strong></li><li>Possible explanations: (1) The server is domain-joined and all interactive/service logons used domain accounts (domain logons do not update the local SAM login timestamps). (2) The SAM hive was reset or corrupted—potentially by the Red Petya ransomware overwriting the MBR/disk structures. (3) The parsing tool did not resolve these fields correctly.</li><li><strong>Verify:</strong> Check whether the machine is domain-joined (examine <code>SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Domain</code> or <code>SYSTEM\CurrentControlSet\Control\ComputerName</code>). Cross-reference with Security Event Logs (Event IDs 4624/4625) for actual logon activity.</li></ul>
 <ul><li><strong>No non-default local accounts exist.</strong> RIDs jump from 500→501→503→504 with no RID ≥ 1000 entries. This means no attacker-created local user accounts are present in the SAM.</li></ul>
 <p>---</p>
 <h2>DFIR Check Status</h2>
-<p>| Check | Status |<br>
-|---|---|<br>
-| Unauthorized local account creation | <strong>Not detected</strong> – Only 4 default accounts; no RID ≥ 1000. |<br>
-| Privilege escalation (local accounts) | <strong>Not Assessable</strong> – Account flags (disabled/enabled, group membership) not available in this extract. |<br>
-| Credential access / Mimikatz-like | <strong>Not Assessable</strong> – Requires event logs, LSASS memory artifacts. |<br>
-| Malicious program execution | <strong>Not Assessable</strong> – Requires Prefetch, Amcache, ShimCache, event logs. |<br>
-| Persistence / Lateral movement / Exfiltration | <strong>Not Assessable</strong> – Requires registry Run keys, scheduled tasks, services, network artifacts. |</p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Unauthorized local account creation</td>
+<td><strong>Not detected</strong> – Only 4 default accounts; no RID ≥ 1000.</td>
+</tr>
+<tr>
+<td>Privilege escalation (local accounts)</td>
+<td><strong>Not Assessable</strong> – Account flags (disabled/enabled, group membership) not available in this extract.</td>
+</tr>
+<tr>
+<td>Credential access / Mimikatz-like</td>
+<td><strong>Not Assessable</strong> – Requires event logs, LSASS memory artifacts.</td>
+</tr>
+<tr>
+<td>Malicious program execution</td>
+<td><strong>Not Assessable</strong> – Requires Prefetch, Amcache, ShimCache, event logs.</td>
+</tr>
+<tr>
+<td>Persistence / Lateral movement / Exfiltration</td>
+<td><strong>Not Assessable</strong> – Requires registry Run keys, scheduled tasks, services, network artifacts.</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <h2>Data Gaps</h2>
-<p>| Gap | Impact | Recommended Artifact |<br>
-|---|---|---|<br>
-| <strong>Account flags / group memberships not present</strong> | Cannot determine if Guest or DefaultAccount was enabled, or if any account was added to Administrators group. | Re-parse SAM with full flag extraction; examine <code>SAM\Domains\Builtin\Aliases</code> for group membership. |<br>
-| <strong>No logon history visible</strong> | All login timestamps are null; cannot confirm which account was used to deploy ransomware or run PsExec. | Windows Security Event Log (4624, 4625, 4648, 4672), or <code>NTUSER.DAT</code> <code>LastLogon</code> attributes. |<br>
-| <strong>SAM timestamps are from Sept 2023; incident is Feb 2024</strong> | The SAM creation/modification timestamps (2023-09-24) likely reflect OS install date, not the incident window. No SAM changes occurred during the attack window, or changes are not captured here. | Correlate with <code>$MFT</code> timestamps for the SAM hive file to check last modification date. |<br>
-| <strong>Domain account activity invisible</strong> | If PsExec was used with domain credentials (common), this artifact would show nothing. | Domain controller Security logs, or this server&#39;s Security event log for logon type 3/2 events. |</p></div>
+<table>
+<thead>
+<tr>
+<th>Gap</th>
+<th>Impact</th>
+<th>Recommended Artifact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Account flags / group memberships not present</strong></td>
+<td>Cannot determine if Guest or DefaultAccount was enabled, or if any account was added to Administrators group.</td>
+<td>Re-parse SAM with full flag extraction; examine <code>SAM\Domains\Builtin\Aliases</code> for group membership.</td>
+</tr>
+<tr>
+<td><strong>No logon history visible</strong></td>
+<td>All login timestamps are null; cannot confirm which account was used to deploy ransomware or run PsExec.</td>
+<td>Windows Security Event Log (4624, 4625, 4648, 4672), or <code>NTUSER.DAT</code> <code>LastLogon</code> attributes.</td>
+</tr>
+<tr>
+<td><strong>SAM timestamps are from Sept 2023; incident is Feb 2024</strong></td>
+<td>The SAM creation/modification timestamps (2023-09-24) likely reflect OS install date, not the incident window. No SAM changes occurred during the attack window, or changes are not captured here.</td>
+<td>Correlate with <code>$MFT</code> timestamps for the SAM hive file to check last modification date.</td>
+</tr>
+<tr>
+<td><strong>Domain account activity invisible</strong></td>
+<td>If PsExec was used with domain credentials (common), this artifact would show nothing.</td>
+<td>Domain controller Security logs, or this server&#39;s Security event log for logon type 3/2 events.</td>
+</tr>
+</tbody>
+</table>
+</div>
               </div>
             </details>
             <details class="artifact-card" >
@@ -1441,10 +2302,27 @@
 <p>No suspicious findings are present in this artifact because it contains zero records.</p>
 <p>---</p>
 <p><strong>IOC Status</strong></p>
-<p>| IOC | Status | Detail |<br>
-|---|---|---|<br>
-| <code>redpetya.exe</code> | <strong>Not Assessable</strong> | The Defender Quarantine artifact is empty; no quarantine entries exist to confirm or deny detection of this binary. |<br>
-| <code>psexec</code> (PsExec) | <strong>Not Assessable</strong> | No quarantine entries exist to confirm or deny detection of PsExec or related tools. |</p>
+<table>
+<thead>
+<tr>
+<th>IOC</th>
+<th>Status</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redpetya.exe</code></td>
+<td><strong>Not Assessable</strong></td>
+<td>The Defender Quarantine artifact is empty; no quarantine entries exist to confirm or deny detection of this binary.</td>
+</tr>
+<tr>
+<td><code>psexec</code> (PsExec)</td>
+<td><strong>Not Assessable</strong></td>
+<td>No quarantine entries exist to confirm or deny detection of PsExec or related tools.</td>
+</tr>
+</tbody>
+</table>
 <p>---</p>
 <p><strong>Data Gaps</strong></p>
 <ul><li><strong>Empty quarantine store is itself a significant finding.</strong></li><li>Given that a ransomware incident occurred on this server (Red Petya displayed on screen), the complete absence of Defender quarantine records is notable. This may indicate one or more of the following:</li></ul>

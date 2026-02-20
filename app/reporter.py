@@ -13,19 +13,12 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup, escape
 
+from .config import LOGO_FILE_CANDIDATES
 from .version import TOOL_VERSION
 
 DEFAULT_CASE_NAME = "Untitled Investigation"
 DEFAULT_TOOL_VERSION = TOOL_VERSION
 DEFAULT_AI_PROVIDER = "unknown"
-LOGO_FILE_CANDIDATES = (
-    "AIFT Logo - White Text.png",
-    "AIFT Logo - Dark Text.png",
-    "AIFT Logo Wide.png",
-    "AIFT_Logo.png",
-    "AIFt_Logo_Transparent.png",
-    "AIFT_Logo_Transparent.png",
-)
 
 CONFIDENCE_PATTERN = re.compile(r"\b(CRITICAL|HIGH|MEDIUM|LOW)\b", re.IGNORECASE)
 MARKDOWN_HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.*)$")
@@ -35,6 +28,7 @@ MARKDOWN_BOLD_STAR_PATTERN = re.compile(r"\*\*(.+?)\*\*")
 MARKDOWN_BOLD_UNDERSCORE_PATTERN = re.compile(r"__(.+?)__")
 MARKDOWN_ITALIC_STAR_PATTERN = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
 MARKDOWN_ITALIC_UNDERSCORE_PATTERN = re.compile(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)")
+MARKDOWN_TABLE_SEPARATOR_CELL_PATTERN = re.compile(r"^:?-{3,}:?$")
 SAFE_CASE_ID_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 
 CONFIDENCE_CLASS_MAP = {
@@ -601,6 +595,51 @@ class ReportGenerator:
         return "".join(output)
 
     @staticmethod
+    def _split_markdown_table_row(value: str) -> list[str]:
+        row_text = str(value or "")
+        if "|" not in row_text:
+            return []
+
+        trimmed = row_text.strip()
+        if not trimmed or "|" not in trimmed:
+            return []
+
+        if trimmed.startswith("|"):
+            trimmed = trimmed[1:]
+        if trimmed.endswith("|"):
+            trimmed = trimmed[:-1]
+
+        return [cell.strip() for cell in trimmed.split("|")]
+
+    @staticmethod
+    def _is_markdown_table_separator_row(cells: Sequence[str]) -> bool:
+        if not cells:
+            return False
+        return all(MARKDOWN_TABLE_SEPARATOR_CELL_PATTERN.match(str(cell).strip()) for cell in cells)
+
+    @staticmethod
+    def _normalize_table_row_cells(cells: Sequence[str], expected_count: int) -> list[str]:
+        normalized = [str(cell).strip() for cell in cells[:expected_count]]
+        if len(normalized) < expected_count:
+            normalized.extend([""] * (expected_count - len(normalized)))
+        return normalized
+
+    @staticmethod
+    def _render_markdown_table_html(header_cells: Sequence[str], body_rows: Sequence[Sequence[str]]) -> str:
+        header_html = "".join(f"<th>{ReportGenerator._render_inline_markdown(cell)}</th>" for cell in header_cells)
+        table_html = [f"<table><thead><tr>{header_html}</tr></thead>"]
+
+        if body_rows:
+            rows_html: list[str] = []
+            for row in body_rows:
+                row_html = "".join(f"<td>{ReportGenerator._render_inline_markdown(cell)}</td>" for cell in row)
+                rows_html.append(f"<tr>{row_html}</tr>")
+            table_html.append(f"<tbody>{''.join(rows_html)}</tbody>")
+
+        table_html.append("</table>")
+        return "".join(table_html)
+
+    @staticmethod
     def _markdown_to_html(value: str) -> str:
         lines = str(value).replace("\r\n", "\n").replace("\r", "\n").split("\n")
         blocks: list[str] = []
@@ -636,15 +675,18 @@ class ReportGenerator:
             blocks.append(f"<pre><code>{code_text}</code></pre>")
             code_lines = []
 
-        for line in lines:
+        index = 0
+        while index < len(lines):
+            line = lines[index]
             stripped = line.strip()
 
             if in_code_fence:
                 if stripped.startswith("```"):
                     in_code_fence = False
                     flush_code_fence()
-                    continue
-                code_lines.append(line)
+                else:
+                    code_lines.append(line)
+                index += 1
                 continue
 
             if stripped.startswith("```"):
@@ -652,12 +694,46 @@ class ReportGenerator:
                 flush_list()
                 in_code_fence = True
                 code_lines = []
+                index += 1
                 continue
 
             if not stripped:
                 flush_paragraph()
                 flush_list()
+                index += 1
                 continue
+
+            header_cells = ReportGenerator._split_markdown_table_row(line)
+            if header_cells and index + 1 < len(lines):
+                separator_cells = ReportGenerator._split_markdown_table_row(lines[index + 1])
+                if (
+                    separator_cells
+                    and len(header_cells) == len(separator_cells)
+                    and ReportGenerator._is_markdown_table_separator_row(separator_cells)
+                ):
+                    flush_paragraph()
+                    flush_list()
+
+                    expected_columns = len(header_cells)
+                    normalized_header = ReportGenerator._normalize_table_row_cells(header_cells, expected_columns)
+                    body_rows: list[list[str]] = []
+
+                    index += 2
+                    while index < len(lines):
+                        body_line = lines[index]
+                        body_stripped = body_line.strip()
+                        if not body_stripped:
+                            break
+
+                        parsed_cells = ReportGenerator._split_markdown_table_row(body_line)
+                        if not parsed_cells:
+                            break
+
+                        body_rows.append(ReportGenerator._normalize_table_row_cells(parsed_cells, expected_columns))
+                        index += 1
+
+                    blocks.append(ReportGenerator._render_markdown_table_html(normalized_header, body_rows))
+                    continue
 
             heading_match = MARKDOWN_HEADING_PATTERN.match(stripped)
             if heading_match:
@@ -666,6 +742,7 @@ class ReportGenerator:
                 level = len(heading_match.group(1))
                 heading_text = ReportGenerator._render_inline_markdown(heading_match.group(2))
                 blocks.append(f"<h{level}>{heading_text}</h{level}>")
+                index += 1
                 continue
 
             ordered_match = MARKDOWN_ORDERED_LIST_PATTERN.match(stripped)
@@ -676,6 +753,7 @@ class ReportGenerator:
                     list_type = "ol"
                     list_items = []
                 list_items.append(ReportGenerator._render_inline_markdown(ordered_match.group(1)))
+                index += 1
                 continue
 
             unordered_match = MARKDOWN_UNORDERED_LIST_PATTERN.match(stripped)
@@ -686,10 +764,12 @@ class ReportGenerator:
                     list_type = "ul"
                     list_items = []
                 list_items.append(ReportGenerator._render_inline_markdown(unordered_match.group(1)))
+                index += 1
                 continue
 
             flush_list()
             paragraph_lines.append(line.strip())
+            index += 1
 
         if in_code_fence:
             flush_code_fence()

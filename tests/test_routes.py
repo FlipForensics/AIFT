@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import threading
+import time
 import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
@@ -11,6 +14,7 @@ from zipfile import ZipFile
 import yaml
 
 from app import create_app
+from app.case_logging import unregister_all_case_log_handlers
 import app.routes as routes
 
 
@@ -150,9 +154,11 @@ class RoutesTests(unittest.TestCase):
         routes.CASE_STATES.clear()
         routes.PARSE_PROGRESS.clear()
         routes.ANALYSIS_PROGRESS.clear()
+        unregister_all_case_log_handlers()
         FakeAnalyzer.last_artifact_keys = []
 
     def tearDown(self) -> None:
+        unregister_all_case_log_handlers()
         self.temp_dir.cleanup()
 
     def test_full_route_flow(self) -> None:
@@ -207,13 +213,140 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(analysis_sse.status_code, 200)
             self.assertIn("analysis_summary", analysis_sse.get_data(as_text=True))
 
-            report_resp = self.client.get(f"/api/cases/{case_id}/report")
-            self.assertEqual(report_resp.status_code, 200)
-            self.assertEqual(report_resp.mimetype, "text/html")
-
             csv_resp = self.client.get(f"/api/cases/{case_id}/csvs")
             self.assertEqual(csv_resp.status_code, 200)
             self.assertEqual(csv_resp.mimetype, "application/zip")
+
+            report_resp = self.client.get(f"/api/cases/{case_id}/report")
+            self.assertEqual(report_resp.status_code, 200)
+            self.assertEqual(report_resp.mimetype, "text/html")
+            self.assertNotIn(case_id, routes.CASE_STATES)
+            self.assertNotIn(case_id, routes.PARSE_PROGRESS)
+            self.assertNotIn(case_id, routes.ANALYSIS_PROGRESS)
+
+    def test_case_completion_cleans_global_case_entries(self) -> None:
+        evidence_path = Path(self.temp_dir.name) / "cleanup-check.E01"
+        evidence_path.write_bytes(b"demo")
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes, "ReportGenerator", FakeReportGenerator),
+            patch.object(
+                routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(routes, "verify_hash", return_value=(True, "a" * 64)),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+        ):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Cleanup On Completion"})
+            self.assertEqual(create_resp.status_code, 201)
+            case_id = create_resp.get_json()["case_id"]
+
+            evidence_resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                json={"path": str(evidence_path)},
+            )
+            self.assertEqual(evidence_resp.status_code, 200)
+
+            parse_resp = self.client.post(
+                f"/api/cases/{case_id}/parse",
+                json={"artifacts": ["runkeys"]},
+            )
+            self.assertEqual(parse_resp.status_code, 202)
+
+            analyze_resp = self.client.post(
+                f"/api/cases/{case_id}/analyze",
+                json={"prompt": "Investigate persistence"},
+            )
+            self.assertEqual(analyze_resp.status_code, 202)
+
+            self.assertIn(case_id, routes.CASE_STATES)
+            self.assertIn(case_id, routes.PARSE_PROGRESS)
+            self.assertIn(case_id, routes.ANALYSIS_PROGRESS)
+
+            report_resp = self.client.get(f"/api/cases/{case_id}/report")
+            self.assertEqual(report_resp.status_code, 200)
+
+            for store_name, store in (
+                ("CASE_STATES", routes.CASE_STATES),
+                ("PARSE_PROGRESS", routes.PARSE_PROGRESS),
+                ("ANALYSIS_PROGRESS", routes.ANALYSIS_PROGRESS),
+            ):
+                with self.subTest(store=store_name):
+                    self.assertNotIn(case_id, store)
+
+    def test_parse_progress_sse_waits_before_emitting_idle(self) -> None:
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "SSE_INITIAL_IDLE_GRACE_SECONDS", 0.4),
+        ):
+            create_resp = self.client.post("/api/cases", json={"case_name": "SSE Wait Case"})
+            self.assertEqual(create_resp.status_code, 201)
+            case_id = create_resp.get_json()["case_id"]
+
+            def mark_parse_running() -> None:
+                time.sleep(0.05)
+                routes._set_progress_status(routes.PARSE_PROGRESS, case_id, "running")
+                routes._emit_progress(routes.PARSE_PROGRESS, case_id, {"type": "parse_started"})
+                routes._set_progress_status(routes.PARSE_PROGRESS, case_id, "completed")
+                routes._emit_progress(routes.PARSE_PROGRESS, case_id, {"type": "parse_completed"})
+
+            worker = threading.Thread(target=mark_parse_running, daemon=True)
+            worker.start()
+
+            parse_sse = self.client.get(f"/api/cases/{case_id}/parse/progress")
+            self.assertEqual(parse_sse.status_code, 200)
+            payload = parse_sse.get_data(as_text=True)
+            self.assertIn("parse_started", payload)
+            self.assertIn("parse_completed", payload)
+            self.assertNotIn('"type":"idle"', payload)
+
+    def test_create_case_cleans_up_terminal_case_entries(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root):
+            with routes.STATE_LOCK:
+                routes.CASE_STATES["terminal-completed"] = {"status": "completed"}
+                routes.PARSE_PROGRESS["terminal-completed"] = routes._new_progress(status="completed")
+                routes.ANALYSIS_PROGRESS["terminal-completed"] = routes._new_progress(status="completed")
+
+                routes.CASE_STATES["terminal-failed"] = {"status": "failed"}
+                routes.PARSE_PROGRESS["terminal-failed"] = routes._new_progress(status="failed")
+                routes.ANALYSIS_PROGRESS["terminal-failed"] = routes._new_progress(status="idle")
+
+                routes.CASE_STATES["terminal-error"] = {"status": "error"}
+                routes.PARSE_PROGRESS["terminal-error"] = routes._new_progress(status="error")
+                routes.ANALYSIS_PROGRESS["terminal-error"] = routes._new_progress(status="idle")
+
+                routes.CASE_STATES["active-case"] = {"status": "running"}
+                routes.PARSE_PROGRESS["active-case"] = routes._new_progress(status="running")
+                routes.ANALYSIS_PROGRESS["active-case"] = routes._new_progress(status="idle")
+
+            create_resp = self.client.post("/api/cases", json={"case_name": "Cleanup Trigger Case"})
+            self.assertEqual(create_resp.status_code, 201)
+            new_case_id = create_resp.get_json()["case_id"]
+
+            self.assertNotIn("terminal-completed", routes.CASE_STATES)
+            self.assertNotIn("terminal-completed", routes.PARSE_PROGRESS)
+            self.assertNotIn("terminal-completed", routes.ANALYSIS_PROGRESS)
+
+            self.assertNotIn("terminal-failed", routes.CASE_STATES)
+            self.assertNotIn("terminal-failed", routes.PARSE_PROGRESS)
+            self.assertNotIn("terminal-failed", routes.ANALYSIS_PROGRESS)
+
+            self.assertNotIn("terminal-error", routes.CASE_STATES)
+            self.assertNotIn("terminal-error", routes.PARSE_PROGRESS)
+            self.assertNotIn("terminal-error", routes.ANALYSIS_PROGRESS)
+
+            self.assertIn("active-case", routes.CASE_STATES)
+            self.assertIn(new_case_id, routes.CASE_STATES)
+            self.assertIn(new_case_id, routes.PARSE_PROGRESS)
+            self.assertIn(new_case_id, routes.ANALYSIS_PROGRESS)
 
     def test_evidence_upload_includes_split_ewf_segments(self) -> None:
         class CapturingParser(FakeParser):
@@ -385,6 +518,26 @@ class RoutesTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("Invalid configuration.", response.get_json()["error"])
+
+    @patch("openai.OpenAI")
+    def test_settings_test_connection_rejects_empty_openai_api_key(self, mock_openai_cls) -> None:
+        with patch.dict("os.environ", {"OPENAI_API_KEY": ""}):
+            update_resp = self.client.post(
+                "/api/settings",
+                json={
+                    "ai": {
+                        "provider": "openai",
+                        "openai": {"api_key": "", "model": "gpt-5.2"},
+                    }
+                },
+            )
+            self.assertEqual(update_resp.status_code, 200)
+
+            response = self.client.post("/api/settings/test-connection")
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("API key is not configured", response.get_json()["error"])
+        mock_openai_cls.assert_not_called()
 
     def test_artifact_profiles_endpoints_persist_custom_profiles(self) -> None:
         profiles_dir = Path(self.temp_dir.name) / "profile"
@@ -676,6 +829,55 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(analyze_resp.status_code, 202)
             self.assertEqual(FakeAnalyzer.last_artifact_keys, ["runkeys"])
 
+    def test_analysis_running_conflict_does_not_overwrite_prompt_file(self) -> None:
+        evidence_path = Path(self.temp_dir.name) / "analysis-lock-conflict.E01"
+        evidence_path.write_bytes(b"demo")
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+            patch.object(
+                routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+        ):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Analysis Lock Case"})
+            self.assertEqual(create_resp.status_code, 201)
+            case_id = create_resp.get_json()["case_id"]
+
+            evidence_resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                json={"path": str(evidence_path)},
+            )
+            self.assertEqual(evidence_resp.status_code, 200)
+
+            parse_resp = self.client.post(
+                f"/api/cases/{case_id}/parse",
+                json={"artifacts": ["runkeys"]},
+            )
+            self.assertEqual(parse_resp.status_code, 202)
+
+            case_state = routes.CASE_STATES[case_id]
+            prompt_path = Path(case_state["case_dir"]) / "prompt.txt"
+            prompt_path.write_text("existing prompt", encoding="utf-8")
+
+            with routes.STATE_LOCK:
+                routes.ANALYSIS_PROGRESS[case_id] = routes._new_progress(status="running")
+                case_state["status"] = "running"
+
+            analyze_resp = self.client.post(
+                f"/api/cases/{case_id}/analyze",
+                json={"prompt": "new prompt that should not be written"},
+            )
+            self.assertEqual(analyze_resp.status_code, 409)
+            self.assertEqual(prompt_path.read_text(encoding="utf-8"), "existing prompt")
+
     def test_analysis_requires_ai_enabled_artifacts(self) -> None:
         evidence_path = Path(self.temp_dir.name) / "no-ai.E01"
         evidence_path.write_bytes(b"demo")
@@ -858,6 +1060,32 @@ class RoutesTests(unittest.TestCase):
         error_message = response.get_json()["error"]
         self.assertIn("Evidence intake failed due to an unexpected error", error_message)
         self.assertNotIn("internal-boom", error_message)
+
+    def test_case_log_file_collects_module_logs_in_single_file(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Unified Log Case"})
+            self.assertEqual(create_resp.status_code, 201)
+            case_id = str(create_resp.get_json()["case_id"])
+            case_dir = self.cases_root / case_id
+
+            with patch.object(routes, "_resolve_evidence_payload", side_effect=RuntimeError("internal-boom")):
+                response = self.client.post(f"/api/cases/{case_id}/evidence", json={"path": "C:\\bad.E01"})
+            self.assertEqual(response.status_code, 500)
+
+            with routes.case_log_context(case_id):
+                logging.getLogger("app.analyzer").warning("analyzer-log-marker")
+                logging.getLogger("app.parser").warning("parser-log-marker")
+
+            log_dir = case_dir / "logs"
+            log_path = log_dir / "application.log"
+            self.assertTrue(log_path.exists())
+            self.assertEqual(sorted(path.name for path in log_dir.glob("*.log")), ["application.log"])
+            log_contents = log_path.read_text(encoding="utf-8")
+
+        self.assertIn("Initialized case logging", log_contents)
+        self.assertIn("Evidence intake failed for case", log_contents)
+        self.assertIn("analyzer-log-marker", log_contents)
+        self.assertIn("parser-log-marker", log_contents)
 
     def test_settings_update_does_not_persist_env_api_keys(self) -> None:
         with (

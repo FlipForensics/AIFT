@@ -55,6 +55,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "artifact_profiles": [],
 }
 
+LOGO_FILE_CANDIDATES = (
+    "AIFT Logo - White Text.png",
+    "AIFT Logo - Dark Text.png",
+    "AIFT Logo Wide.png",
+    "AIFT_Logo.png",
+    "AIFt_Logo_Transparent.png",
+    "AIFT_Logo_Transparent.png",
+)
+
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     for key, value in override.items():

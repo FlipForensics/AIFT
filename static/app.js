@@ -14,6 +14,9 @@
     MEDIUM: "confidence-medium",
     LOW: "confidence-low",
   };
+  const SSE_MAX_RETRIES = 10;
+  const SSE_RETRY_BASE_DELAY_MS = 1000;
+  const SSE_RETRY_MAX_DELAY_MS = 30000;
   const st = {
     step: 1,
     caseId: "",
@@ -26,8 +29,8 @@
     pendingFiles: [],
     settings: null,
     settingsTab: "basic",
-    parse: { run: false, done: false, fail: false, es: null, retry: null, seq: -1, rows: {}, status: {}, timer: null, started: 0 },
-    analysis: { run: false, done: false, fail: false, es: null, retry: null, seq: -1, order: [], byKey: {}, summary: "", model: {}, timer: null, started: 0 },
+    parse: { run: false, done: false, fail: false, es: null, retry: null, retryCount: 0, seq: -1, rows: {}, status: {}, timer: null, started: 0 },
+    analysis: { run: false, done: false, fail: false, es: null, retry: null, retryCount: 0, seq: -1, order: [], byKey: {}, summary: "", model: {}, timer: null, started: 0 },
   };
 
   const el = {};
@@ -1000,6 +1003,9 @@
     if (!caseId) return setMsg(el.parseErr, "No active case for parse stream.", "error");
     const es = new EventSource(`/api/cases/${encodeURIComponent(caseId)}/parse/progress`);
     st.parse.es = es;
+    es.onopen = () => {
+      st.parse.retryCount = 0;
+    };
     es.onmessage = (ev) => {
       const p = safeJson(ev.data);
       if (!p) return;
@@ -1012,8 +1018,7 @@
     };
     es.onerror = () => {
       if (st.parse.done || st.parse.fail || !st.parse.run) return;
-      setMsg(el.parseErr, "Parse progress connection dropped. Attempting reconnect...", "error");
-      if (es.readyState === EventSource.CLOSED) retryParseSse();
+      retryParseSse();
     };
   }
 
@@ -1099,13 +1104,36 @@
     el.parseProgress.value = Math.max(0, Math.min(100, Math.round((done / keys.length) * 100)));
   }
 
-  function retryParseSse() {
-    if (st.parse.retry) return;
+  function sseRetryDelayMs(attempt) {
+    const normalizedAttempt = Number.isFinite(attempt) ? Math.max(1, Math.floor(attempt)) : 1;
+    const backoff = SSE_RETRY_BASE_DELAY_MS * (2 ** (normalizedAttempt - 1));
+    return Math.min(SSE_RETRY_MAX_DELAY_MS, backoff);
+  }
+
+  function failParseSseReconnect() {
+    st.parse.run = false;
+    st.parse.done = false;
+    st.parse.fail = true;
+    st.parse.retryCount = 0;
+    stopTimer("parse");
     closeParseSse();
+    setMsg(el.parseErr, `Parse progress connection lost after ${SSE_MAX_RETRIES} retries. Start parsing again.`, "error");
+    updateParseButton();
+    updateNav();
+  }
+
+  function retryParseSse() {
+    if (st.parse.retry || st.parse.done || st.parse.fail || !st.parse.run) return;
+    const attempt = st.parse.retryCount + 1;
+    if (attempt > SSE_MAX_RETRIES) return failParseSseReconnect();
+    st.parse.retryCount = attempt;
+    const delay = sseRetryDelayMs(attempt);
+    closeParseSse();
+    setMsg(el.parseErr, `Parse progress connection dropped. Reconnecting (${attempt}/${SSE_MAX_RETRIES}) in ${Math.ceil(delay / 1000)}s...`, "error");
     st.parse.retry = window.setTimeout(() => {
       st.parse.retry = null;
       if (!st.parse.done && !st.parse.fail && st.parse.run) startParseSse();
-    }, 1500);
+    }, delay);
   }
 
   function closeParseSse() {
@@ -1125,6 +1153,7 @@
     st.parse.run = false;
     st.parse.done = false;
     st.parse.fail = false;
+    st.parse.retryCount = 0;
     st.parse.seq = -1;
     st.parse.rows = {};
     st.parse.status = {};
@@ -1194,6 +1223,9 @@
     if (!caseId) return setMsg(el.analysisMsg, "No case ID for analysis stream.", "error");
     const es = new EventSource(`/api/cases/${encodeURIComponent(caseId)}/analyze/progress`);
     st.analysis.es = es;
+    es.onopen = () => {
+      st.analysis.retryCount = 0;
+    };
     es.onmessage = (ev) => {
       const p = safeJson(ev.data);
       if (!p) return;
@@ -1206,8 +1238,7 @@
     };
     es.onerror = () => {
       if (st.analysis.done || st.analysis.fail || !st.analysis.run) return;
-      setMsg(el.analysisMsg, "Analysis progress connection dropped. Attempting reconnect...", "error");
-      if (es.readyState === EventSource.CLOSED) retryAnalysisSse();
+      retryAnalysisSse();
     };
   }
 
@@ -1453,17 +1484,18 @@
       codeFenceLines = [];
     };
 
-    lines.forEach((line) => {
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
       const trimmed = String(line || "").trim();
 
       if (inCodeFence) {
         if (trimmed.startsWith("```")) {
           inCodeFence = false;
           flushCodeFence();
-          return;
+          continue;
         }
         codeFenceLines.push(line);
-        return;
+        continue;
       }
 
       if (trimmed.startsWith("```")) {
@@ -1471,13 +1503,68 @@
         closeList();
         inCodeFence = true;
         codeFenceLines = [];
-        return;
+        continue;
       }
 
       if (!trimmed) {
         flushParagraph();
         closeList();
-        return;
+        continue;
+      }
+
+      const headerCells = splitMarkdownTableRow(line);
+      if (headerCells && index + 1 < lines.length) {
+        const separatorCells = splitMarkdownTableRow(lines[index + 1]);
+        if (
+          separatorCells
+          && headerCells.length === separatorCells.length
+          && isMarkdownTableSeparatorRow(separatorCells)
+        ) {
+          flushParagraph();
+          closeList();
+
+          const expectedColumns = headerCells.length;
+          const normalizedHeader = normalizeMarkdownTableCells(headerCells, expectedColumns);
+
+          const table = document.createElement("table");
+          const thead = document.createElement("thead");
+          const headerRow = document.createElement("tr");
+          normalizedHeader.forEach((cell) => {
+            const th = document.createElement("th");
+            th.innerHTML = renderInlineMarkdown(cell);
+            headerRow.appendChild(th);
+          });
+          thead.appendChild(headerRow);
+          table.appendChild(thead);
+
+          const tbody = document.createElement("tbody");
+          let hasBodyRows = false;
+          index += 2;
+          while (index < lines.length) {
+            const bodyLine = lines[index];
+            const bodyTrimmed = String(bodyLine || "").trim();
+            if (!bodyTrimmed) break;
+
+            const parsedBodyCells = splitMarkdownTableRow(bodyLine);
+            if (!parsedBodyCells) break;
+
+            const normalizedBody = normalizeMarkdownTableCells(parsedBodyCells, expectedColumns);
+            const tr = document.createElement("tr");
+            normalizedBody.forEach((cell) => {
+              const td = document.createElement("td");
+              td.innerHTML = renderInlineMarkdown(cell);
+              tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+            hasBodyRows = true;
+            index += 1;
+          }
+
+          if (hasBodyRows) table.appendChild(tbody);
+          fragment.appendChild(table);
+          index -= 1;
+          continue;
+        }
       }
 
       const heading = trimmed.match(/^(#{1,6})\s+(.*)$/);
@@ -1489,7 +1576,7 @@
         const h = document.createElement(`h${level}`);
         h.innerHTML = renderInlineMarkdown(content);
         fragment.appendChild(h);
-        return;
+        continue;
       }
 
       const ordered = trimmed.match(/^\d+\.\s+(.*)$/);
@@ -1503,7 +1590,7 @@
         const li = document.createElement("li");
         li.innerHTML = renderInlineMarkdown(ordered[1] || "");
         listNode.appendChild(li);
-        return;
+        continue;
       }
 
       const unordered = trimmed.match(/^[-*]\s+(.*)$/);
@@ -1517,17 +1604,42 @@
         const li = document.createElement("li");
         li.innerHTML = renderInlineMarkdown(unordered[1] || "");
         listNode.appendChild(li);
-        return;
+        continue;
       }
 
       closeList();
       paragraphLines.push(trimmed);
-    });
+    }
 
     if (inCodeFence) flushCodeFence();
     flushParagraph();
     closeList();
     return fragment;
+  }
+
+  function splitMarkdownTableRow(line) {
+    const raw = String(line || "");
+    if (!raw.includes("|")) return null;
+
+    let trimmed = raw.trim();
+    if (!trimmed || !trimmed.includes("|")) return null;
+    if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
+    if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
+
+    return trimmed.split("|").map((cell) => cell.trim());
+  }
+
+  function isMarkdownTableSeparatorRow(cells) {
+    if (!Array.isArray(cells) || !cells.length) return false;
+    return cells.every((cell) => /^:?-{3,}:?$/.test(String(cell || "").trim()));
+  }
+
+  function normalizeMarkdownTableCells(cells, expectedCount) {
+    const normalized = Array.isArray(cells)
+      ? cells.slice(0, expectedCount).map((cell) => String(cell || "").trim())
+      : [];
+    while (normalized.length < expectedCount) normalized.push("");
+    return normalized;
   }
 
   function renderInlineMarkdown(text) {
@@ -1560,12 +1672,29 @@
   }
 
   function retryAnalysisSse() {
-    if (st.analysis.retry) return;
+    if (st.analysis.retry || st.analysis.done || st.analysis.fail || !st.analysis.run) return;
+    const attempt = st.analysis.retryCount + 1;
+    if (attempt > SSE_MAX_RETRIES) return failAnalysisSseReconnect();
+    st.analysis.retryCount = attempt;
+    const delay = sseRetryDelayMs(attempt);
     closeAnalysisSse();
+    setMsg(el.analysisMsg, `Analysis progress connection dropped. Reconnecting (${attempt}/${SSE_MAX_RETRIES}) in ${Math.ceil(delay / 1000)}s...`, "error");
     st.analysis.retry = window.setTimeout(() => {
       st.analysis.retry = null;
       if (!st.analysis.done && !st.analysis.fail && st.analysis.run) startAnalysisSse();
-    }, 1500);
+    }, delay);
+  }
+
+  function failAnalysisSseReconnect() {
+    st.analysis.run = false;
+    st.analysis.done = false;
+    st.analysis.fail = true;
+    st.analysis.retryCount = 0;
+    stopTimer("analysis");
+    closeAnalysisSse();
+    if (el.runBtn) el.runBtn.disabled = false;
+    setMsg(el.analysisMsg, `Analysis progress connection lost after ${SSE_MAX_RETRIES} retries. Run analysis again.`, "error");
+    updateNav();
   }
 
   function closeAnalysisSse() {
@@ -1585,6 +1714,7 @@
     st.analysis.run = false;
     st.analysis.done = false;
     st.analysis.fail = false;
+    st.analysis.retryCount = 0;
     st.analysis.seq = -1;
     st.analysis.order = [];
     st.analysis.byKey = {};

@@ -99,23 +99,55 @@ class AIProvider(ABC):
             max_tokens=max_tokens,
         )
 
+    def _prepare_csv_attachments(
+        self,
+        attachments: list[Mapping[str, str]] | None,
+        *,
+        supports_file_attachments: bool = True,
+    ) -> list[dict[str, str]] | None:
+        """Apply shared CSV-attachment preflight checks and normalization."""
+        if not bool(getattr(self, "attach_csv_as_file", False)):
+            return None
+        if not attachments:
+            return None
+        if getattr(self, "_csv_attachment_supported", None) is False:
+            return None
+        if not supports_file_attachments:
+            if hasattr(self, "_csv_attachment_supported"):
+                setattr(self, "_csv_attachment_supported", False)
+            return None
 
-def _resolve_api_key(config_key: str, env_var: str) -> str:
+        normalized_attachments = _normalize_attachment_inputs(attachments)
+        if not normalized_attachments:
+            return None
+        return normalized_attachments
+
+
+def _normalize_api_key_value(value: Any) -> str:
+    """Normalize API key-like values from config/env sources."""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _resolve_api_key(config_key: Any, env_var: str) -> str:
     """Return the API key from config, falling back to an environment variable."""
-    if config_key:
-        return config_key
-    return os.environ.get(env_var, "")
+    normalized_config_key = _normalize_api_key_value(config_key)
+    if normalized_config_key:
+        return normalized_config_key
+    return _normalize_api_key_value(os.environ.get(env_var, ""))
 
 
-def _resolve_api_key_candidates(config_key: str, env_vars: tuple[str, ...]) -> str:
+def _resolve_api_key_candidates(config_key: Any, env_vars: tuple[str, ...]) -> str:
     """Return API key from config, falling back across multiple environment variables."""
-    if config_key:
-        return config_key
+    normalized_config_key = _normalize_api_key_value(config_key)
+    if normalized_config_key:
+        return normalized_config_key
 
     for env_var in env_vars:
-        value = os.environ.get(env_var, "")
-        if value:
-            return value
+        normalized_value = _normalize_api_key_value(os.environ.get(env_var, ""))
+        if normalized_value:
+            return normalized_value
     return ""
 
 
@@ -660,18 +692,19 @@ class ClaudeProvider(AIProvider):
                 "anthropic SDK is not installed. Install it with `pip install anthropic`."
             ) from error
 
-        if not api_key:
+        normalized_api_key = _normalize_api_key_value(api_key)
+        if not normalized_api_key:
             raise AIProviderError(
                 "Claude API key is not configured. "
                 "Set `ai.claude.api_key` in config.yaml or the ANTHROPIC_API_KEY environment variable."
             )
 
         self._anthropic = anthropic
-        self.api_key = api_key
+        self.api_key = normalized_api_key
         self.model = model
         self.attach_csv_as_file = bool(attach_csv_as_file)
         self._csv_attachment_supported: bool | None = None
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.client = anthropic.Anthropic(api_key=normalized_api_key)
         logger.info("Initialized Claude provider with model %s", model)
 
     def analyze(
@@ -751,14 +784,7 @@ class ClaudeProvider(AIProvider):
         max_tokens: int,
         attachments: list[Mapping[str, str]] | None,
     ) -> str | None:
-        if not self.attach_csv_as_file:
-            return None
-        if not attachments:
-            return None
-        if self._csv_attachment_supported is False:
-            return None
-
-        normalized_attachments = _normalize_attachment_inputs(attachments)
+        normalized_attachments = self._prepare_csv_attachments(attachments)
         if not normalized_attachments:
             return None
 
@@ -905,18 +931,19 @@ class OpenAIProvider(AIProvider):
                 "openai SDK is not installed. Install it with `pip install openai`."
             ) from error
 
-        if not api_key:
+        normalized_api_key = _normalize_api_key_value(api_key)
+        if not normalized_api_key:
             raise AIProviderError(
                 "OpenAI API key is not configured. "
                 "Set `ai.openai.api_key` in config.yaml or the OPENAI_API_KEY environment variable."
             )
 
         self._openai = openai
-        self.api_key = api_key
+        self.api_key = normalized_api_key
         self.model = model
         self.attach_csv_as_file = bool(attach_csv_as_file)
         self._csv_attachment_supported: bool | None = None
-        self.client = openai.OpenAI(api_key=api_key)
+        self.client = openai.OpenAI(api_key=normalized_api_key)
         logger.info("Initialized OpenAI provider with model %s", model)
 
     def analyze(
@@ -1065,17 +1092,10 @@ class OpenAIProvider(AIProvider):
         max_tokens: int,
         attachments: list[Mapping[str, str]] | None,
     ) -> str | None:
-        if not self.attach_csv_as_file:
-            return None
-        if not attachments:
-            return None
-        if self._csv_attachment_supported is False:
-            return None
-        if not hasattr(self.client, "files") or not hasattr(self.client, "responses"):
-            self._csv_attachment_supported = False
-            return None
-
-        normalized_attachments = _normalize_attachment_inputs(attachments)
+        normalized_attachments = self._prepare_csv_attachments(
+            attachments,
+            supports_file_attachments=hasattr(self.client, "files") and hasattr(self.client, "responses"),
+        )
         if not normalized_attachments:
             return None
 
@@ -1176,14 +1196,15 @@ class KimiProvider(AIProvider):
                 "openai SDK is not installed. Install it with `pip install openai`."
             ) from error
 
-        if not api_key:
+        normalized_api_key = _normalize_api_key_value(api_key)
+        if not normalized_api_key:
             raise AIProviderError(
                 "Kimi API key is not configured. "
                 "Set `ai.kimi.api_key` in config.yaml or the MOONSHOT_API_KEY environment variable."
             )
 
         self._openai = openai
-        self.api_key = api_key
+        self.api_key = normalized_api_key
         self.model = _normalize_kimi_model_name(model)
         self.base_url = _normalize_openai_compatible_base_url(
             base_url=base_url,
@@ -1191,7 +1212,7 @@ class KimiProvider(AIProvider):
         )
         self.attach_csv_as_file = bool(attach_csv_as_file)
         self._csv_attachment_supported: bool | None = None
-        self.client = openai.OpenAI(api_key=api_key, base_url=self.base_url)
+        self.client = openai.OpenAI(api_key=normalized_api_key, base_url=self.base_url)
         logger.info("Initialized Kimi provider at %s with model %s", self.base_url, self.model)
 
     def analyze(
@@ -1295,17 +1316,10 @@ class KimiProvider(AIProvider):
         max_tokens: int,
         attachments: list[Mapping[str, str]] | None,
     ) -> str | None:
-        if not self.attach_csv_as_file:
-            return None
-        if not attachments:
-            return None
-        if self._csv_attachment_supported is False:
-            return None
-        if not hasattr(self.client, "files") or not hasattr(self.client, "responses"):
-            self._csv_attachment_supported = False
-            return None
-
-        normalized_attachments = _normalize_attachment_inputs(attachments)
+        normalized_attachments = self._prepare_csv_attachments(
+            attachments,
+            supports_file_attachments=hasattr(self.client, "files") and hasattr(self.client, "responses"),
+        )
         if not normalized_attachments:
             return None
 
@@ -1381,16 +1395,18 @@ class LocalProvider(AIProvider):
                 "openai SDK is not installed. Install it with `pip install openai`."
             ) from error
 
+        normalized_api_key = _normalize_api_key_value(api_key) or "not-needed"
+
         self._openai = openai
         self.base_url = _normalize_openai_compatible_base_url(
             base_url=base_url,
             default_base_url=DEFAULT_LOCAL_BASE_URL,
         )
         self.model = model
-        self.api_key = api_key
+        self.api_key = normalized_api_key
         self.attach_csv_as_file = bool(attach_csv_as_file)
         self._csv_attachment_supported: bool | None = None
-        self.client = openai.OpenAI(api_key=api_key, base_url=self.base_url)
+        self.client = openai.OpenAI(api_key=normalized_api_key, base_url=self.base_url)
         logger.info("Initialized local provider at %s with model %s", self.base_url, model)
 
     def analyze(
@@ -1486,13 +1502,18 @@ class LocalProvider(AIProvider):
                 cleaned_attachment_response = _strip_leading_reasoning_blocks(attachment_response)
                 return cleaned_attachment_response or attachment_response.strip()
 
+            prompt_for_completion = self._build_chat_completion_prompt(
+                user_prompt=user_prompt,
+                attachments=attachments,
+            )
+
             try:
                 stream = self.client.chat.completions.create(
                     model=self.model,
                     max_tokens=max_tokens,
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
+                        {"role": "user", "content": prompt_for_completion},
                     ],
                     stream=True,
                 )
@@ -1611,12 +1632,17 @@ class LocalProvider(AIProvider):
                 return cleaned_attachment_response
             return attachment_response.strip()
 
+        prompt_for_completion = self._build_chat_completion_prompt(
+            user_prompt=user_prompt,
+            attachments=attachments,
+        )
+
         response = self.client.chat.completions.create(
             model=self.model,
             max_tokens=max_tokens,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": prompt_for_completion},
             ],
         )
         text = _extract_openai_text(response)
@@ -1639,6 +1665,21 @@ class LocalProvider(AIProvider):
             f"{reason_detail}. This can happen with reasoning-only outputs or very low token limits."
         )
 
+    def _build_chat_completion_prompt(
+        self,
+        user_prompt: str,
+        attachments: list[Mapping[str, str]] | None,
+    ) -> str:
+        prompt_for_completion = user_prompt
+        if attachments and self.attach_csv_as_file:
+            prompt_for_completion, inlined_attachment_data = _inline_attachment_data_into_prompt(
+                user_prompt=user_prompt,
+                attachments=attachments,
+            )
+            if inlined_attachment_data:
+                logger.info("Local attachment fallback inlined attachment data into prompt.")
+        return prompt_for_completion
+
     def _request_with_csv_attachments(
         self,
         system_prompt: str,
@@ -1646,17 +1687,10 @@ class LocalProvider(AIProvider):
         max_tokens: int,
         attachments: list[Mapping[str, str]] | None,
     ) -> str | None:
-        if not self.attach_csv_as_file:
-            return None
-        if not attachments:
-            return None
-        if self._csv_attachment_supported is False:
-            return None
-        if not hasattr(self.client, "files") or not hasattr(self.client, "responses"):
-            self._csv_attachment_supported = False
-            return None
-
-        normalized_attachments = _normalize_attachment_inputs(attachments)
+        normalized_attachments = self._prepare_csv_attachments(
+            attachments,
+            supports_file_attachments=hasattr(self.client, "files") and hasattr(self.client, "responses"),
+        )
         if not normalized_attachments:
             return None
 
@@ -1728,7 +1762,7 @@ def create_provider(config: dict[str, Any]) -> AIProvider:
         if not isinstance(claude_config, dict):
             raise ValueError("Invalid configuration: `ai.claude` must be a dictionary.")
         api_key = _resolve_api_key(
-            str(claude_config.get("api_key", "")),
+            claude_config.get("api_key", ""),
             "ANTHROPIC_API_KEY",
         )
         return ClaudeProvider(
@@ -1742,7 +1776,7 @@ def create_provider(config: dict[str, Any]) -> AIProvider:
         if not isinstance(openai_config, dict):
             raise ValueError("Invalid configuration: `ai.openai` must be a dictionary.")
         api_key = _resolve_api_key(
-            str(openai_config.get("api_key", "")),
+            openai_config.get("api_key", ""),
             "OPENAI_API_KEY",
         )
         return OpenAIProvider(
@@ -1758,7 +1792,7 @@ def create_provider(config: dict[str, Any]) -> AIProvider:
         return LocalProvider(
             base_url=str(local_config.get("base_url", DEFAULT_LOCAL_BASE_URL)),
             model=str(local_config.get("model", DEFAULT_LOCAL_MODEL)),
-            api_key=str(local_config.get("api_key", "not-needed")),
+            api_key=_normalize_api_key_value(local_config.get("api_key", "not-needed")) or "not-needed",
             attach_csv_as_file=bool(local_config.get("attach_csv_as_file", True)),
         )
 
@@ -1767,7 +1801,7 @@ def create_provider(config: dict[str, Any]) -> AIProvider:
         if not isinstance(kimi_config, dict):
             raise ValueError("Invalid configuration: `ai.kimi` must be a dictionary.")
         api_key = _resolve_api_key_candidates(
-            str(kimi_config.get("api_key", "")),
+            kimi_config.get("api_key", ""),
             ("MOONSHOT_API_KEY", "KIMI_API_KEY"),
         )
         return KimiProvider(

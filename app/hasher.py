@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from hashlib import md5, sha256
 from pathlib import Path
-from typing import Callable, TypedDict
+from typing import Callable, Protocol, TypedDict
 
-CHUNK_SIZE = 8 * 1024
+CHUNK_SIZE = 4 * 1024 * 1024
 
 
 class HashResult(TypedDict):
@@ -17,20 +17,18 @@ class HashResult(TypedDict):
     size_bytes: int
 
 
-def compute_hashes(
-    filepath: str | Path,
-    progress_callback: Callable[[int, int], None] | None = None,
-) -> HashResult:
-    """Compute SHA-256 and MD5 in a single pass over a file.
+class _Hasher(Protocol):
+    def update(self, data: bytes, /) -> None: ...
+    def hexdigest(self) -> str: ...
 
-    Returns {"sha256": str, "md5": str, "size_bytes": int}.
-    Calls progress_callback(bytes_read, total_bytes) after each chunk if provided.
-    """
+
+def _compute_digests(
+    filepath: str | Path,
+    hashers: dict[str, _Hasher],
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> tuple[dict[str, str], int]:
     path = Path(filepath)
     total_bytes = path.stat().st_size
-
-    sha256_hasher = sha256()
-    md5_hasher = md5()
     bytes_read = 0
 
     if progress_callback is not None:
@@ -42,33 +40,41 @@ def compute_hashes(
             if not chunk:
                 break
 
-            sha256_hasher.update(chunk)
-            md5_hasher.update(chunk)
+            for hasher in hashers.values():
+                hasher.update(chunk)
             bytes_read += len(chunk)
 
             if progress_callback is not None:
                 progress_callback(bytes_read, total_bytes)
 
+    return {name: hasher.hexdigest() for name, hasher in hashers.items()}, total_bytes
+
+
+def compute_hashes(
+    filepath: str | Path,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> HashResult:
+    """Compute SHA-256 and MD5 in a single pass over a file.
+
+    Returns {"sha256": str, "md5": str, "size_bytes": int}.
+    Calls progress_callback(bytes_read, total_bytes) after each chunk if provided.
+    """
+    digests, total_bytes = _compute_digests(
+        filepath,
+        {"sha256": sha256(), "md5": md5()},
+        progress_callback=progress_callback,
+    )
     return {
-        "sha256": sha256_hasher.hexdigest(),
-        "md5": md5_hasher.hexdigest(),
+        "sha256": digests["sha256"],
+        "md5": digests["md5"],
         "size_bytes": total_bytes,
     }
 
 
 def compute_sha256(filepath: str | Path) -> str:
     """Compute the SHA-256 hash for a file."""
-    path = Path(filepath)
-    sha256_hasher = sha256()
-
-    with path.open("rb") as evidence_file:
-        while True:
-            chunk = evidence_file.read(CHUNK_SIZE)
-            if not chunk:
-                break
-            sha256_hasher.update(chunk)
-
-    return sha256_hasher.hexdigest()
+    digests, _ = _compute_digests(filepath, {"sha256": sha256()})
+    return digests["sha256"]
 
 
 def verify_hash(

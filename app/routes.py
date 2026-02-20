@@ -11,7 +11,7 @@ import re
 import shutil
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 import tarfile
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
@@ -23,6 +23,7 @@ from flask import (
     Flask,
     Response,
     current_app,
+    g,
     jsonify,
     render_template,
     request,
@@ -34,7 +35,14 @@ from werkzeug.utils import secure_filename
 from .analyzer import ForensicAnalyzer
 from .ai_providers import AIProviderError, create_provider
 from .audit import AuditLogger
-from .config import load_config, save_config
+from .case_logging import (
+    case_log_context,
+    pop_case_log_context,
+    push_case_log_context,
+    register_case_log_handler,
+    unregister_case_log_handler,
+)
+from .config import LOGO_FILE_CANDIDATES, load_config, save_config
 from .hasher import compute_hashes, verify_hash
 from .parser import ARTIFACT_REGISTRY, ForensicParser
 from .reporter import ReportGenerator
@@ -92,16 +100,11 @@ BUILTIN_RECOMMENDED_PROFILE = "recommended"
 PROFILE_DIRNAME = "profile"
 PROFILE_FILE_SUFFIX = ".json"
 RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS = {"mft", "usnjrnl", "evtx", "defender.evtx"}
-LOGO_FILE_CANDIDATES = (
-    "AIFT Logo - White Text.png",
-    "AIFT Logo - Dark Text.png",
-    "AIFT Logo Wide.png",
-    "AIFT_Logo.png",
-    "AIFt_Logo_Transparent.png",
-    "AIFT_Logo_Transparent.png",
-)
 CONNECTION_TEST_SYSTEM_PROMPT = "You are a connectivity test assistant. Reply briefly."
 CONNECTION_TEST_USER_PROMPT = "Reply with: Connection OK."
+TERMINAL_CASE_STATUSES = frozenset({"completed", "failed", "error"})
+SSE_POLL_INTERVAL_SECONDS = 0.2
+SSE_INITIAL_IDLE_GRACE_SECONDS = 1.0
 
 CASE_STATES: dict[str, dict[str, Any]] = {}
 PARSE_PROGRESS: dict[str, dict[str, Any]] = {}
@@ -109,6 +112,23 @@ ANALYSIS_PROGRESS: dict[str, dict[str, Any]] = {}
 STATE_LOCK = threading.RLock()
 
 routes_bp = Blueprint("routes", __name__)
+_REQUEST_CASE_LOG_TOKEN = "_aift_case_log_token"
+
+
+@routes_bp.before_app_request
+def _bind_case_log_context_for_request() -> None:
+    case_id: str | None = None
+    if request.blueprint == routes_bp.name:
+        case_id = str((request.view_args or {}).get("case_id", "")).strip() or None
+    setattr(g, _REQUEST_CASE_LOG_TOKEN, push_case_log_context(case_id))
+
+
+@routes_bp.teardown_app_request
+def _clear_case_log_context_for_request(_error: BaseException | None) -> None:
+    token = getattr(g, _REQUEST_CASE_LOG_TOKEN, None)
+    if token is not None:
+        pop_case_log_context(token)
+        setattr(g, _REQUEST_CASE_LOG_TOKEN, None)
 
 
 def _now_iso() -> str:
@@ -168,6 +188,42 @@ def _emit_progress(
         state = store.setdefault(case_id, _new_progress())
         event["sequence"] = len(state["events"])
         state["events"].append(event)
+
+
+def _normalize_case_status(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _mark_case_status(case_id: str, status: str) -> None:
+    normalized_status = _normalize_case_status(status)
+    with STATE_LOCK:
+        case = CASE_STATES.get(case_id)
+        if case is not None:
+            case["status"] = normalized_status
+
+
+def _cleanup_case_entries(case_id: str) -> None:
+    with STATE_LOCK:
+        CASE_STATES.pop(case_id, None)
+        PARSE_PROGRESS.pop(case_id, None)
+        ANALYSIS_PROGRESS.pop(case_id, None)
+    unregister_case_log_handler(case_id)
+
+
+def _cleanup_terminal_cases(exclude_case_id: str | None = None) -> None:
+    with STATE_LOCK:
+        terminal_case_ids = [
+            case_id
+            for case_id, case in CASE_STATES.items()
+            if case_id != exclude_case_id
+            and _normalize_case_status(case.get("status")) in TERMINAL_CASE_STATUSES
+        ]
+        for case_id in terminal_case_ids:
+            CASE_STATES.pop(case_id, None)
+            PARSE_PROGRESS.pop(case_id, None)
+            ANALYSIS_PROGRESS.pop(case_id, None)
+    for case_id in terminal_case_ids:
+        unregister_case_log_handler(case_id)
 
 
 def _mask_sensitive(data: Any) -> Any:
@@ -248,6 +304,17 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _close_forensic_parser(parser: Any) -> None:
+    close_method = getattr(parser, "close", None)
+    if not callable(close_method):
+        return
+
+    try:
+        close_method()
+    except Exception:
+        LOGGER.exception("Failed to close forensic parser.")
 
 
 def _validate_analysis_date_range(
@@ -573,6 +640,7 @@ def _stream_sse(store: dict[str, dict[str, Any]], case_id: str) -> Response:
     @stream_with_context
     def stream() -> Any:
         last = 0
+        initial_idle_deadline = time.monotonic() + SSE_INITIAL_IDLE_GRACE_SECONDS
         while True:
             with STATE_LOCK:
                 state = store.get(case_id)
@@ -587,6 +655,10 @@ def _stream_sse(store: dict[str, dict[str, Any]], case_id: str) -> Response:
                     last = len(events)
 
             if not pending and status == "idle":
+                if time.monotonic() < initial_idle_deadline:
+                    yield ": keep-alive\n\n"
+                    time.sleep(SSE_POLL_INTERVAL_SECONDS)
+                    continue
                 idle = {"type": "idle", "status": "idle"}
                 yield f"data: {json.dumps(idle, separators=(',', ':'))}\n\n"
                 break
@@ -594,12 +666,12 @@ def _stream_sse(store: dict[str, dict[str, Any]], case_id: str) -> Response:
             for event in pending:
                 yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
 
-            if status in {"completed", "failed"} and not pending:
+            if status in {"completed", "failed", "error"} and not pending:
                 break
 
             if not pending:
                 yield ": keep-alive\n\n"
-            time.sleep(0.2)
+            time.sleep(SSE_POLL_INTERVAL_SECONDS)
 
     return Response(
         stream(),
@@ -617,27 +689,43 @@ def _get_case(case_id: str) -> dict[str, Any] | None:
         return CASE_STATES.get(case_id)
 
 
-def _extract_zip(zip_path: Path, destination: Path) -> Path:
+def _extract_archive_members(
+    destination: Path,
+    members: list[tuple[str, Any]],
+    *,
+    empty_message: str,
+    unsafe_paths_message: str,
+    no_files_message: str,
+    extract_member: Callable[[Any, Path], None] | None = None,
+    extract_all_members: Callable[[list[tuple[Any, Path]]], None] | None = None,
+) -> Path:
+    if (extract_member is None) == (extract_all_members is None):
+        raise ValueError("Exactly one extraction callback must be provided.")
+
     destination.mkdir(parents=True, exist_ok=True)
     root = destination.resolve()
-    try:
-        with ZipFile(zip_path, "r") as archive:
-            members = [member for member in archive.infolist() if not member.is_dir()]
-            if not members:
-                raise ValueError("Evidence ZIP is empty.")
-            for member in members:
-                target = (destination / member.filename).resolve()
-                if root not in target.parents and target != root:
-                    raise ValueError("Evidence ZIP contains unsafe paths.")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(member, "r") as src, target.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
-    except BadZipFile as error:
-        raise ValueError(f"Invalid ZIP evidence file: {zip_path.name}") from error
+
+    if not members:
+        raise ValueError(empty_message)
+
+    validated_members: list[tuple[Any, Path]] = []
+    for member_name, member in members:
+        member_path = Path(member_name)
+        target = (root / member_path).resolve()
+        if not target.is_relative_to(root):
+            raise ValueError(unsafe_paths_message)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        validated_members.append((member, target))
+
+    if extract_all_members is not None:
+        extract_all_members(validated_members)
+    else:
+        for member, target in validated_members:
+            extract_member(member, target)
 
     files = sorted(path for path in destination.rglob("*") if path.is_file())
     if not files:
-        raise ValueError("Evidence ZIP extraction produced no files.")
+        raise ValueError(no_files_message)
     evidence_files = [
         path for path in files if path.suffix.lower() in _EVIDENCE_FILE_EXTENSIONS
     ]
@@ -666,103 +754,69 @@ def _extract_zip(zip_path: Path, destination: Path) -> Path:
     return destination
 
 
+def _extract_zip(zip_path: Path, destination: Path) -> Path:
+    try:
+        with ZipFile(zip_path, "r") as archive:
+            members = [(member.filename, member) for member in archive.infolist() if not member.is_dir()]
+
+            def _extract_member(member: Any, target: Path) -> None:
+                with archive.open(member, "r") as src, target.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+            return _extract_archive_members(
+                destination,
+                members,
+                empty_message="Evidence ZIP is empty.",
+                unsafe_paths_message="Evidence ZIP contains unsafe paths.",
+                no_files_message="Evidence ZIP extraction produced no files.",
+                extract_member=_extract_member,
+            )
+    except BadZipFile as error:
+        raise ValueError(f"Invalid ZIP evidence file: {zip_path.name}") from error
+
+
 def _extract_tar(tar_path: Path, destination: Path) -> Path:
     """Extract a tar (or tar.gz/tgz) archive and return the best Dissect target path."""
-    destination.mkdir(parents=True, exist_ok=True)
-    root = destination.resolve()
     try:
         with tarfile.open(tar_path, "r:*") as archive:
-            members = [m for m in archive.getmembers() if m.isfile()]
-            if not members:
-                raise ValueError("Evidence tar archive is empty.")
-            for member in members:
-                target = (destination / member.name).resolve()
-                if root not in target.parents and target != root:
-                    raise ValueError("Evidence tar archive contains unsafe paths.")
-                target.parent.mkdir(parents=True, exist_ok=True)
+            members = [(member.name, member) for member in archive.getmembers() if member.isfile()]
+
+            def _extract_member(member: Any, target: Path) -> None:
                 src = archive.extractfile(member)
                 if src is None:
-                    continue
+                    return
                 with src, target.open("wb") as dst:
                     shutil.copyfileobj(src, dst)
+            return _extract_archive_members(
+                destination,
+                members,
+                empty_message="Evidence tar archive is empty.",
+                unsafe_paths_message="Evidence tar archive contains unsafe paths.",
+                no_files_message="Evidence tar extraction produced no files.",
+                extract_member=_extract_member,
+            )
     except tarfile.TarError as error:
         raise ValueError(f"Invalid tar evidence file: {tar_path.name}") from error
-
-    files = sorted(path for path in destination.rglob("*") if path.is_file())
-    if not files:
-        raise ValueError("Evidence tar extraction produced no files.")
-    evidence_files = [
-        path for path in files if path.suffix.lower() in _EVIDENCE_FILE_EXTENSIONS
-    ]
-    if evidence_files:
-        for ef in evidence_files:
-            if ef.suffix.lower() == ".e01":
-                return ef
-        return evidence_files[0]
-
-    top_level_entries: set[str] = set()
-    has_top_level_file = False
-    for file_path in files:
-        relative_parts = file_path.relative_to(destination).parts
-        if not relative_parts:
-            continue
-        top_level_entries.add(relative_parts[0])
-        if len(relative_parts) == 1:
-            has_top_level_file = True
-
-    if not has_top_level_file and len(top_level_entries) == 1:
-        wrapper_dir = destination / sorted(top_level_entries)[0]
-        if wrapper_dir.is_dir():
-            return wrapper_dir
-
-    return destination
 
 
 def _extract_7z(archive_path: Path, destination: Path) -> Path:
     """Extract a 7z archive and return the best Dissect target path."""
-    destination.mkdir(parents=True, exist_ok=True)
-    root = destination.resolve()
     try:
         with py7zr.SevenZipFile(archive_path, mode="r") as archive:
-            entries = [e for e in archive.getnames() if not e.endswith("/")]
-            if not entries:
-                raise ValueError("Evidence 7z archive is empty.")
-            for name in entries:
-                target = (destination / name).resolve()
-                if root not in target.parents and target != root:
-                    raise ValueError("Evidence 7z archive contains unsafe paths.")
-            archive.extractall(path=destination)
+            members = [(name, name) for name in archive.getnames() if not name.endswith("/")]
+
+            def _extract_members(_members: list[tuple[Any, Path]]) -> None:
+                archive.extractall(path=destination)
+
+            return _extract_archive_members(
+                destination,
+                members,
+                empty_message="Evidence 7z archive is empty.",
+                unsafe_paths_message="Evidence 7z archive contains unsafe paths.",
+                no_files_message="Evidence 7z extraction produced no files.",
+                extract_all_members=_extract_members,
+            )
     except py7zr.Bad7zFile as error:
         raise ValueError(f"Invalid 7z evidence file: {archive_path.name}") from error
-
-    files = sorted(path for path in destination.rglob("*") if path.is_file())
-    if not files:
-        raise ValueError("Evidence 7z extraction produced no files.")
-    evidence_files = [
-        path for path in files if path.suffix.lower() in _EVIDENCE_FILE_EXTENSIONS
-    ]
-    if evidence_files:
-        for ef in evidence_files:
-            if ef.suffix.lower() == ".e01":
-                return ef
-        return evidence_files[0]
-
-    top_level_entries: set[str] = set()
-    has_top_level_file = False
-    for file_path in files:
-        relative_parts = file_path.relative_to(destination).parts
-        if not relative_parts:
-            continue
-        top_level_entries.add(relative_parts[0])
-        if len(relative_parts) == 1:
-            has_top_level_file = True
-
-    if not has_top_level_file and len(top_level_entries) == 1:
-        wrapper_dir = destination / sorted(top_level_entries)[0]
-        if wrapper_dir.is_dir():
-            return wrapper_dir
-
-    return destination
 
 
 def _collect_uploaded_files() -> list[Any]:
@@ -997,6 +1051,7 @@ def _run_parse(
 
     evidence_path = str(case.get("evidence_path", "")).strip()
     if not evidence_path:
+        _mark_case_status(case_id, "failed")
         _set_progress_status(PARSE_PROGRESS, case_id, "failed", "No evidence available for parsing.")
         _emit_progress(
             PARSE_PROGRESS,
@@ -1005,6 +1060,7 @@ def _run_parse(
         )
         return
 
+    parser: Any | None = None
     try:
         csv_output_dir = _resolve_case_csv_output_dir(case, config_snapshot=config_snapshot)
         parser = ForensicParser(
@@ -1070,14 +1126,19 @@ def _run_parse(
                 "failed_artifacts": failed,
             },
         )
+        _mark_case_status(case_id, "parsed")
     except Exception:
         LOGGER.exception("Background parse failed for case %s", case_id)
         user_message = (
             "Parsing failed due to an internal error. "
             "Check logs and retry after confirming the evidence file is readable."
         )
+        _mark_case_status(case_id, "error")
         _set_progress_status(PARSE_PROGRESS, case_id, "failed", user_message)
         _emit_progress(PARSE_PROGRESS, case_id, {"type": "parse_failed", "error": user_message})
+    finally:
+        if parser is not None:
+            _close_forensic_parser(parser)
 
 
 def _run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> None:
@@ -1103,6 +1164,7 @@ def _run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) ->
             if isinstance(analysis_artifacts_state, list)
             else "No parsed CSV artifacts available."
         )
+        _mark_case_status(case_id, "failed")
         _set_progress_status(ANALYSIS_PROGRESS, case_id, "failed", message)
         _emit_progress(
             ANALYSIS_PROGRESS,
@@ -1215,14 +1277,38 @@ def _run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) ->
                 "per_artifact": list(output.get("per_artifact", [])),
             },
         )
+        _mark_case_status(case_id, "completed")
     except Exception:
         LOGGER.exception("Background analysis failed for case %s", case_id)
         user_message = (
             "Analysis failed due to an internal error. "
             "Verify provider settings and retry."
         )
+        _mark_case_status(case_id, "error")
         _set_progress_status(ANALYSIS_PROGRESS, case_id, "failed", user_message)
         _emit_progress(ANALYSIS_PROGRESS, case_id, {"type": "analysis_failed", "error": user_message})
+
+
+def _run_parse_with_case_log_context(
+    case_id: str,
+    parse_artifacts: list[str],
+    analysis_artifacts: list[str],
+    artifact_options: list[dict[str, str]],
+    config_snapshot: dict[str, Any],
+) -> None:
+    with case_log_context(case_id):
+        _run_parse(
+            case_id=case_id,
+            parse_artifacts=parse_artifacts,
+            analysis_artifacts=analysis_artifacts,
+            artifact_options=artifact_options,
+            config_snapshot=config_snapshot,
+        )
+
+
+def _run_analysis_with_case_log_context(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> None:
+    with case_log_context(case_id):
+        _run_analysis(case_id=case_id, prompt=prompt, config_snapshot=config_snapshot)
 
 
 @routes_bp.get("/")
@@ -1262,6 +1348,8 @@ def image_asset(filename: str) -> Response | tuple[Response, int]:
 
 @routes_bp.post("/api/cases")
 def create_case() -> tuple[Response, int]:
+    _cleanup_terminal_cases()
+
     payload = request.get_json(silent=True) or {}
     case_name = str(payload.get("case_name", "")).strip()
     if not case_name:
@@ -1272,6 +1360,14 @@ def create_case() -> tuple[Response, int]:
     (case_dir / "evidence").mkdir(parents=True, exist_ok=True)
     (case_dir / "parsed").mkdir(parents=True, exist_ok=True)
     (case_dir / "reports").mkdir(parents=True, exist_ok=True)
+    try:
+        log_file_path = register_case_log_handler(case_id=case_id, case_dir=case_dir)
+    except OSError:
+        LOGGER.exception("Failed to initialize case log file for case %s", case_id)
+        return _error("Failed to initialize case logging due to a filesystem error.", 500)
+
+    with case_log_context(case_id):
+        LOGGER.info("Initialized case logging at %s", log_file_path)
 
     audit = AuditLogger(case_dir)
     audit.log(
@@ -1305,6 +1401,8 @@ def create_case() -> tuple[Response, int]:
         "artifact_csv_paths": {},
         "investigation_context": "",
         "analysis_results": {},
+        "status": "active",
+        "log_file_path": str(log_file_path),
     }
     with STATE_LOCK:
         CASE_STATES[case_id] = case_state
@@ -1336,8 +1434,11 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
             case_dir=case["case_dir"],
             audit_logger=case["audit"],
         )
-        metadata = parser.get_image_metadata()
-        available_artifacts = parser.get_available_artifacts()
+        try:
+            metadata = parser.get_image_metadata()
+            available_artifacts = parser.get_available_artifacts()
+        finally:
+            _close_forensic_parser(parser)
 
         case["audit"].log(
             "evidence_intake",
@@ -1428,6 +1529,7 @@ def start_parse(case_id: str) -> tuple[Response, int]:
         if parse_state.get("status") == "running":
             return _error("Parsing is already running for this case.", 409)
         PARSE_PROGRESS[case_id] = _new_progress(status="running")
+        case["status"] = "running"
         case["selected_artifacts"] = list(parse_artifacts)
         case["analysis_artifacts"] = list(analysis_artifacts)
         case["artifact_options"] = list(artifact_options)
@@ -1449,7 +1551,7 @@ def start_parse(case_id: str) -> tuple[Response, int]:
     )
     config_snapshot = copy.deepcopy(current_app.config.get("AIFT_CONFIG", {}))
     threading.Thread(
-        target=_run_parse,
+        target=_run_parse_with_case_log_context,
         args=(case_id, parse_artifacts, analysis_artifacts, artifact_options, config_snapshot),
         daemon=True,
     ).start()
@@ -1497,7 +1599,6 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
     prompt = str(payload.get("prompt", "")).strip()
 
     prompt_path = Path(case["case_dir"]) / "prompt.txt"
-    prompt_path.write_text(prompt, encoding="utf-8")
     prompt_details: dict[str, Any] = {"prompt": _sanitize_prompt(prompt)}
     analysis_date_range = case.get("analysis_date_range")
     if isinstance(analysis_date_range, dict):
@@ -1508,14 +1609,16 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
                 "start_date": start_date,
                 "end_date": end_date,
             }
-    case["audit"].log("prompt_submitted", prompt_details)
-
     with STATE_LOCK:
         analysis_state = ANALYSIS_PROGRESS.setdefault(case_id, _new_progress())
         if analysis_state.get("status") == "running":
             return _error("Analysis is already running for this case.", 409)
+        prompt_path.write_text(prompt, encoding="utf-8")
         ANALYSIS_PROGRESS[case_id] = _new_progress(status="running")
+        case["status"] = "running"
         case["investigation_context"] = prompt
+
+    case["audit"].log("prompt_submitted", prompt_details)
 
     _emit_progress(
         ANALYSIS_PROGRESS,
@@ -1527,7 +1630,11 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
         },
     )
     config_snapshot = copy.deepcopy(current_app.config.get("AIFT_CONFIG", {}))
-    threading.Thread(target=_run_analysis, args=(case_id, prompt, config_snapshot), daemon=True).start()
+    threading.Thread(
+        target=_run_analysis_with_case_log_context,
+        args=(case_id, prompt, config_snapshot),
+        daemon=True,
+    ).start()
 
     return jsonify(
         {
@@ -1607,6 +1714,8 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
         "report_generated",
         {"report_filename": report_path.name, "hash_verified": hash_ok},
     )
+    _mark_case_status(case_id, "completed")
+    _cleanup_case_entries(case_id)
 
     return send_file(
         report_path,

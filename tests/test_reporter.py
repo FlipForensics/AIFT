@@ -259,8 +259,15 @@ class ReporterTests(unittest.TestCase):
             html = report_path.read_text(encoding="utf-8")
 
         self.assertIn("This is the summary preface.", html)
-        self.assertIn("| Timestamp (UTC) | Source Artifact(s) | Event | Confidence |", html)
-        self.assertIn("| 2024-02-05T00:00:00Z | Browser Downloads | Test event |", html)
+        self.assertIn("<table>", html)
+        self.assertIn("<th>Timestamp (UTC)</th>", html)
+        self.assertIn("<th>Source Artifact(s)</th>", html)
+        self.assertIn("<th>Event</th>", html)
+        self.assertIn("<th>Confidence</th>", html)
+        self.assertIn("<td>2024-02-05T00:00:00Z</td>", html)
+        self.assertIn("<td>Browser Downloads</td>", html)
+        self.assertIn("<td>Test event</td>", html)
+        self.assertNotIn("| Timestamp (UTC) | Source Artifact(s) | Event | Confidence |", html)
         self.assertIn("confidence-inline confidence-high", html)
 
 

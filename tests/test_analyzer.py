@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import csv
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -8,6 +9,7 @@ from unittest.mock import patch
 
 from app.ai_providers import AIProviderError
 from app.analyzer import ForensicAnalyzer
+from app.case_logging import case_log_context, register_case_log_handler, unregister_case_log_handler
 
 
 class FakeAuditLogger:
@@ -398,6 +400,40 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("InRange", filled_prompt)
         self.assertIn("NoTimestamp", filled_prompt)
         self.assertNotIn("OldEntry", filled_prompt)
+
+    def test_prepare_artifact_data_normalizes_aware_timestamps_before_date_filtering(self) -> None:
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            prompts_dir = temp_path / "prompts"
+            self._write_prompt_template(prompts_dir)
+
+            csv_path = temp_path / "runkeys.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "name", "command", "key"])
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "ts": "2026-01-15T12:00:00+00:00",
+                        "name": "AwareEntry",
+                        "command": r"C:\Users\Public\aware.exe",
+                        "key": r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    }
+                )
+
+            analyzer = ForensicAnalyzer(
+                artifact_csv_paths={"runkeys": csv_path},
+                prompts_dir=prompts_dir,
+                random_seed=7,
+            )
+            aware_timestamp = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+            with patch.object(analyzer, "_extract_row_datetime", return_value=aware_timestamp):
+                filled_prompt = analyzer._prepare_artifact_data(
+                    artifact_key="runkeys",
+                    investigation_context="Focus on activity around January 15, 2026.",
+                )
+
+        self.assertIn("Rows kept after filter: 1 of 1.", filled_prompt)
+        self.assertIn("AwareEntry", filled_prompt)
 
     def test_explicit_step2_date_range_filters_mft_prompt_rows(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
@@ -847,6 +883,69 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("AI column projection applied: ts, name.", filled_prompt)
         self.assertEqual(projected_header, "ts,name")
 
+    def test_load_artifact_ai_column_projection_config_logs_warning_on_yaml_error(self) -> None:
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            bad_projection_path = temp_path / "artifact_ai_columns.yaml"
+            bad_projection_path.write_text(
+                (
+                    "artifact_ai_columns:\n"
+                    "  runkeys: [ts, name\n"
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("app.analyzer.create_provider", return_value=FakeProvider()):
+                with self.assertLogs("app.analyzer", level="WARNING") as captured_logs:
+                    analyzer = ForensicAnalyzer(
+                        config={
+                            "analysis": {
+                                "artifact_ai_columns_config_path": str(bad_projection_path),
+                            }
+                        }
+                    )
+
+        self.assertEqual(analyzer.artifact_ai_column_projections, {})
+        emitted = "\n".join(captured_logs.output)
+        self.assertIn("Failed to load AI column projection config", emitted)
+        self.assertIn("AI column projection is disabled", emitted)
+        self.assertIn(str(bad_projection_path), emitted)
+
+    def test_case_logger_writes_projection_warnings_to_case_logs_folder(self) -> None:
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            case_id = "case-logging-test"
+            log_path = register_case_log_handler(case_id=case_id, case_dir=temp_path)
+            bad_projection_path = temp_path / "artifact_ai_columns.yaml"
+            bad_projection_path.write_text(
+                (
+                    "artifact_ai_columns:\n"
+                    "  runkeys: [ts, name\n"
+                ),
+                encoding="utf-8",
+            )
+
+            try:
+                with patch("app.analyzer.create_provider", return_value=FakeProvider()):
+                    with case_log_context(case_id):
+                        analyzer = ForensicAnalyzer(
+                            case_dir=temp_path,
+                            config={
+                                "analysis": {
+                                    "artifact_ai_columns_config_path": str(bad_projection_path),
+                                }
+                            },
+                        )
+                self.assertEqual(analyzer.artifact_ai_column_projections, {})
+                self.assertTrue(log_path.exists())
+                contents = log_path.read_text(encoding="utf-8")
+            finally:
+                unregister_case_log_handler(case_id)
+
+        self.assertIn("Failed to load AI column projection config", contents)
+        self.assertIn("AI column projection is disabled", contents)
+        self.assertIn(str(bad_projection_path), contents)
+
     def test_analyze_artifact_uses_configured_advanced_analysis_settings(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
             temp_path = Path(temp_dir)
@@ -1155,6 +1254,41 @@ class AnalyzerTests(unittest.TestCase):
 
         self.assertNotIn("TRUNCATED", result)
         self.assertIn("entry_100", result)
+
+    def test_timestamp_found_in_csv_uses_preloaded_lookup_keys(self) -> None:
+        analyzer = ForensicAnalyzer()
+        csv_timestamp_lookup: set[str] = set()
+        for value in (
+            "2026-01-15T12:00:00+00:00",
+            "2026-01-15T13:00:00.123456Z",
+            "2026-01-15T14:00:00+02:00",
+        ):
+            csv_timestamp_lookup.update(analyzer._timestamp_lookup_keys(value))
+
+        self.assertTrue(
+            analyzer._timestamp_found_in_csv(
+                "2026-01-15T12:00:00Z",
+                csv_timestamp_lookup,
+            )
+        )
+        self.assertTrue(
+            analyzer._timestamp_found_in_csv(
+                "2026-01-15 13:00:00",
+                csv_timestamp_lookup,
+            )
+        )
+        self.assertTrue(
+            analyzer._timestamp_found_in_csv(
+                "2026-01-15T14:00:00",
+                csv_timestamp_lookup,
+            )
+        )
+        self.assertFalse(
+            analyzer._timestamp_found_in_csv(
+                "2026-01-15T20:00:00Z",
+                csv_timestamp_lookup,
+            )
+        )
 
     def test_dedup_with_generic_id_column_does_not_treat_it_as_variant(self) -> None:
         """A column named just 'id' could be EventID or UserID — not safe for dedup."""
