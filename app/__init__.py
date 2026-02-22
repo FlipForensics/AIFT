@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from runtime_compat import assert_supported_python_version
+
+assert_supported_python_version()
+
 from flask import Flask
 
 from .config import load_config

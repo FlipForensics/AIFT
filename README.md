@@ -53,7 +53,8 @@ cd aift
 pip install -r requirements.txt
 ```
 
-Python 3.10 or higher is required. All dependencies are pure Python - no C libraries, no system packages.
+Python 3.10-3.13 is required. All dependencies are pure Python - no C libraries, no system packages.
+Python 3.14+ is currently unsupported due to upstream `dissect.target` compatibility.
 
 ### 2. Run
 
@@ -206,7 +207,8 @@ Parsed artifact data is also available as a downloadable CSV bundle for further 
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.10-3.13
+- Python 3.14+ is currently unsupported due to upstream `dissect.target` compatibility
 - 8 GB RAM minimum (for parsing large artifacts)
 - Disk space: ~2× the evidence file size (for parsed CSV output)
 - No C library dependencies - Dissect is pure Python
