@@ -2,11 +2,11 @@
   <img src="images/AIFT Logo - White Text.png" alt="AIFT Logo" width="400">
 </p>
 
-# AIFT — AI Forensic Triage V1.1.1
+# AIFT - AI Forensic Triage V1.1.1
 
 **Automated Windows forensic triage, powered by AI.**
 
-AIFT turns hours of manual artifact analysis into minutes. Upload a disk image, select what to parse, and get an AI-generated forensic report — all from your browser, all running locally on your machine.
+AIFT turns hours of manual artifact analysis into minutes. Upload a disk image, select what to parse, and get an AI-generated forensic report - all from your browser, all running locally on your machine.
 
 Built for incident responders who need fast answers, and simple enough for non-forensic team members to operate.
 
@@ -20,10 +20,10 @@ Built for incident responders who need fast answers, and simple enough for non-f
 Upload Evidence → Select Artifacts → Parse → AI Analysis → HTML Report
 ```
 
-1. **Run the app** — a local web interface opens in your browser.
-2. **Upload evidence** — drag-and-drop an E01, VMDK, VHD, raw image, or archive, or point to a local path for large images.
-3. **Pick artifacts** — choose from 25+ Windows forensic artifacts.
-4. **Get results** — AI analyzes each artifact for indicators of compromise, correlates findings across artifacts, and generates a self-contained HTML report with evidence hashes and full audit trail.
+1. **Run the app** - a local web interface opens in your browser.
+2. **Upload evidence** - drag-and-drop an E01, VMDK, VHD, raw image, or archive, or point to a local path for large images.
+3. **Pick artifacts** - choose from 25+ Windows forensic artifacts.
+4. **Get results** - AI analyzes each artifact for indicators of compromise, correlates findings across artifacts, and generates a self-contained HTML report with evidence hashes and full audit trail.
 
 No Elasticsearch. No Docker. No database. One Python script, one command.
 
@@ -53,7 +53,7 @@ cd aift
 pip install -r requirements.txt
 ```
 
-Python 3.10 or higher is required. All dependencies are pure Python — no C libraries, no system packages.
+Python 3.10 or higher is required. All dependencies are pure Python - no C libraries, no system packages.
 
 ### 2. Run
 
@@ -71,7 +71,7 @@ Click the **gear icon** (⚙) in the top-right corner of the UI. Select your AI 
 - For **Kimi**: paste your Moonshot API key and click Save.
 - For a **local model**: enter your server URL (e.g., `http://localhost:11434/v1`) and model name.
 
-Click **Test Connection** to verify everything works. That's it — you're ready to go.
+Click **Test Connection** to verify everything works. That's it - you're ready to go.
 
 ### 4. Analyze your first image
 
@@ -93,7 +93,7 @@ AIFT supports four AI backends and can be run completely isolated. All configura
 |----------|--------------|-------|
 | **Anthropic Claude** | API key from [console.anthropic.com](https://console.anthropic.com) | Recommended for analysis quality |
 | **OpenAI / GPT** | API key from [platform.openai.com](https://platform.openai.com) | GPT-4o or later |
-| **Kimi** | API key from [platform.moonshot.ai](https://platform.moonshot.ai) | Moonshot AI's Kimi K2 — OpenAI-compatible |
+| **Kimi** | API key from [platform.moonshot.ai](https://platform.moonshot.ai) | Moonshot AI's Kimi K2 - OpenAI-compatible |
 | **Local model** | Any OpenAI-compatible server | Ollama, LM Studio, vLLM, text-generation-webui |
 
 ### Ollama (local, free, private)
@@ -123,7 +123,7 @@ export KIMI_API_KEY="sk-..."
 
 ## Supported Artifacts
 
-AIFT uses [Dissect](https://github.com/fox-it/dissect) by Fox-IT (NCC Group) for forensic parsing — pure Python, no external dependencies.
+AIFT uses [Dissect](https://github.com/fox-it/dissect) by Fox-IT (NCC Group) for forensic parsing - pure Python, no external dependencies.
 
 | Category | Artifacts |
 |----------|----------|
@@ -148,7 +148,7 @@ AIFT uses [Dissect](https://github.com/fox-it/dissect) for evidence loading, whi
 |----------|---------|-------|
 | **EnCase (EWF)** | `.E01`, `.Ex01`, `.S01`, `.L01` | Split segments (`.E02`, `.E03`, ...) are auto-discovered in the same directory |
 | **Raw / DD** | `.dd`, `.img`, `.raw`, `.bin`, `.iso` | Bit-for-bit disk images |
-| **Split raw** | `.000`, `.001`, ... | Segmented raw images — pass the first segment |
+| **Split raw** | `.000`, `.001`, ... | Segmented raw images - pass the first segment |
 | **VMware** | `.vmdk`, `.vmx`, `.vmwarevm` | Virtual disk and VM config (auto-loads associated disks) |
 | **Hyper-V** | `.vhd`, `.vhdx`, `.vmcx` | Legacy and modern Hyper-V formats |
 | **VirtualBox** | `.vdi`, `.vbox` | VirtualBox disk and VM config |
@@ -163,7 +163,18 @@ AIFT uses [Dissect](https://github.com/fox-it/dissect) for evidence loading, whi
 
 Evidence can also be provided as a **directory path** (e.g., KAPE, Velociraptor, or UAC triage output).
 
-For images over 2 GB, use **Path Mode** instead of uploading — enter the local file path and AIFT reads it directly.
+For images over 2 GB, use **Path Mode** instead of uploading - enter the local file path and AIFT reads it directly.
+
+---
+
+## Roadmap
+
+Features under active development:
+
+- **AI Chat**: Ask follow-up questions about findings directly on the results page. Drill into specific artifacts, request correlations, or clarify timeline gaps without re-running the analysis.
+- **Multi-Image Support**: Analyze multiple evidence sources in a single case (e.g., workstation + server + domain controller). Includes cross-system correlation to identify lateral movement and shared IOCs.
+- **Linux Support**: Full analysis of Linux disk images using Dissect. Covers bash/zsh/fish history, wtmp/btmp, syslog, journald, cron jobs, systemd services, SSH keys, package history, and user accounts.
+- **Mobile Support**: iOS and Android device analysis using [iLEAPP](https://github.com/abrignoni/iLEAPP) and [ALEAPP](https://github.com/abrignoni/ALEAPP). Covers call logs, SMS, browser history, installed apps, location data, and more.
 
 ---
 
@@ -181,7 +192,7 @@ AIFT is built with forensic defensibility in mind:
 
 ## Report Output
 
-AIFT generates a **self-contained HTML report** — all CSS inlined, no external dependencies. Open it in any browser, print it, or archive it. The report includes:
+AIFT generates a **self-contained HTML report** - all CSS inlined, no external dependencies. Open it in any browser, print it, or archive it. The report includes:
 
 - Evidence metadata and hash verification
 - Executive summary with confidence assessment
@@ -198,7 +209,7 @@ Parsed artifact data is also available as a downloadable CSV bundle for further 
 - Python 3.10+
 - 8 GB RAM minimum (for parsing large artifacts)
 - Disk space: ~2× the evidence file size (for parsed CSV output)
-- No C library dependencies — Dissect is pure Python
+- No C library dependencies - Dissect is pure Python
 
 ---
 
@@ -206,7 +217,7 @@ Parsed artifact data is also available as a downloadable CSV bundle for further 
 
 ```
 aift/
-├── aift.py              # Entry point — run this
+├── aift.py              # Entry point - run this
 ├── config.yaml          # Created on first run
 ├── requirements.txt     # Python dependencies
 ├── app/                 # Backend (Flask routes, parsing, analysis, reporting)
@@ -222,7 +233,7 @@ aift/
 ```
 
 Prompt templates in `prompts/` are plain markdown files. Edit them to tune AI analysis behavior without touching code. 
-The `config/artifact_ai_columns.yaml` file controls which columns from each parsed artifact are sent to the AI — edit it to include or exclude fields per artifact to fine-tune what the AI sees.
+The `config/artifact_ai_columns.yaml` file controls which columns from each parsed artifact are sent to the AI - edit it to include or exclude fields per artifact to fine-tune what the AI sees.
 
 ---
 
@@ -230,7 +241,7 @@ The `config/artifact_ai_columns.yaml` file controls which columns from each pars
 
 AIFT output is AI-assisted. All findings must be independently verified by a qualified forensic examiner before use in any legal, regulatory, or formal investigative proceeding. The AI analyzes only the data provided and may not capture all relevant artifacts or context.
 
-When using a cloud-based AI provider, parsed artifact data is sent to external servers for analysis. Be mindful of the sensitivity of the evidence — if the data is subject to privacy regulations, legal restrictions, or confidentiality requirements, consider using a local model instead.
+When using a cloud-based AI provider, parsed artifact data is sent to external servers for analysis. Be mindful of the sensitivity of the evidence - if the data is subject to privacy regulations, legal restrictions, or confidentiality requirements, consider using a local model instead.
 
 Contact: info@FlipForensics.com
 
