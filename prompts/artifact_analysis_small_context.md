@@ -39,10 +39,6 @@ Order by severity, then confidence. Do not pad with low-value observations.
 
 - IOC -> Observed / Not Observed / Not Assessable. Evidence if observed.
 
-**Data Gaps**
-
-What can't be determined from this artifact and why. Include: missing time ranges, absent fields, signs of tampering or log clearing, and what other artifacts would help.
-
 ### Full Data (CSV)
 ```
 {{data_csv}}
