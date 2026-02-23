@@ -32,7 +32,7 @@ except Exception as error:
 TOKEN_CHAR_RATIO = 4
 DATE_BUFFER_DAYS = 7
 AI_MAX_TOKENS = 128000
-MIN_CONTEXT_TOKENS_FOR_STATISTICS_SECTION = 64000
+DEFAULT_SHORTENED_PROMPT_CUTOFF_TOKENS = 64000
 AI_RETRY_ATTEMPTS = 3
 AI_RETRY_BASE_DELAY = 1.0
 ARTIFACT_DEDUPLICATION_ENABLED = True
@@ -319,6 +319,18 @@ class ForensicAnalyzer:
             analysis_config=analysis_config,
             key="ai_max_tokens",
             default=AI_MAX_TOKENS,
+            minimum=1,
+        )
+        legacy_shortened_prompt_cutoff = self._read_int_setting(
+            analysis_config=analysis_config,
+            key="statistics_section_cutoff_tokens",
+            default=DEFAULT_SHORTENED_PROMPT_CUTOFF_TOKENS,
+            minimum=1,
+        )
+        self.shortened_prompt_cutoff_tokens = self._read_int_setting(
+            analysis_config=analysis_config,
+            key="shortened_prompt_cutoff_tokens",
+            default=legacy_shortened_prompt_cutoff,
             minimum=1,
         )
         # Budget for CSV data per chunk when using chunked analysis.
@@ -1459,8 +1471,8 @@ class ForensicAnalyzer:
 
         return "\n".join(lines), min_time, max_time
 
-    def _should_include_statistics_section(self) -> bool:
-        return self.ai_max_tokens >= MIN_CONTEXT_TOKENS_FOR_STATISTICS_SECTION
+    def _should_use_shortened_prompt(self) -> bool:
+        return self.ai_max_tokens < self.shortened_prompt_cutoff_tokens
 
     def _extract_ioc_targets(self, investigation_context: str) -> dict[str, list[str]]:
         text = self._stringify_value(investigation_context)
@@ -1620,7 +1632,7 @@ class ForensicAnalyzer:
     ) -> str:
         """Prepare one artifact CSV as a bounded, analysis-ready prompt."""
         resolved_csv_path = csv_path if csv_path is not None else self._resolve_artifact_csv_path(artifact_key)
-        include_statistics = self._should_include_statistics_section()
+        include_statistics = not self._should_use_shortened_prompt()
         template = self.artifact_prompt_template if include_statistics else self.artifact_prompt_template_small_context
         artifact_metadata = self._resolve_artifact_metadata(artifact_key)
 

@@ -495,6 +495,17 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
             <input id="setting-ai-max-tokens" name="ai_max_tokens" type="number" min="1" value="128000">
           </div>
           <div class="form-row">
+            <label for="setting-shortened-prompt-cutoff-tokens">Shortened Prompt Cutoff (tokens)</label>
+            <input
+              id="setting-shortened-prompt-cutoff-tokens"
+              name="shortened_prompt_cutoff_tokens"
+              type="number"
+              min="1"
+              value="64000"
+            >
+            <p>If Analysis Max Tokens is below this value, AIFT uses the shortened artifact prompt template.</p>
+          </div>
+          <div class="form-row">
             <label for="setting-connection-max-tokens">Connection Test Max Tokens</label>
             <input id="setting-connection-max-tokens" name="connection_test_max_tokens" type="number" min="1" value="256">
           </div>

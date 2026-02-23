@@ -128,6 +128,7 @@
     el.settingsTabPanels = Array.from(document.querySelectorAll("[data-settings-panel]"));
 
     el.setAiMaxTokens = q("setting-ai-max-tokens");
+    el.setShortenedPromptCutoffTokens = q("setting-shortened-prompt-cutoff-tokens");
     el.setConnectionMaxTokens = q("setting-connection-max-tokens");
     el.setDateBufferDays = q("setting-date-buffer-days");
     el.setCitationSpotCheckLimit = q("setting-citation-spot-check-limit");
@@ -1895,6 +1896,11 @@
     if (!isObj(s)) return;
     const analysis = obj(s.analysis);
     setNumberInput(el.setAiMaxTokens, num(analysis.ai_max_tokens, 128000), 128000);
+    setNumberInput(
+      el.setShortenedPromptCutoffTokens,
+      num(analysis.shortened_prompt_cutoff_tokens, num(analysis.statistics_section_cutoff_tokens, 64000)),
+      64000
+    );
     setNumberInput(el.setConnectionMaxTokens, num(analysis.connection_test_max_tokens, 256), 256);
     setNumberInput(el.setDateBufferDays, num(analysis.date_buffer_days, 7), 7);
     setNumberInput(el.setCitationSpotCheckLimit, num(analysis.citation_spot_check_limit, 20), 20);
@@ -2056,6 +2062,11 @@
     if (el.setCsvOutputDir) base.evidence.csv_output_dir = val(el.setCsvOutputDir);
 
     base.analysis.ai_max_tokens = readIntInput(el.setAiMaxTokens, 128000, 1);
+    base.analysis.shortened_prompt_cutoff_tokens = readIntInput(
+      el.setShortenedPromptCutoffTokens,
+      64000,
+      1
+    );
     base.analysis.connection_test_max_tokens = readIntInput(el.setConnectionMaxTokens, 256, 1);
     base.analysis.date_buffer_days = readIntInput(el.setDateBufferDays, 7, 0);
     base.analysis.citation_spot_check_limit = readIntInput(el.setCitationSpotCheckLimit, 20, 1);

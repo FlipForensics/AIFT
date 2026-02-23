@@ -29,6 +29,7 @@ class ConfigTests(unittest.TestCase):
                 3600,
             )
             self.assertEqual(config.get("analysis", {}).get("ai_max_tokens"), 128000)
+            self.assertEqual(config.get("analysis", {}).get("shortened_prompt_cutoff_tokens"), 64000)
             self.assertEqual(config.get("analysis", {}).get("date_buffer_days"), 7)
             self.assertEqual(config.get("analysis", {}).get("artifact_deduplication_enabled"), True)
             self.assertEqual(
@@ -45,6 +46,7 @@ class ConfigTests(unittest.TestCase):
                 3600,
             )
             self.assertEqual(persisted.get("analysis", {}).get("ai_max_tokens"), 128000)
+            self.assertEqual(persisted.get("analysis", {}).get("shortened_prompt_cutoff_tokens"), 64000)
             self.assertEqual(persisted.get("analysis", {}).get("artifact_deduplication_enabled"), True)
             self.assertEqual(
                 persisted.get("analysis", {}).get("artifact_ai_columns_config_path"),
