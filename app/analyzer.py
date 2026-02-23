@@ -37,10 +37,6 @@ AI_RETRY_BASE_DELAY = 1.0
 ARTIFACT_DEDUPLICATION_ENABLED = True
 DEDUPLICATED_PARSED_DIRNAME = "parsed_deduplicated"
 DEDUP_COMMENT_COLUMN = "_dedup_comment"
-# Maximum characters of inline CSV data before switching to
-# attachment-only mode.  ~800K chars ≈ ~200K tokens — a generous limit
-# that stays within most provider context windows.
-MAX_INLINE_CSV_CHARS = 800_000
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_AI_COLUMNS_CONFIG_PATH = PROJECT_ROOT / "config" / "artifact_ai_columns.yaml"
 
@@ -306,10 +302,9 @@ class ForensicAnalyzer:
             default=AI_MAX_TOKENS,
             minimum=1,
         )
-        self.max_inline_csv_chars = min(
-            MAX_INLINE_CSV_CHARS,
-            int(self.ai_max_tokens * TOKEN_CHAR_RATIO * 0.6),
-        )
+        # Budget for CSV data per chunk when using chunked analysis.
+        # Reserves ~40% of the context window for instructions + response.
+        self.chunk_csv_budget = int(self.ai_max_tokens * TOKEN_CHAR_RATIO * 0.6)
         self.date_buffer_days = self._read_int_setting(
             analysis_config=analysis_config,
             key="date_buffer_days",
@@ -652,7 +647,7 @@ class ForensicAnalyzer:
 
         # Determine how much space is left for CSV data in each chunk.
         instructions_chars = len(instructions_portion) + len(self.system_prompt)
-        csv_budget = max(1000, self.max_inline_csv_chars - instructions_chars)
+        csv_budget = max(1000, self.chunk_csv_budget - instructions_chars)
 
         chunks = self._split_csv_into_chunks(csv_data, csv_budget)
         total_chunks = len(chunks)
@@ -1751,17 +1746,7 @@ class ForensicAnalyzer:
         full_data_csv = self._build_full_data_csv(
             rows=analysis_rows,
             columns=analysis_columns,
-            max_chars=self.max_inline_csv_chars,
         )
-        if "[TRUNCATED —" in full_data_csv:
-            self._audit_log(
-                "inline_csv_truncated",
-                {
-                    "artifact_key": artifact_key,
-                    "total_rows": len(analysis_rows),
-                    "max_inline_chars": self.max_inline_csv_chars,
-                },
-            )
         priority_directives = self._build_priority_directives(investigation_context)
         ioc_targets = self._format_ioc_targets(investigation_context)
         artifact_guidance = self._resolve_analysis_instructions(
@@ -2230,13 +2215,12 @@ class ForensicAnalyzer:
         self,
         rows: list[dict[str, str]],
         columns: list[str],
-        max_chars: int = 0,
     ) -> str:
         """Serialize rows to inline CSV text.
 
-        When *max_chars* is positive and the full CSV exceeds that limit,
-        the output is truncated and a notice is appended telling the AI
-        that the complete data is available in the attached CSV file.
+        Always produces the complete CSV — truncation is never acceptable
+        in DFIR.  When the data exceeds the model context window, the
+        caller uses chunked analysis instead.
         """
         if not columns:
             return "No columns available."
@@ -2250,15 +2234,6 @@ class ForensicAnalyzer:
         full_csv = buffer.getvalue().strip()
         if not full_csv:
             return "No rows available after date filtering."
-
-        if max_chars > 0 and len(full_csv) > max_chars:
-            truncated = full_csv[:max_chars].rsplit("\n", 1)[0]
-            rows_shown = truncated.count("\n")  # header + data rows
-            return (
-                f"{truncated}\n"
-                f"... [TRUNCATED — showing ~{rows_shown} of {len(rows)} rows inline. "
-                f"Full dataset ({len(rows)} rows) is provided as an attached CSV file.]"
-            )
 
         return full_csv
 

@@ -1209,51 +1209,20 @@ class AnalyzerTests(unittest.TestCase):
         self.assertFalse(analyzer._is_dedup_safe_identifier_column("LogonID"))
         self.assertFalse(analyzer._is_dedup_safe_identifier_column("id"))
 
-    def test_build_full_data_csv_truncates_large_datasets(self) -> None:
-        """Inline CSV is truncated with a notice when it exceeds max_chars."""
+    def test_build_full_data_csv_never_truncates(self) -> None:
+        """Full CSV is always produced without truncation (DFIR requires all rows)."""
         analyzer = ForensicAnalyzer()
         rows = [
-            {"_row_ref": str(i), "name": f"entry_{i}", "data": "x" * 100}
+            {"_row_ref": str(i), "name": f"entry_{i}", "data": "x" * 200}
             for i in range(1, 201)
         ]
         columns = ["name", "data"]
 
-        # With a low limit, output should be truncated
-        result = analyzer._build_full_data_csv(rows=rows, columns=columns, max_chars=500)
-
-        self.assertIn("TRUNCATED", result)
-        self.assertIn("200 rows", result)
-        self.assertIn("attached CSV file", result)
-        self.assertLessEqual(len(result), 800)  # truncated + notice
-
-    def test_build_full_data_csv_no_truncation_when_within_limit(self) -> None:
-        """Small datasets should not be truncated."""
-        analyzer = ForensicAnalyzer()
-        rows = [
-            {"_row_ref": "1", "name": "entry_1", "data": "hello"},
-            {"_row_ref": "2", "name": "entry_2", "data": "world"},
-        ]
-        columns = ["name", "data"]
-
-        result = analyzer._build_full_data_csv(rows=rows, columns=columns, max_chars=10000)
+        result = analyzer._build_full_data_csv(rows=rows, columns=columns)
 
         self.assertNotIn("TRUNCATED", result)
         self.assertIn("entry_1", result)
-        self.assertIn("entry_2", result)
-
-    def test_build_full_data_csv_no_limit_when_max_chars_zero(self) -> None:
-        """max_chars=0 means no truncation (backwards compatible)."""
-        analyzer = ForensicAnalyzer()
-        rows = [
-            {"_row_ref": str(i), "name": f"entry_{i}", "data": "x" * 200}
-            for i in range(1, 101)
-        ]
-        columns = ["name", "data"]
-
-        result = analyzer._build_full_data_csv(rows=rows, columns=columns, max_chars=0)
-
-        self.assertNotIn("TRUNCATED", result)
-        self.assertIn("entry_100", result)
+        self.assertIn("entry_200", result)
 
     def test_timestamp_found_in_csv_uses_preloaded_lookup_keys(self) -> None:
         analyzer = ForensicAnalyzer()
