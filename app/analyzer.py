@@ -32,6 +32,7 @@ except Exception as error:
 TOKEN_CHAR_RATIO = 4
 DATE_BUFFER_DAYS = 7
 AI_MAX_TOKENS = 128000
+MIN_CONTEXT_TOKENS_FOR_STATISTICS_SECTION = 32000
 AI_RETRY_ATTEMPTS = 3
 AI_RETRY_BASE_DELAY = 1.0
 ARTIFACT_DEDUPLICATION_ENABLED = True
@@ -1439,6 +1440,22 @@ class ForensicAnalyzer:
 
         return "\n".join(lines), min_time, max_time
 
+    def _should_include_statistics_section(self) -> bool:
+        return self.ai_max_tokens >= MIN_CONTEXT_TOKENS_FOR_STATISTICS_SECTION
+
+    @staticmethod
+    def _strip_statistics_section(template: str) -> str:
+        """Remove the statistics heading + placeholder block from a prompt template."""
+        patterns = (
+            r"(?im)^[ \t]*#{1,6}[ \t]*statistics[ \t]*\r?\n[ \t]*\{\{statistics\}\}[ \t]*\r?\n?",
+            r"(?im)^[ \t]*(?:statistics|stats)\s*:\s*\r?\n[ \t]*\{\{statistics\}\}[ \t]*\r?\n?",
+            r"(?im)^[ \t]*\{\{statistics\}\}[ \t]*\r?\n?",
+        )
+        cleaned = template
+        for pattern in patterns:
+            cleaned = re.sub(pattern, "", cleaned)
+        return cleaned
+
     def _extract_ioc_targets(self, investigation_context: str) -> dict[str, list[str]]:
         text = self._stringify_value(investigation_context)
         if not text:
@@ -1597,7 +1614,12 @@ class ForensicAnalyzer:
     ) -> str:
         """Prepare one artifact CSV as a bounded, analysis-ready prompt."""
         resolved_csv_path = csv_path if csv_path is not None else self._resolve_artifact_csv_path(artifact_key)
-        template = self.artifact_prompt_template
+        include_statistics = self._should_include_statistics_section()
+        template = (
+            self.artifact_prompt_template
+            if include_statistics
+            else self._strip_statistics_section(self.artifact_prompt_template)
+        )
         artifact_metadata = self._resolve_artifact_metadata(artifact_key)
 
         context_dates = self._extract_dates_from_context(investigation_context)
@@ -1701,47 +1723,51 @@ class ForensicAnalyzer:
                 dedup_audit_details["write_error"] = dedup_write_error
             self._audit_log("artifact_deduplicated", dedup_audit_details)
 
-        statistics, min_time, max_time = self._compute_statistics(rows=analysis_rows, columns=analysis_columns)
-        stats_prefix: list[str] = []
-        if filter_start and filter_end:
-            if filter_source == "step_2_selection" and self._explicit_analysis_date_range_label:
-                start_date, end_date = self._explicit_analysis_date_range_label
-                filter_details = (
-                    "Date filter applied from Step 2 selection: "
-                    f"{start_date} to {end_date} (inclusive).\n"
-                    f"Rows kept after filter: {len(analysis_rows)} of {source_row_count}.\n"
-                    f"Rows without parseable timestamp (included unfiltered): {rows_without_timestamp}.\n"
-                )
-            else:
-                filter_details = (
-                    "Date filter applied from investigation context: "
-                    f"{self._format_datetime(filter_start)} to {self._format_datetime(filter_end)} "
-                    f"(+/- {self.date_buffer_days} days).\n"
-                    f"Rows kept after filter: {len(analysis_rows)} of {source_row_count}.\n"
-                    f"Rows without parseable timestamp (included unfiltered): {rows_without_timestamp}.\n"
-                )
-            stats_prefix.append(filter_details.rstrip())
+        statistics = ""
+        if include_statistics:
+            statistics, min_time, max_time = self._compute_statistics(rows=analysis_rows, columns=analysis_columns)
+            stats_prefix: list[str] = []
+            if filter_start and filter_end:
+                if filter_source == "step_2_selection" and self._explicit_analysis_date_range_label:
+                    start_date, end_date = self._explicit_analysis_date_range_label
+                    filter_details = (
+                        "Date filter applied from Step 2 selection: "
+                        f"{start_date} to {end_date} (inclusive).\n"
+                        f"Rows kept after filter: {len(analysis_rows)} of {source_row_count}.\n"
+                        f"Rows without parseable timestamp (included unfiltered): {rows_without_timestamp}.\n"
+                    )
+                else:
+                    filter_details = (
+                        "Date filter applied from investigation context: "
+                        f"{self._format_datetime(filter_start)} to {self._format_datetime(filter_end)} "
+                        f"(+/- {self.date_buffer_days} days).\n"
+                        f"Rows kept after filter: {len(analysis_rows)} of {source_row_count}.\n"
+                        f"Rows without parseable timestamp (included unfiltered): {rows_without_timestamp}.\n"
+                    )
+                stats_prefix.append(filter_details.rstrip())
 
-        if self.artifact_deduplication_enabled:
-            dedup_details = [
-                "Artifact deduplication enabled.",
-                f"Rows removed as timestamp/ID-only duplicates: {deduplicated_records}.",
-                f"Rows annotated with deduplication comment: {dedup_annotated_rows}.",
-            ]
-            if dedup_variant_columns:
-                dedup_details.append(
-                    "Dedup variant columns: " + ", ".join(dedup_variant_columns) + "."
+            if self.artifact_deduplication_enabled:
+                dedup_details = [
+                    "Artifact deduplication enabled.",
+                    f"Rows removed as timestamp/ID-only duplicates: {deduplicated_records}.",
+                    f"Rows annotated with deduplication comment: {dedup_annotated_rows}.",
+                ]
+                if dedup_variant_columns:
+                    dedup_details.append(
+                        "Dedup variant columns: " + ", ".join(dedup_variant_columns) + "."
+                    )
+                stats_prefix.append("\n".join(dedup_details))
+
+            if projection_applied:
+                stats_prefix.append(
+                    "AI column projection applied: " + ", ".join(analysis_columns) + "."
                 )
-            stats_prefix.append("\n".join(dedup_details))
 
-        if projection_applied:
-            stats_prefix.append(
-                "AI column projection applied: " + ", ".join(analysis_columns) + "."
-            )
-
-        if stats_prefix:
-            prefix_text = "\n".join(stats_prefix)
-            statistics = f"{prefix_text}\n{statistics}"
+            if stats_prefix:
+                prefix_text = "\n".join(stats_prefix)
+                statistics = f"{prefix_text}\n{statistics}"
+        else:
+            min_time, max_time = self._time_range_for_rows(analysis_rows)
 
         full_data_csv = self._build_full_data_csv(
             rows=analysis_rows,

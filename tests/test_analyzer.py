@@ -277,6 +277,42 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("## Final Context Reminder (Do Not Ignore)", filled_prompt)
         self.assertIn("- Artifact key: runkeys", filled_prompt)
 
+    def test_prepare_artifact_data_omits_statistics_section_for_small_context_window(self) -> None:
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            prompts_dir = temp_path / "prompts"
+            self._write_prompt_template(prompts_dir)
+
+            csv_path = temp_path / "runkeys.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "name", "command", "key"])
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "ts": "2026-01-15T12:00:00+00:00",
+                        "name": "EntryA",
+                        "command": r"C:\Users\Public\evil.exe",
+                        "key": r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    }
+                )
+
+            analyzer = ForensicAnalyzer(
+                config={"analysis": {"ai_max_tokens": 31999}},
+                artifact_csv_paths={"runkeys": csv_path},
+                prompts_dir=prompts_dir,
+                random_seed=7,
+            )
+            filled_prompt = analyzer._prepare_artifact_data(
+                artifact_key="runkeys",
+                investigation_context="Focus on January 15, 2026.",
+            )
+
+        self.assertIn("Total=1", filled_prompt)
+        self.assertIn("EntryA", filled_prompt)
+        self.assertNotIn("Stats:", filled_prompt)
+        self.assertNotIn("Record count:", filled_prompt)
+        self.assertNotIn("Rows removed as timestamp/ID-only duplicates:", filled_prompt)
+
     def test_prepare_artifact_data_uses_artifact_instruction_prompt_file(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
             temp_path = Path(temp_dir)
@@ -1280,4 +1316,3 @@ class AnalyzerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
