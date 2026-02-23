@@ -568,12 +568,18 @@ def _prepare_openai_attachment_upload(attachment: Mapping[str, str]) -> tuple[st
 def _inline_attachment_data_into_prompt(
     user_prompt: str,
     attachments: list[Mapping[str, str]] | None,
+    max_chars: int = 0,
 ) -> tuple[str, bool]:
-    """Append attachment file contents to the user prompt for text-only fallback."""
+    """Append attachment file contents to the user prompt for text-only fallback.
+
+    When *max_chars* is positive, the total inlined attachment text is truncated
+    to stay within the budget so the prompt fits the model's context window.
+    """
     normalized_attachments = _normalize_attachment_inputs(attachments)
     if not normalized_attachments:
         return user_prompt, False
 
+    chars_remaining = max_chars if max_chars > 0 else 0
     inline_sections: list[str] = []
     for attachment in normalized_attachments:
         attachment_path = Path(attachment["path"])
@@ -587,6 +593,21 @@ def _inline_attachment_data_into_prompt(
             continue
         if not attachment_text.strip():
             continue
+
+        if max_chars > 0 and chars_remaining <= 0:
+            break
+        if max_chars > 0 and len(attachment_text) > chars_remaining:
+            truncated = attachment_text[:chars_remaining].rsplit("\n", 1)[0]
+            rows_shown = truncated.count("\n")
+            attachment_text = (
+                f"{truncated}\n"
+                f"... [TRUNCATED — showing ~{rows_shown} lines of attachment. "
+                f"Data was reduced to fit the model context window.]"
+            )
+            chars_remaining = 0
+        elif max_chars > 0:
+            chars_remaining -= len(attachment_text)
+
         inline_sections.append(
             "\n".join(
                 [
@@ -1387,6 +1408,7 @@ class LocalProvider(AIProvider):
         model: str,
         api_key: str = "not-needed",
         attach_csv_as_file: bool = True,
+        max_prompt_chars: int = 0,
     ) -> None:
         try:
             import openai
@@ -1405,6 +1427,7 @@ class LocalProvider(AIProvider):
         self.model = model
         self.api_key = normalized_api_key
         self.attach_csv_as_file = bool(attach_csv_as_file)
+        self._max_prompt_chars = max(0, max_prompt_chars)
         self._csv_attachment_supported: bool | None = None
         self.client = openai.OpenAI(api_key=normalized_api_key, base_url=self.base_url)
         logger.info("Initialized local provider at %s with model %s", self.base_url, model)
@@ -1672,9 +1695,13 @@ class LocalProvider(AIProvider):
     ) -> str:
         prompt_for_completion = user_prompt
         if attachments and self.attach_csv_as_file:
+            attachment_budget = 0
+            if self._max_prompt_chars > 0:
+                attachment_budget = max(0, self._max_prompt_chars - len(user_prompt))
             prompt_for_completion, inlined_attachment_data = _inline_attachment_data_into_prompt(
                 user_prompt=user_prompt,
                 attachments=attachments,
+                max_chars=attachment_budget,
             )
             if inlined_attachment_data:
                 logger.info("Local attachment fallback inlined attachment data into prompt.")
@@ -1789,11 +1816,20 @@ def create_provider(config: dict[str, Any]) -> AIProvider:
         local_config = ai_config.get("local", {})
         if not isinstance(local_config, dict):
             raise ValueError("Invalid configuration: `ai.local` must be a dictionary.")
+        analysis_config = config.get("analysis", {})
+        if not isinstance(analysis_config, dict):
+            analysis_config = {}
+        try:
+            ai_max_tokens = max(1, int(analysis_config.get("ai_max_tokens", 128000)))
+        except (TypeError, ValueError):
+            ai_max_tokens = 128000
+        max_prompt_chars = int(ai_max_tokens * 4 * 0.8)
         return LocalProvider(
             base_url=str(local_config.get("base_url", DEFAULT_LOCAL_BASE_URL)),
             model=str(local_config.get("model", DEFAULT_LOCAL_MODEL)),
             api_key=_normalize_api_key_value(local_config.get("api_key", "not-needed")) or "not-needed",
             attach_csv_as_file=bool(local_config.get("attach_csv_as_file", True)),
+            max_prompt_chars=max_prompt_chars,
         )
 
     if provider_name == "kimi":

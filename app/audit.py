@@ -26,6 +26,7 @@ ACTION_TYPES = frozenset(
         "artifact_ai_projection",
         "artifact_deduplicated",
         "inline_csv_truncated",
+        "chunked_analysis_started",
         "artifact_ai_projection_warning",
         "prompt_submitted",
         "report_generated",

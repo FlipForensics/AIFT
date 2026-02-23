@@ -106,6 +106,8 @@ ollama serve
 
 In AIFT settings: select **Local**, set URL to `http://localhost:11434/v1`, model to `llama3.1:70b`.
 
+**Important: set Analysis Max Tokens to match your model's context window.** For example, if you run `qwen3:8b` (8K context), set `Analysis Max Tokens` to `8000` in settings. This controls how much data is sent per AI call. When an artifact's data exceeds the context budget, AIFT automatically splits it into chunks - each chunk is analyzed independently and findings are merged so no rows are missed. Large-context cloud models (Claude, OpenAI) don't need this adjustment.
+
 ### Kimi
 
 Get an API key from [platform.moonshot.ai](https://platform.moonshot.ai). In AIFT settings: select **Kimi**, paste your key. The default model is `kimi-k2-turbo-preview` (256K context).
@@ -187,6 +189,7 @@ AIFT is built with forensic defensibility in mind:
 - **SHA-256 + MD5 hashing** on intake and before report generation. Hash match is verified and shown in the report.
 - **Complete audit trail.** Every action (upload, parse, analyze, report) is logged with UTC timestamps to a per-case `audit.jsonl` file.
 - **AI guardrails.** The AI is instructed to cite specific records, state uncertainty explicitly, and never fabricate evidence. Findings include confidence ratings (HIGH / MEDIUM / LOW).
+- **Prompt audit trail.** Every prompt sent to the AI (system prompt + user prompt) is saved to the case's `prompts/` directory. This allows full review of exactly what the AI was asked, regardless of provider.
 - **Disclaimer in every report.** AI-assisted findings must be verified by a qualified examiner before use in legal or formal proceedings.
 
 ---
@@ -227,15 +230,25 @@ aift/
 ├── images/              # Branding assets
 ├── profile/             # Artifact selection presets
 ├── prompts/             # AI prompt templates (customizable)
-│   └── artifact_instructions/  # Per-artifact analysis guidance
+│   ├── artifact_instructions/  # Per-artifact analysis guidance
+│   └── chunk_merge.md          # Merge template for chunked analysis
 ├── static/              # Frontend assets (CSS + vanilla JS)
 ├── templates/           # Jinja2 templates (UI + report)
 ├── tests/               # Unit tests
 └── cases/               # Case data (created at runtime)
+    └── <case-id>/
+        ├── evidence/            # Uploaded evidence files
+        ├── parsed/              # Parsed artifact CSVs
+        ├── prompts/             # Saved AI prompts (auto-generated)
+        ├── reports/             # Generated HTML reports
+        └── audit.jsonl          # Append-only audit trail
 ```
 
-Prompt templates in `prompts/` are plain markdown files. Edit them to tune AI analysis behavior without touching code. 
+Prompt templates in `prompts/` are plain markdown files. Edit them to tune AI analysis behavior without touching code. The `chunk_merge.md` template controls how findings from chunked analysis (used for small-context local models) are merged into a single result.
+
 The `config/artifact_ai_columns.yaml` file controls which columns from each parsed artifact are sent to the AI - edit it to include or exclude fields per artifact to fine-tune what the AI sees.
+
+During analysis, every prompt sent to the AI is saved to the case's `prompts/` directory for audit and reproducibility.
 
 ---
 
