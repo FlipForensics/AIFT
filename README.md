@@ -108,6 +108,8 @@ In AIFT settings: select **Local**, set URL to `http://localhost:11434/v1`, mode
 
 **Important: set Analysis Max Tokens to match your model's context window.** For example, if you run `qwen3:8b` (8K context), set `Analysis Max Tokens` to `8000` in settings. This controls how much data is sent per AI call. When an artifact's data exceeds the context budget, AIFT automatically splits it into chunks - each chunk is analyzed independently and findings are merged so no rows are missed. Large-context cloud models (Claude, OpenAI) don't need this adjustment.
 
+For slower local runs, increase `ai.local.request_timeout_seconds` in `config.yaml` (default: `3600`).
+
 ### Kimi
 
 Get an API key from [platform.moonshot.ai](https://platform.moonshot.ai). In AIFT settings: select **Kimi**, paste your key. The default model is `kimi-k2-turbo-preview` (256K context).

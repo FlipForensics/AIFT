@@ -507,6 +507,16 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
             <input id="setting-citation-spot-check-limit" name="citation_spot_check_limit" type="number" min="1" value="20">
           </div>
           <div class="form-row">
+            <label for="setting-local-request-timeout-seconds">Local Request Timeout (seconds)</label>
+            <input
+              id="setting-local-request-timeout-seconds"
+              name="local_request_timeout_seconds"
+              type="number"
+              min="1"
+              value="3600"
+            >
+          </div>
+          <div class="form-row">
             <label for="setting-artifact-deduplication-enabled">Compress Artifact Records For AI</label>
             <input
               id="setting-artifact-deduplication-enabled"

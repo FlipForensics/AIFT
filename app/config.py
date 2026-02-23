@@ -33,6 +33,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "model": "llama3.1:70b",
             "api_key": "not-needed",
             "attach_csv_as_file": True,
+            "request_timeout_seconds": 3600,
         },
     },
     "server": {

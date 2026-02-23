@@ -892,6 +892,53 @@ class TestLocalProvider(unittest.TestCase):
         self.assertEqual(kwargs["base_url"], "http://localhost:11434/v1")
 
     @patch("openai.OpenAI")
+    def test_uses_configured_timeout_and_disables_internal_retries(
+        self,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        LocalProvider(
+            base_url="http://localhost:11434/v1",
+            model="llama3.1:70b",
+            request_timeout_seconds=7200,
+        )
+        kwargs = mock_openai_cls.call_args.kwargs
+        self.assertEqual(kwargs["timeout"], 7200.0)
+        self.assertEqual(kwargs["max_retries"], 0)
+
+    @patch("openai.OpenAI")
+    def test_timeout_errors_surface_timeout_guidance(
+        self,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+
+        class _FakeAPIConnectionError(Exception):
+            pass
+
+        class _FakeAPITimeoutError(_FakeAPIConnectionError):
+            pass
+
+        with patch("openai.APIConnectionError", _FakeAPIConnectionError), patch(
+            "openai.APITimeoutError",
+            _FakeAPITimeoutError,
+        ):
+            provider = LocalProvider(
+                base_url="http://localhost:11434/v1",
+                model="llama3.1:70b",
+                request_timeout_seconds=1800,
+            )
+            mock_client.chat.completions.create.side_effect = _FakeAPITimeoutError(
+                "request timed out"
+            )
+
+            with self.assertRaises(AIProviderError) as ctx:
+                provider.analyze("system", "user")
+
+        self.assertIn("timed out after 1800 seconds", str(ctx.exception))
+        self.assertIn("ai.local.request_timeout_seconds", str(ctx.exception))
+
+    @patch("openai.OpenAI")
     def test_analyze_with_progress_streams_thinking_and_returns_final_text(
         self,
         mock_openai_cls: MagicMock,
@@ -1216,6 +1263,22 @@ class TestCreateProvider(unittest.TestCase):
         provider = create_provider(config)
         self.assertIsInstance(provider, LocalProvider)
         self.assertFalse(provider.attach_csv_as_file)
+
+    @patch("openai.OpenAI")
+    def test_creates_local_provider_with_custom_timeout(self, _mock: MagicMock) -> None:
+        config = {
+            "ai": {
+                "provider": "local",
+                "local": {
+                    "base_url": "http://localhost:11434/v1",
+                    "model": "llama3.1:70b",
+                    "request_timeout_seconds": 5400,
+                },
+            }
+        }
+        provider = create_provider(config)
+        self.assertIsInstance(provider, LocalProvider)
+        self.assertEqual(provider.request_timeout_seconds, 5400.0)
 
     @patch("openai.OpenAI")
     def test_creates_kimi_provider(self, _mock: MagicMock) -> None:

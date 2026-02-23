@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_TOKENS = 256000
 RATE_LIMIT_MAX_RETRIES = 3
 DEFAULT_LOCAL_BASE_URL = "http://localhost:11434/v1"
+DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS = 3600.0
 DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1"
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-6"
 DEFAULT_OPENAI_MODEL = "gpt-5.2"
@@ -149,6 +150,18 @@ def _resolve_api_key_candidates(config_key: Any, env_vars: tuple[str, ...]) -> s
         if normalized_value:
             return normalized_value
     return ""
+
+
+def _resolve_timeout_seconds(value: Any, default_seconds: float) -> float:
+    """Normalize timeout values from config/env inputs."""
+    try:
+        timeout_seconds = float(value)
+    except (TypeError, ValueError):
+        return float(default_seconds)
+
+    if timeout_seconds <= 0:
+        return float(default_seconds)
+    return timeout_seconds
 
 
 def _extract_retry_after_seconds(error: Exception) -> float | None:
@@ -1393,6 +1406,7 @@ class LocalProvider(AIProvider):
         model: str,
         api_key: str = "not-needed",
         attach_csv_as_file: bool = True,
+        request_timeout_seconds: float = DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS,
     ) -> None:
         try:
             import openai
@@ -1411,9 +1425,24 @@ class LocalProvider(AIProvider):
         self.model = model
         self.api_key = normalized_api_key
         self.attach_csv_as_file = bool(attach_csv_as_file)
+        self.request_timeout_seconds = _resolve_timeout_seconds(
+            request_timeout_seconds,
+            DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS,
+        )
+        self._api_timeout_error_type = getattr(openai, "APITimeoutError", None)
         self._csv_attachment_supported: bool | None = None
-        self.client = openai.OpenAI(api_key=normalized_api_key, base_url=self.base_url)
-        logger.info("Initialized local provider at %s with model %s", self.base_url, model)
+        self.client = openai.OpenAI(
+            api_key=normalized_api_key,
+            base_url=self.base_url,
+            timeout=self.request_timeout_seconds,
+            max_retries=0,
+        )
+        logger.info(
+            "Initialized local provider at %s with model %s (timeout %.1fs)",
+            self.base_url,
+            model,
+            self.request_timeout_seconds,
+        )
 
     def analyze(
         self,
@@ -1455,6 +1484,15 @@ class LocalProvider(AIProvider):
         except AIProviderError:
             raise
         except self._openai.APIConnectionError as error:
+            if (
+                self._api_timeout_error_type is not None
+                and isinstance(error, self._api_timeout_error_type)
+            ) or "timeout" in str(error).lower():
+                raise AIProviderError(
+                    "Local AI request timed out after "
+                    f"{self.request_timeout_seconds:g} seconds. "
+                    "Increase `ai.local.request_timeout_seconds` for long-running prompts."
+                ) from error
             raise AIProviderError(
                 "Unable to connect to local AI endpoint. Check `ai.local.base_url` and ensure the server is running."
             ) from error
@@ -1800,6 +1838,10 @@ def create_provider(config: dict[str, Any]) -> AIProvider:
             model=str(local_config.get("model", DEFAULT_LOCAL_MODEL)),
             api_key=_normalize_api_key_value(local_config.get("api_key", "not-needed")) or "not-needed",
             attach_csv_as_file=bool(local_config.get("attach_csv_as_file", True)),
+            request_timeout_seconds=_resolve_timeout_seconds(
+                local_config.get("request_timeout_seconds", DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS),
+                DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS,
+            ),
         )
 
     if provider_name == "kimi":
