@@ -32,7 +32,7 @@ except Exception as error:
 TOKEN_CHAR_RATIO = 4
 DATE_BUFFER_DAYS = 7
 AI_MAX_TOKENS = 128000
-MIN_CONTEXT_TOKENS_FOR_STATISTICS_SECTION = 32000
+MIN_CONTEXT_TOKENS_FOR_STATISTICS_SECTION = 64000
 AI_RETRY_ATTEMPTS = 3
 AI_RETRY_BASE_DELAY = 1.0
 ARTIFACT_DEDUPLICATION_ENABLED = True
@@ -192,6 +192,20 @@ _DEFAULT_ARTIFACT_PROMPT_TEMPLATE = (
     "## Full Data (CSV)\n{{data_csv}}\n"
 )
 
+_DEFAULT_ARTIFACT_PROMPT_TEMPLATE_SMALL_CONTEXT = (
+    "## Priority Directives\n{{priority_directives}}\n\n"
+    "## Investigation Context\n{{investigation_context}}\n\n"
+    "## IOC Targets\n{{ioc_targets}}\n\n"
+    "## Artifact\n- Key: {{artifact_key}}\n- Name: {{artifact_name}}\n- Description: {{artifact_description}}\n\n"
+    "## Dataset Scope\n- Total records: {{total_records}}\n"
+    "- Time range start: {{time_range_start}}\n- Time range end: {{time_range_end}}\n\n"
+    "## Incident Focus\n"
+    "- Prioritize suspicious activity that advances detection, scoping, containment, or remediation.\n"
+    "- Use baseline references only as supporting context for behavior shifts.\n\n"
+    "## Analysis Instructions\n{{analysis_instructions}}\n\n"
+    "## Full Data (CSV)\n{{data_csv}}\n"
+)
+
 _DEFAULT_SUMMARY_PROMPT_TEMPLATE = (
     "## Priority Directives\n{{priority_directives}}\n\n"
     "## Investigation Context\n{{investigation_context}}\n\n"
@@ -277,6 +291,10 @@ class ForensicAnalyzer:
         self.artifact_prompt_template = self._load_prompt_template(
             "artifact_analysis.md",
             default=_DEFAULT_ARTIFACT_PROMPT_TEMPLATE,
+        )
+        self.artifact_prompt_template_small_context = self._load_prompt_template(
+            "artifact_analysis_small_context.md",
+            default=_DEFAULT_ARTIFACT_PROMPT_TEMPLATE_SMALL_CONTEXT,
         )
         self.artifact_instruction_prompts = self._load_artifact_instruction_prompts()
         self.summary_prompt_template = self._load_prompt_template(
@@ -994,6 +1012,7 @@ class ForensicAnalyzer:
         provider = self.model_info.get("provider", "unknown")
         summary_artifact_key = "cross_artifact_summary"
         summary_artifact_name = "Cross-Artifact Summary"
+        summary_prompt_filename = f"{self._sanitize_filename(summary_artifact_key)}.md"
 
         self._audit_log(
             "analysis_started",
@@ -1006,7 +1025,7 @@ class ForensicAnalyzer:
         )
 
         self._save_case_prompt(
-            "summary.md",
+            summary_prompt_filename,
             self.system_prompt,
             summary_prompt,
         )
@@ -1443,19 +1462,6 @@ class ForensicAnalyzer:
     def _should_include_statistics_section(self) -> bool:
         return self.ai_max_tokens >= MIN_CONTEXT_TOKENS_FOR_STATISTICS_SECTION
 
-    @staticmethod
-    def _strip_statistics_section(template: str) -> str:
-        """Remove the statistics heading + placeholder block from a prompt template."""
-        patterns = (
-            r"(?im)^[ \t]*#{1,6}[ \t]*statistics[ \t]*\r?\n[ \t]*\{\{statistics\}\}[ \t]*\r?\n?",
-            r"(?im)^[ \t]*(?:statistics|stats)\s*:\s*\r?\n[ \t]*\{\{statistics\}\}[ \t]*\r?\n?",
-            r"(?im)^[ \t]*\{\{statistics\}\}[ \t]*\r?\n?",
-        )
-        cleaned = template
-        for pattern in patterns:
-            cleaned = re.sub(pattern, "", cleaned)
-        return cleaned
-
     def _extract_ioc_targets(self, investigation_context: str) -> dict[str, list[str]]:
         text = self._stringify_value(investigation_context)
         if not text:
@@ -1615,11 +1621,7 @@ class ForensicAnalyzer:
         """Prepare one artifact CSV as a bounded, analysis-ready prompt."""
         resolved_csv_path = csv_path if csv_path is not None else self._resolve_artifact_csv_path(artifact_key)
         include_statistics = self._should_include_statistics_section()
-        template = (
-            self.artifact_prompt_template
-            if include_statistics
-            else self._strip_statistics_section(self.artifact_prompt_template)
-        )
+        template = self.artifact_prompt_template if include_statistics else self.artifact_prompt_template_small_context
         artifact_metadata = self._resolve_artifact_metadata(artifact_key)
 
         context_dates = self._extract_dates_from_context(investigation_context)

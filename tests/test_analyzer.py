@@ -79,8 +79,13 @@ class AnalyzerTests(unittest.TestCase):
             "Instructions={{analysis_instructions}}\n"
             "Data:\n{{data_csv}}\n"
         )
+        small_context_template = template.replace("Stats:\n{{statistics}}\n", "")
         prompts_dir.mkdir(parents=True, exist_ok=True)
         (prompts_dir / "artifact_analysis.md").write_text(template, encoding="utf-8")
+        (prompts_dir / "artifact_analysis_small_context.md").write_text(
+            small_context_template,
+            encoding="utf-8",
+        )
         (prompts_dir / "system_prompt.md").write_text("SYSTEM PROMPT", encoding="utf-8")
         (prompts_dir / "summary_prompt.md").write_text(
             (
@@ -297,7 +302,7 @@ class AnalyzerTests(unittest.TestCase):
                 )
 
             analyzer = ForensicAnalyzer(
-                config={"analysis": {"ai_max_tokens": 31999}},
+                config={"analysis": {"ai_max_tokens": 63999}},
                 artifact_csv_paths={"runkeys": csv_path},
                 prompts_dir=prompts_dir,
                 random_seed=7,
@@ -348,6 +353,51 @@ class AnalyzerTests(unittest.TestCase):
             )
 
         self.assertIn("Instructions=RUNKEYS-SPECIFIC-INSTRUCTIONS", filled_prompt)
+
+    def test_prepare_artifact_data_uses_small_context_prompt_template(self) -> None:
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            prompts_dir = temp_path / "prompts"
+            self._write_prompt_template(prompts_dir)
+
+            (prompts_dir / "artifact_analysis_small_context.md").write_text(
+                (
+                    "SMALL-CONTEXT-TEMPLATE\n"
+                    "Key={{artifact_key}}\n"
+                    "Total={{total_records}}\n"
+                    "Data:\n{{data_csv}}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            csv_path = temp_path / "runkeys.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "name", "command", "key"])
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "ts": "2026-01-15T12:00:00+00:00",
+                        "name": "EntryA",
+                        "command": r"C:\Users\Public\evil.exe",
+                        "key": r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    }
+                )
+
+            analyzer = ForensicAnalyzer(
+                config={"analysis": {"ai_max_tokens": 63999}},
+                artifact_csv_paths={"runkeys": csv_path},
+                prompts_dir=prompts_dir,
+                random_seed=7,
+            )
+            filled_prompt = analyzer._prepare_artifact_data(
+                artifact_key="runkeys",
+                investigation_context="Focus on January 15, 2026.",
+            )
+
+        self.assertIn("SMALL-CONTEXT-TEMPLATE", filled_prompt)
+        self.assertIn("Total=1", filled_prompt)
+        self.assertNotIn("Stats:", filled_prompt)
+        self.assertNotIn("Record count:", filled_prompt)
 
     def test_prepare_artifact_data_uses_normalized_artifact_instruction_prompt(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:

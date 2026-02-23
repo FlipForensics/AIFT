@@ -12,9 +12,6 @@
 ## Data
 Records: {{total_records}} | Time range: {{time_range_start}} to {{time_range_end}}
 
-### Statistics
-{{statistics}}
-
 ## Task
 
 Analyze this data for evidence of compromise in the context of the investigation above.
@@ -40,7 +37,7 @@ Order by severity, then confidence. Do not pad with low-value observations.
 
 **IOC Status** (only if the investigation context mentions specific IOCs)
 
-- IOC → Observed / Not Observed / Not Assessable. Evidence if observed.
+- IOC -> Observed / Not Observed / Not Assessable. Evidence if observed.
 
 **Data Gaps**
 
