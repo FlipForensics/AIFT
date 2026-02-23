@@ -31,7 +31,6 @@ For each finding, use this format:
   - Evidence: timestamp, value, and row reference from the data.
   - Why it matters: one sentence on incident impact or risk.
   - Alternative explanation: most likely benign reason for this, if any.
-  - Verify: one specific follow-up action.
 
 Order by severity, then confidence. Do not pad with low-value observations.
 
