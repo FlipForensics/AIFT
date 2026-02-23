@@ -1483,6 +1483,7 @@ class ForensicAnalyzer:
             "time_range_end": self._format_datetime(max_time),
             "statistics": statistics,
             "analysis_instructions": artifact_guidance,
+            "artifact_guidance": artifact_guidance,
             "data_csv": full_data_csv,
         }
 
