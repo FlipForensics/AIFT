@@ -106,13 +106,11 @@ ollama serve
 
 In AIFT settings: select **Local**, set URL to `http://localhost:11434/v1`, model to `llama3.1:70b`.
 
-**Important: set Analysis Max Tokens to match your model's context window.** For example, if you run `qwen3:8b` with 32K context, set `Analysis Max Tokens` to `32000` in settings. This controls how much data is sent per AI call. When an artifact's data exceeds the context budget, AIFT automatically splits it into chunks - each chunk is analyzed independently and findings are merged so no rows are missed. Large-context cloud models (Claude, OpenAI) don't need this adjustment.
+**Important: set `Analysis Max Tokens` to match your model's context window** (Settings > Advanced). For example, `qwen3:8b` with 32K context → set to `32000`. Cloud models (Claude, OpenAI, Kimi) default to 128K and typically don't need adjustment.
 
-As a bare minimum 32K tokens is required. 
+When an artifact's data exceeds the context budget, AIFT automatically **chunks** the CSV across multiple AI calls so every row is analyzed. Chunk findings are then merged hierarchically - grouped into batches that fit the context window, merged by the AI, and repeated until a single result remains. This ensures no data is lost regardless of model size. The maximum number of merge rounds before fallback can be configured via `Max Merge Rounds` in advanced settings (default: 5).
 
-### Kimi
-
-Get an API key from [platform.moonshot.ai](https://platform.moonshot.ai). In AIFT settings: select **Kimi**, paste your key. The default model is `kimi-k2-turbo-preview` (256K context).
+A minimum of 32K tokens is strongly recommended.
 
 ### Environment variables
 
