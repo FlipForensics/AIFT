@@ -1031,6 +1031,12 @@ class RoutesTests(unittest.TestCase):
                 },
             ),
         ):
+            settings_resp = self.client.post(
+                "/api/settings",
+                json={"analysis": {"ai_max_tokens": 2222}},
+            )
+            self.assertEqual(settings_resp.status_code, 200)
+
             create_resp = self.client.post("/api/cases", json={"case_name": "Chat Endpoints Case"})
             self.assertEqual(create_resp.status_code, 201)
             case_id = create_resp.get_json()["case_id"]
@@ -1085,6 +1091,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("Context Block:", str(first_call["user_prompt"]))
             self.assertIn("New User Question:", str(first_call["user_prompt"]))
             self.assertIn("Retrieved CSV data for this question", str(first_call["user_prompt"]))
+            self.assertEqual(first_call["max_tokens"], 2222)
 
         audit_entries = routes._read_audit_entries(self.cases_root / case_id)
         audit_actions = {str(entry.get("action", "")) for entry in audit_entries}

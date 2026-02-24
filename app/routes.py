@@ -1068,11 +1068,27 @@ def _render_chat_messages_for_provider(messages: list[dict[str, str]]) -> str:
 def _resolve_chat_max_tokens(config: dict[str, Any]) -> int:
     analysis_config = config.get("analysis", {})
     if not isinstance(analysis_config, dict):
-        analysis_config = {}
+        raise ValueError(
+            "Chat max tokens are not configured. Set `analysis.ai_max_tokens` in Settings."
+        )
+
+    if "ai_max_tokens" not in analysis_config:
+        raise ValueError(
+            "Chat max tokens are not configured. Set `analysis.ai_max_tokens` in Settings."
+        )
+
     try:
-        return max(1, int(analysis_config.get("ai_max_tokens", 4096)))
+        resolved = int(analysis_config.get("ai_max_tokens"))
     except (TypeError, ValueError):
-        return 4096
+        raise ValueError(
+            "Invalid `analysis.ai_max_tokens` value in Settings. Provide a positive integer."
+        ) from None
+
+    if resolved <= 0:
+        raise ValueError(
+            "Invalid `analysis.ai_max_tokens` value in Settings. Provide a positive integer."
+        )
+    return resolved
 
 
 def _resolve_hash_verification_path(case: dict[str, Any]) -> Path | None:
@@ -1426,7 +1442,15 @@ def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> No
         )
         return
 
-    chat_max_tokens = _resolve_chat_max_tokens(config_snapshot)
+    try:
+        chat_max_tokens = _resolve_chat_max_tokens(config_snapshot)
+    except ValueError as error:
+        message_text = str(error)
+        LOGGER.warning("Chat configuration rejected for case %s: %s", case_id, message_text)
+        _set_progress_status(CHAT_PROGRESS, case_id, "failed", message_text)
+        _emit_progress(CHAT_PROGRESS, case_id, {"type": "error", "message": message_text})
+        return
+
     chat_manager = ChatManager(case["case_dir"], max_context_tokens=chat_max_tokens)
     history_snapshot = chat_manager.get_history()
     message_index = (
