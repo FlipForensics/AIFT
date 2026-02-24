@@ -35,6 +35,7 @@ AI_MAX_TOKENS = 128000
 DEFAULT_SHORTENED_PROMPT_CUTOFF_TOKENS = 64000
 AI_RETRY_ATTEMPTS = 3
 AI_RETRY_BASE_DELAY = 1.0
+MAX_MERGE_ROUNDS = 5
 ARTIFACT_DEDUPLICATION_ENABLED = True
 DEDUPLICATED_PARSED_DIRNAME = "parsed_deduplicated"
 DEDUP_COMMENT_COLUMN = "_dedup_comment"
@@ -355,6 +356,12 @@ class ForensicAnalyzer:
             analysis_config=analysis_config,
             key="citation_spot_check_limit",
             default=CITATION_SPOT_CHECK_LIMIT,
+            minimum=1,
+        )
+        self.max_merge_rounds = self._read_int_setting(
+            analysis_config=analysis_config,
+            key="max_merge_rounds",
+            default=MAX_MERGE_ROUNDS,
             minimum=1,
         )
         self.artifact_deduplication_enabled = self._read_bool_setting(
@@ -862,6 +869,53 @@ class ForensicAnalyzer:
 
         while len(current_findings) > 1:
             merge_round += 1
+
+            # Fallback: after max_merge_rounds, stop recursing and just
+            # concatenate the remaining findings (capped proportionally
+            # to fit the context window).
+            if merge_round > self.max_merge_rounds:
+                self.logger.warning(
+                    "Hierarchical merge for %s hit %d-round limit with %d findings remaining. "
+                    "Falling back to concatenation.",
+                    artifact_key,
+                    self.max_merge_rounds,
+                    len(current_findings),
+                )
+                total_chars = sum(len(f) for f in current_findings)
+                if total_chars > findings_budget:
+                    # Cap each finding proportionally to fit the budget.
+                    per_finding_budget = max(200, findings_budget // len(current_findings))
+                    capped = []
+                    for f in current_findings:
+                        if len(f) > per_finding_budget:
+                            capped.append(f[:per_finding_budget] + "\n[... truncated ...]")
+                        else:
+                            capped.append(f)
+                    concatenated = "\n\n".join(capped)
+                else:
+                    concatenated = "\n\n".join(current_findings)
+
+                # One final merge call on the concatenated findings.
+                merge_prompt = self._build_merge_prompt(
+                    findings_text=concatenated,
+                    batch_count=len(current_findings),
+                    artifact_key=artifact_key,
+                    artifact_name=artifact_name,
+                    investigation_context=investigation_context,
+                )
+                safe_key = self._sanitize_filename(artifact_key)
+                self._save_case_prompt(
+                    f"artifact_{safe_key}_merge_fallback.md",
+                    self.system_prompt,
+                    merge_prompt,
+                )
+                return self._call_ai_with_retry(
+                    lambda prompt=merge_prompt: self.ai_provider.analyze(
+                        system_prompt=self.system_prompt,
+                        user_prompt=prompt,
+                        max_tokens=self.ai_max_tokens,
+                    )
+                )
 
             # Group findings into batches that fit within the budget.
             batches: list[list[str]] = []

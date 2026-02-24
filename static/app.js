@@ -135,6 +135,7 @@
     el.setDateBufferDays = q("setting-date-buffer-days");
     el.setCitationSpotCheckLimit = q("setting-citation-spot-check-limit");
     el.setLocalRequestTimeoutSeconds = q("setting-local-request-timeout-seconds");
+    el.setMaxMergeRounds = q("setting-max-merge-rounds");
     el.setArtifactDeduplicationEnabled = q("setting-artifact-deduplication-enabled");
 
     el.setAttachClaude = q("setting-attach-claude");
@@ -1915,6 +1916,7 @@
       num(obj(obj(s.ai).local).request_timeout_seconds, 3600),
       3600
     );
+    setNumberInput(el.setMaxMergeRounds, num(analysis.max_merge_rounds, 5), 5);
     updateAiMaxTokensWarning();
     if (el.setArtifactDeduplicationEnabled) {
       el.setArtifactDeduplicationEnabled.checked = boolSetting(analysis.artifact_deduplication_enabled, true);
@@ -2086,6 +2088,7 @@
     base.analysis.connection_test_max_tokens = readIntInput(el.setConnectionMaxTokens, 256, 1);
     base.analysis.date_buffer_days = readIntInput(el.setDateBufferDays, 7, 0);
     base.analysis.citation_spot_check_limit = readIntInput(el.setCitationSpotCheckLimit, 20, 1);
+    base.analysis.max_merge_rounds = readIntInput(el.setMaxMergeRounds, 5, 1);
     base.ai.local.request_timeout_seconds = readIntInput(el.setLocalRequestTimeoutSeconds, 3600, 1);
     if (el.setArtifactDeduplicationEnabled) {
       base.analysis.artifact_deduplication_enabled = !!el.setArtifactDeduplicationEnabled.checked;

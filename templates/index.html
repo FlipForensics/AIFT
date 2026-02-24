@@ -531,6 +531,11 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
             >
           </div>
           <div class="form-row">
+            <label for="setting-max-merge-rounds">Max Merge Rounds</label>
+            <input id="setting-max-merge-rounds" name="max_merge_rounds" type="number" min="1" value="5">
+            <p>Maximum hierarchical merge rounds for chunked analysis before falling back to concatenation.</p>
+          </div>
+          <div class="form-row">
             <label for="setting-artifact-deduplication-enabled">Compress Artifact Records For AI</label>
             <input
               id="setting-artifact-deduplication-enabled"
