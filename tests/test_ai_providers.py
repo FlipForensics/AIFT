@@ -262,6 +262,28 @@ class TestClaudeProvider(unittest.TestCase):
         self.assertEqual(result, "Analysis result")
 
     @patch("anthropic.Anthropic")
+    def test_analyze_stream_yields_text_chunks(self, mock_anthropic_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_anthropic_cls.return_value = mock_client
+        mock_client.messages.create.return_value = [
+            SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(text="Chunk 1 "),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(text="Chunk 2"),
+            ),
+        ]
+
+        provider = ClaudeProvider(api_key="sk-test", model="claude-sonnet-4-20250514")
+        chunks = list(provider.analyze_stream("system", "user"))
+
+        self.assertEqual(chunks, ["Chunk 1 ", "Chunk 2"])
+        kwargs = mock_client.messages.create.call_args.kwargs
+        self.assertTrue(kwargs["stream"])
+
+    @patch("anthropic.Anthropic")
     def test_get_model_info(self, _mock: MagicMock) -> None:
         provider = ClaudeProvider(api_key="sk-test", model="claude-sonnet-4-20250514")
         info = provider.get_model_info()
@@ -497,6 +519,22 @@ class TestOpenAIProvider(unittest.TestCase):
         provider = OpenAIProvider(api_key="sk-test", model="gpt-4o")
         result = provider.analyze("system", "user")
         self.assertEqual(result, "GPT result")
+
+    @patch("openai.OpenAI")
+    def test_analyze_stream_yields_text_chunks(self, mock_openai_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_client.chat.completions.create.return_value = [
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="Chunk A "))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="Chunk B"))]),
+        ]
+
+        provider = OpenAIProvider(api_key="sk-test", model="gpt-4o")
+        chunks = list(provider.analyze_stream("system", "user"))
+
+        self.assertEqual(chunks, ["Chunk A ", "Chunk B"])
+        kwargs = mock_client.chat.completions.create.call_args.kwargs
+        self.assertTrue(kwargs["stream"])
 
     @patch("openai.OpenAI")
     def test_analyze_prefers_max_completion_tokens(self, mock_openai_cls: MagicMock) -> None:
@@ -756,6 +794,27 @@ class TestKimiProvider(unittest.TestCase):
         self.assertEqual(result, "Kimi result")
 
     @patch("openai.OpenAI")
+    def test_analyze_stream_yields_text_chunks(self, mock_openai_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_client.chat.completions.create.return_value = [
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="Chunk 1 "))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="Chunk 2"))]),
+        ]
+
+        provider = KimiProvider(
+            api_key="sk-test",
+            model=DEFAULT_KIMI_MODEL,
+            base_url="https://api.moonshot.ai/v1",
+        )
+        chunks = list(provider.analyze_stream("system", "user"))
+
+        self.assertEqual(chunks, ["Chunk 1 ", "Chunk 2"])
+        kwargs = mock_client.chat.completions.create.call_args.kwargs
+        self.assertTrue(kwargs["stream"])
+        self.assertEqual(kwargs["max_tokens"], 256000)
+
+    @patch("openai.OpenAI")
     def test_get_model_info(self, _mock: MagicMock) -> None:
         provider = KimiProvider(
             api_key="sk-test",
@@ -868,6 +927,24 @@ class TestLocalProvider(unittest.TestCase):
         )
         result = provider.analyze("system", "user")
         self.assertEqual(result, "Local result")
+
+    @patch("openai.OpenAI")
+    def test_analyze_stream_yields_text_chunks(self, mock_openai_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_client.chat.completions.create.return_value = [
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="Local chunk 1 "))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="Local chunk 2"))]),
+        ]
+
+        provider = LocalProvider(
+            base_url="http://localhost:11434/v1", model="llama3.1:70b"
+        )
+        chunks = list(provider.analyze_stream("system", "user"))
+
+        self.assertEqual(chunks, ["Local chunk 1 ", "Local chunk 2"])
+        kwargs = mock_client.chat.completions.create.call_args.kwargs
+        self.assertTrue(kwargs["stream"])
 
     @patch("openai.OpenAI")
     def test_get_model_info(self, _mock: MagicMock) -> None:

@@ -9,10 +9,11 @@ import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 import time
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping, TypeVar
 from urllib.parse import urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 DEFAULT_MAX_TOKENS = 256000
 RATE_LIMIT_MAX_RETRIES = 3
@@ -81,6 +82,15 @@ class AIProvider(ABC):
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
         """Send a prompt to the provider and return the generated text."""
+
+    @abstractmethod
+    def analyze_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> Iterator[str]:
+        """Stream generated text chunks for the provided prompt."""
 
     @abstractmethod
     def get_model_info(self) -> dict[str, str]:
@@ -272,6 +282,48 @@ def _extract_anthropic_text(response: Any) -> str:
                 chunks.append(block_text)
 
     return "".join(chunks).strip()
+
+
+def _extract_anthropic_stream_text(event: Any) -> str:
+    """Extract text deltas from Anthropic streamed events."""
+    if event is None:
+        return ""
+
+    event_type = getattr(event, "type", None)
+    if event_type is None and isinstance(event, dict):
+        event_type = event.get("type")
+
+    if event_type == "content_block_delta":
+        delta = getattr(event, "delta", None)
+        if delta is None and isinstance(event, dict):
+            delta = event.get("delta")
+        text = getattr(delta, "text", None)
+        if text is None and isinstance(delta, dict):
+            text = delta.get("text")
+        if isinstance(text, str):
+            return text
+
+    if event_type == "content_block_start":
+        content_block = getattr(event, "content_block", None)
+        if content_block is None and isinstance(event, dict):
+            content_block = event.get("content_block")
+        text = getattr(content_block, "text", None)
+        if text is None and isinstance(content_block, dict):
+            text = content_block.get("text")
+        if isinstance(text, str):
+            return text
+
+    delta = getattr(event, "delta", None)
+    if delta is None and isinstance(event, dict):
+        delta = event.get("delta")
+    if delta is not None:
+        text = getattr(delta, "text", None)
+        if text is None and isinstance(delta, dict):
+            text = delta.get("text")
+        if isinstance(text, str):
+            return text
+
+    return ""
 
 
 def _extract_openai_text(response: Any) -> str:
@@ -662,10 +714,10 @@ def _normalize_attachment_inputs(
 
 
 def _run_with_rate_limit_retries(
-    request_fn: Callable[[], str],
+    request_fn: Callable[[], _T],
     rate_limit_error_type: type[Exception],
     provider_name: str,
-) -> str:
+) -> _T:
     """Retry rate-limited requests with exponential backoff."""
     last_error: Exception | None = None
 
@@ -739,6 +791,58 @@ class ClaudeProvider(AIProvider):
             max_tokens=max_tokens,
         )
 
+    def analyze_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> Iterator[str]:
+        def _stream() -> Iterator[str]:
+            request_kwargs: dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": max_tokens,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_prompt}],
+                "stream": True,
+            }
+            try:
+                stream = _run_with_rate_limit_retries(
+                    request_fn=lambda: self._create_streaming_messages_with_token_limit_retry(request_kwargs),
+                    rate_limit_error_type=self._anthropic.RateLimitError,
+                    provider_name="Claude",
+                )
+                emitted = False
+                for event in stream:
+                    chunk_text = _extract_anthropic_stream_text(event)
+                    if not chunk_text:
+                        continue
+                    emitted = True
+                    yield chunk_text
+                if not emitted:
+                    raise AIProviderError("Claude returned an empty response.")
+            except AIProviderError:
+                raise
+            except self._anthropic.APIConnectionError as error:
+                raise AIProviderError(
+                    "Unable to connect to Claude API. Check network access and endpoint configuration."
+                ) from error
+            except self._anthropic.AuthenticationError as error:
+                raise AIProviderError(
+                    "Claude authentication failed. Check `ai.claude.api_key` or ANTHROPIC_API_KEY."
+                ) from error
+            except self._anthropic.BadRequestError as error:
+                if _is_context_length_error(error):
+                    raise AIProviderError(
+                        "Claude request exceeded the model context length. Reduce prompt size and retry."
+                    ) from error
+                raise AIProviderError(f"Claude request was rejected: {error}") from error
+            except self._anthropic.APIError as error:
+                raise AIProviderError(f"Claude API error: {error}") from error
+            except Exception as error:
+                raise AIProviderError(f"Unexpected Claude provider error: {error}") from error
+
+        return _stream()
+
     def analyze_with_attachments(
         self,
         system_prompt: str,
@@ -768,7 +872,7 @@ class ClaudeProvider(AIProvider):
 
         return self._run_claude_request(_request)
 
-    def _run_claude_request(self, request_fn: Callable[[], str]) -> str:
+    def _run_claude_request(self, request_fn: Callable[[], _T]) -> _T:
         try:
             return _run_with_rate_limit_retries(
                 request_fn=request_fn,
@@ -930,6 +1034,27 @@ class ClaudeProvider(AIProvider):
         with self.client.messages.stream(**effective_kwargs) as stream:
             return stream.get_final_message()
 
+    def _create_streaming_messages_with_token_limit_retry(self, request_kwargs: Mapping[str, Any]) -> Any:
+        effective_kwargs: dict[str, Any] = dict(request_kwargs)
+        for _ in range(2):
+            try:
+                return self.client.messages.create(**effective_kwargs)
+            except self._anthropic.BadRequestError as error:
+                requested_tokens = int(effective_kwargs.get("max_tokens", 0))
+                retry_token_count = _resolve_completion_token_retry_limit(
+                    error=error,
+                    requested_tokens=requested_tokens,
+                )
+                if retry_token_count is None:
+                    raise
+                logger.warning(
+                    "Claude rejected max_tokens=%d during streamed create request; retrying with max_tokens=%d.",
+                    requested_tokens,
+                    retry_token_count,
+                )
+                effective_kwargs["max_tokens"] = retry_token_count
+        return self.client.messages.create(**effective_kwargs)
+
     def get_model_info(self) -> dict[str, str]:
         return {"provider": "claude", "model": self.model}
 
@@ -978,6 +1103,67 @@ class OpenAIProvider(AIProvider):
             max_tokens=max_tokens,
         )
 
+    def analyze_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> Iterator[str]:
+        def _stream() -> Iterator[str]:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            stream = self._run_openai_request(
+                lambda: self._create_chat_completion_stream(
+                    messages=messages,
+                    max_tokens=max_tokens,
+                )
+            )
+            emitted = False
+            try:
+                for chunk in stream:
+                    choices = getattr(chunk, "choices", None)
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = getattr(choice, "delta", None)
+                    if delta is None and isinstance(choice, dict):
+                        delta = choice.get("delta")
+                    chunk_text = _extract_openai_delta_text(
+                        delta,
+                        ("content", "reasoning_content", "reasoning", "refusal"),
+                    )
+                    if not chunk_text:
+                        continue
+                    emitted = True
+                    yield chunk_text
+            except AIProviderError:
+                raise
+            except self._openai.APIConnectionError as error:
+                raise AIProviderError(
+                    "Unable to connect to OpenAI API. Check network access and endpoint configuration."
+                ) from error
+            except self._openai.AuthenticationError as error:
+                raise AIProviderError(
+                    "OpenAI authentication failed. Check `ai.openai.api_key` or OPENAI_API_KEY."
+                ) from error
+            except self._openai.BadRequestError as error:
+                if _is_context_length_error(error):
+                    raise AIProviderError(
+                        "OpenAI request exceeded the model context length. Reduce prompt size and retry."
+                    ) from error
+                raise AIProviderError(f"OpenAI request was rejected: {error}") from error
+            except self._openai.APIError as error:
+                raise AIProviderError(f"OpenAI API error: {error}") from error
+            except Exception as error:
+                raise AIProviderError(f"Unexpected OpenAI provider error: {error}") from error
+
+            if not emitted:
+                raise AIProviderError("OpenAI returned an empty response.")
+
+        return _stream()
+
     def analyze_with_attachments(
         self,
         system_prompt: str,
@@ -995,7 +1181,7 @@ class OpenAIProvider(AIProvider):
 
         return self._run_openai_request(_request)
 
-    def _run_openai_request(self, request_fn: Callable[[], str]) -> str:
+    def _run_openai_request(self, request_fn: Callable[[], _T]) -> _T:
         try:
             return _run_with_rate_limit_retries(
                 request_fn=request_fn,
@@ -1083,6 +1269,50 @@ class OpenAIProvider(AIProvider):
                     raise
                 logger.warning(
                     "OpenAI rejected %s=%d; retrying with %s=%d.",
+                    token_parameter,
+                    token_count,
+                    token_parameter,
+                    retry_token_count,
+                )
+                request_kwargs[token_parameter] = retry_token_count
+                return self.client.chat.completions.create(**request_kwargs)
+
+        try:
+            return _create_with_token_parameter(
+                token_parameter="max_completion_tokens",
+                token_count=max_tokens,
+            )
+        except self._openai.BadRequestError as error:
+            if not _is_unsupported_parameter_error(error, "max_completion_tokens"):
+                raise
+            return _create_with_token_parameter(
+                token_parameter="max_tokens",
+                token_count=max_tokens,
+            )
+
+    def _create_chat_completion_stream(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int,
+    ) -> Any:
+        def _create_with_token_parameter(token_parameter: str, token_count: int) -> Any:
+            request_kwargs: dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                token_parameter: token_count,
+                "stream": True,
+            }
+            try:
+                return self.client.chat.completions.create(**request_kwargs)
+            except self._openai.BadRequestError as error:
+                retry_token_count = _resolve_completion_token_retry_limit(
+                    error=error,
+                    requested_tokens=token_count,
+                )
+                if retry_token_count is None:
+                    raise
+                logger.warning(
+                    "OpenAI rejected %s=%d for streaming; retrying with %s=%d.",
                     token_parameter,
                     token_count,
                     token_parameter,
@@ -1247,6 +1477,75 @@ class KimiProvider(AIProvider):
             max_tokens=max_tokens,
         )
 
+    def analyze_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> Iterator[str]:
+        def _stream() -> Iterator[str]:
+            stream = self._run_kimi_request(
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    stream=True,
+                )
+            )
+            emitted = False
+            try:
+                for chunk in stream:
+                    choices = getattr(chunk, "choices", None)
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = getattr(choice, "delta", None)
+                    if delta is None and isinstance(choice, dict):
+                        delta = choice.get("delta")
+                    chunk_text = _extract_openai_delta_text(
+                        delta,
+                        ("content", "reasoning_content", "reasoning", "refusal"),
+                    )
+                    if not chunk_text:
+                        continue
+                    emitted = True
+                    yield chunk_text
+            except AIProviderError:
+                raise
+            except self._openai.APIConnectionError as error:
+                raise AIProviderError(
+                    "Unable to connect to Kimi API. Check `ai.kimi.base_url` and network access."
+                ) from error
+            except self._openai.AuthenticationError as error:
+                raise AIProviderError(
+                    "Kimi authentication failed. Check `ai.kimi.api_key`, MOONSHOT_API_KEY, or KIMI_API_KEY."
+                ) from error
+            except self._openai.BadRequestError as error:
+                if _is_context_length_error(error):
+                    raise AIProviderError(
+                        "Kimi request exceeded the model context length. Reduce prompt size and retry."
+                    ) from error
+                raise AIProviderError(f"Kimi request was rejected: {error}") from error
+            except self._openai.APIError as error:
+                if _is_kimi_model_not_available_error(error):
+                    raise AIProviderError(
+                        "Kimi rejected the configured model. "
+                        f"Current model: `{self.model}`. "
+                        "Set `ai.kimi.model` to a model enabled for your Moonshot account "
+                        "(for example `kimi-k2-turbo-preview`) and retry."
+                    ) from error
+                raise AIProviderError(f"Kimi API error: {error}") from error
+            except Exception as error:
+                raise AIProviderError(f"Unexpected Kimi provider error: {error}") from error
+
+            if not emitted:
+                raise AIProviderError("Kimi returned an empty response.")
+
+        return _stream()
+
     def analyze_with_attachments(
         self,
         system_prompt: str,
@@ -1264,7 +1563,7 @@ class KimiProvider(AIProvider):
 
         return self._run_kimi_request(_request)
 
-    def _run_kimi_request(self, request_fn: Callable[[], str]) -> str:
+    def _run_kimi_request(self, request_fn: Callable[[], _T]) -> _T:
         try:
             return _run_with_rate_limit_retries(
                 request_fn=request_fn,
@@ -1457,6 +1756,108 @@ class LocalProvider(AIProvider):
             max_tokens=max_tokens,
         )
 
+    def analyze_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> Iterator[str]:
+        def _stream() -> Iterator[str]:
+            try:
+                prompt_for_completion = self._build_chat_completion_prompt(
+                    user_prompt=user_prompt,
+                    attachments=None,
+                )
+                try:
+                    stream = _run_with_rate_limit_retries(
+                        request_fn=lambda: self.client.chat.completions.create(
+                            model=self.model,
+                            max_tokens=max_tokens,
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": prompt_for_completion},
+                            ],
+                            stream=True,
+                        ),
+                        rate_limit_error_type=self._openai.RateLimitError,
+                        provider_name="Local provider",
+                    )
+                except self._openai.BadRequestError as error:
+                    lowered_error = str(error).lower()
+                    if "stream" in lowered_error and ("unsupported" in lowered_error or "not support" in lowered_error):
+                        fallback_text = self._request_non_stream(
+                            system_prompt=system_prompt,
+                            user_prompt=user_prompt,
+                            max_tokens=max_tokens,
+                            attachments=None,
+                        )
+                        if fallback_text:
+                            yield fallback_text
+                            return
+                    raise
+
+                emitted = False
+                for chunk in stream:
+                    choices = getattr(chunk, "choices", None)
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = getattr(choice, "delta", None)
+                    if delta is None and isinstance(choice, dict):
+                        delta = choice.get("delta")
+                    chunk_text = _extract_openai_delta_text(
+                        delta,
+                        ("content", "reasoning_content", "reasoning", "thinking"),
+                    )
+                    if not chunk_text:
+                        continue
+                    emitted = True
+                    yield chunk_text
+
+                if not emitted:
+                    raise AIProviderError(
+                        "Local AI provider returned an empty streamed response. "
+                        "Try a different local model or increase max tokens."
+                    )
+            except AIProviderError:
+                raise
+            except self._openai.APIConnectionError as error:
+                if (
+                    self._api_timeout_error_type is not None
+                    and isinstance(error, self._api_timeout_error_type)
+                ) or "timeout" in str(error).lower():
+                    raise AIProviderError(
+                        "Local AI request timed out after "
+                        f"{self.request_timeout_seconds:g} seconds. "
+                        "Increase `ai.local.request_timeout_seconds` for long-running prompts."
+                    ) from error
+                raise AIProviderError(
+                    "Unable to connect to local AI endpoint. Check `ai.local.base_url` and ensure the server is running."
+                ) from error
+            except self._openai.AuthenticationError as error:
+                raise AIProviderError(
+                    "Local AI endpoint rejected authentication. Check `ai.local.api_key` if your server requires one."
+                ) from error
+            except self._openai.BadRequestError as error:
+                if _is_context_length_error(error):
+                    raise AIProviderError(
+                        "Local model request exceeded the context length. Reduce prompt size and retry."
+                    ) from error
+                raise AIProviderError(f"Local provider request was rejected: {error}") from error
+            except self._openai.APIError as error:
+                error_text = str(error).lower()
+                if "404" in error_text or "not found" in error_text:
+                    raise AIProviderError(
+                        "Local AI endpoint returned 404 (not found). "
+                        "This is often caused by a base URL missing `/v1`. "
+                        f"Current base URL: {self.base_url}"
+                    ) from error
+                raise AIProviderError(f"Local provider API error: {error}") from error
+            except Exception as error:
+                raise AIProviderError(f"Unexpected local provider error: {error}") from error
+
+        return _stream()
+
     def analyze_with_attachments(
         self,
         system_prompt: str,
@@ -1474,7 +1875,7 @@ class LocalProvider(AIProvider):
 
         return self._run_local_request(_request)
 
-    def _run_local_request(self, request_fn: Callable[[], str]) -> str:
+    def _run_local_request(self, request_fn: Callable[[], _T]) -> _T:
         try:
             return _run_with_rate_limit_retries(
                 request_fn=request_fn,

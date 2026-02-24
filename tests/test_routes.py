@@ -154,6 +154,7 @@ class RoutesTests(unittest.TestCase):
         routes.CASE_STATES.clear()
         routes.PARSE_PROGRESS.clear()
         routes.ANALYSIS_PROGRESS.clear()
+        routes.CHAT_PROGRESS.clear()
         unregister_all_case_log_handlers()
         FakeAnalyzer.last_artifact_keys = []
 
@@ -223,6 +224,7 @@ class RoutesTests(unittest.TestCase):
             self.assertNotIn(case_id, routes.CASE_STATES)
             self.assertNotIn(case_id, routes.PARSE_PROGRESS)
             self.assertNotIn(case_id, routes.ANALYSIS_PROGRESS)
+            self.assertNotIn(case_id, routes.CHAT_PROGRESS)
 
     def test_case_completion_cleans_global_case_entries(self) -> None:
         evidence_path = Path(self.temp_dir.name) / "cleanup-check.E01"
@@ -270,6 +272,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn(case_id, routes.CASE_STATES)
             self.assertIn(case_id, routes.PARSE_PROGRESS)
             self.assertIn(case_id, routes.ANALYSIS_PROGRESS)
+            self.assertIn(case_id, routes.CHAT_PROGRESS)
 
             report_resp = self.client.get(f"/api/cases/{case_id}/report")
             self.assertEqual(report_resp.status_code, 200)
@@ -278,6 +281,7 @@ class RoutesTests(unittest.TestCase):
                 ("CASE_STATES", routes.CASE_STATES),
                 ("PARSE_PROGRESS", routes.PARSE_PROGRESS),
                 ("ANALYSIS_PROGRESS", routes.ANALYSIS_PROGRESS),
+                ("CHAT_PROGRESS", routes.CHAT_PROGRESS),
             ):
                 with self.subTest(store=store_name):
                     self.assertNotIn(case_id, store)
@@ -314,18 +318,22 @@ class RoutesTests(unittest.TestCase):
                 routes.CASE_STATES["terminal-completed"] = {"status": "completed"}
                 routes.PARSE_PROGRESS["terminal-completed"] = routes._new_progress(status="completed")
                 routes.ANALYSIS_PROGRESS["terminal-completed"] = routes._new_progress(status="completed")
+                routes.CHAT_PROGRESS["terminal-completed"] = routes._new_progress(status="completed")
 
                 routes.CASE_STATES["terminal-failed"] = {"status": "failed"}
                 routes.PARSE_PROGRESS["terminal-failed"] = routes._new_progress(status="failed")
                 routes.ANALYSIS_PROGRESS["terminal-failed"] = routes._new_progress(status="idle")
+                routes.CHAT_PROGRESS["terminal-failed"] = routes._new_progress(status="failed")
 
                 routes.CASE_STATES["terminal-error"] = {"status": "error"}
                 routes.PARSE_PROGRESS["terminal-error"] = routes._new_progress(status="error")
                 routes.ANALYSIS_PROGRESS["terminal-error"] = routes._new_progress(status="idle")
+                routes.CHAT_PROGRESS["terminal-error"] = routes._new_progress(status="error")
 
                 routes.CASE_STATES["active-case"] = {"status": "running"}
                 routes.PARSE_PROGRESS["active-case"] = routes._new_progress(status="running")
                 routes.ANALYSIS_PROGRESS["active-case"] = routes._new_progress(status="idle")
+                routes.CHAT_PROGRESS["active-case"] = routes._new_progress(status="idle")
 
             create_resp = self.client.post("/api/cases", json={"case_name": "Cleanup Trigger Case"})
             self.assertEqual(create_resp.status_code, 201)
@@ -334,19 +342,23 @@ class RoutesTests(unittest.TestCase):
             self.assertNotIn("terminal-completed", routes.CASE_STATES)
             self.assertNotIn("terminal-completed", routes.PARSE_PROGRESS)
             self.assertNotIn("terminal-completed", routes.ANALYSIS_PROGRESS)
+            self.assertNotIn("terminal-completed", routes.CHAT_PROGRESS)
 
             self.assertNotIn("terminal-failed", routes.CASE_STATES)
             self.assertNotIn("terminal-failed", routes.PARSE_PROGRESS)
             self.assertNotIn("terminal-failed", routes.ANALYSIS_PROGRESS)
+            self.assertNotIn("terminal-failed", routes.CHAT_PROGRESS)
 
             self.assertNotIn("terminal-error", routes.CASE_STATES)
             self.assertNotIn("terminal-error", routes.PARSE_PROGRESS)
             self.assertNotIn("terminal-error", routes.ANALYSIS_PROGRESS)
+            self.assertNotIn("terminal-error", routes.CHAT_PROGRESS)
 
             self.assertIn("active-case", routes.CASE_STATES)
             self.assertIn(new_case_id, routes.CASE_STATES)
             self.assertIn(new_case_id, routes.PARSE_PROGRESS)
             self.assertIn(new_case_id, routes.ANALYSIS_PROGRESS)
+            self.assertIn(new_case_id, routes.CHAT_PROGRESS)
 
     def test_evidence_upload_includes_split_ewf_segments(self) -> None:
         class CapturingParser(FakeParser):
@@ -982,12 +994,12 @@ class RoutesTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.calls: list[dict[str, object]] = []
 
-            def analyze(
+            def analyze_stream(
                 self,
                 system_prompt: str,
                 user_prompt: str,
                 max_tokens: int = 4096,
-            ) -> str:
+            ) -> object:
                 self.calls.append(
                     {
                         "system_prompt": system_prompt,
@@ -995,7 +1007,8 @@ class RoutesTests(unittest.TestCase):
                         "max_tokens": max_tokens,
                     }
                 )
-                return "Chat response from test provider."
+                yield "Chat response "
+                yield "from test provider."
 
             def get_model_info(self) -> dict[str, str]:
                 return {"provider": "fake", "model": "fake-chat"}
@@ -1045,10 +1058,18 @@ class RoutesTests(unittest.TestCase):
                 f"/api/cases/{case_id}/chat",
                 json={"message": user_message},
             )
-            self.assertEqual(chat_resp.status_code, 200)
+            self.assertEqual(chat_resp.status_code, 202)
             chat_payload = chat_resp.get_json()
-            self.assertEqual(chat_payload["response"], "Chat response from test provider.")
-            self.assertEqual(chat_payload["data_retrieved"], ["runkeys.csv"])
+            self.assertEqual(chat_payload["status"], "processing")
+
+            chat_stream_resp = self.client.get(f"/api/cases/{case_id}/chat/stream")
+            self.assertEqual(chat_stream_resp.status_code, 200)
+            stream_payload = chat_stream_resp.get_data(as_text=True)
+            self.assertIn('"type":"token"', stream_payload)
+            self.assertIn('"type":"done"', stream_payload)
+            self.assertIn("Chat response ", stream_payload)
+            self.assertIn("from test provider.", stream_payload)
+            self.assertIn('"data_retrieved":["runkeys.csv"]', stream_payload)
 
             history_resp = self.client.get(f"/api/cases/{case_id}/chat/history")
             self.assertEqual(history_resp.status_code, 200)
@@ -1056,6 +1077,7 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual([entry["role"] for entry in history], ["user", "assistant"])
             self.assertEqual(history[0]["content"], user_message)
             self.assertEqual(history[1]["content"], "Chat response from test provider.")
+            self.assertEqual(routes.CHAT_PROGRESS[case_id]["status"], "completed")
 
             self.assertTrue(fake_provider.calls)
             first_call = fake_provider.calls[0]

@@ -117,6 +117,7 @@ SSE_INITIAL_IDLE_GRACE_SECONDS = 1.0
 CASE_STATES: dict[str, dict[str, Any]] = {}
 PARSE_PROGRESS: dict[str, dict[str, Any]] = {}
 ANALYSIS_PROGRESS: dict[str, dict[str, Any]] = {}
+CHAT_PROGRESS: dict[str, dict[str, Any]] = {}
 STATE_LOCK = threading.RLock()
 
 routes_bp = Blueprint("routes", __name__)
@@ -215,6 +216,7 @@ def _cleanup_case_entries(case_id: str) -> None:
         CASE_STATES.pop(case_id, None)
         PARSE_PROGRESS.pop(case_id, None)
         ANALYSIS_PROGRESS.pop(case_id, None)
+        CHAT_PROGRESS.pop(case_id, None)
     unregister_case_log_handler(case_id)
 
 
@@ -230,6 +232,7 @@ def _cleanup_terminal_cases(exclude_case_id: str | None = None) -> None:
             CASE_STATES.pop(case_id, None)
             PARSE_PROGRESS.pop(case_id, None)
             ANALYSIS_PROGRESS.pop(case_id, None)
+            CHAT_PROGRESS.pop(case_id, None)
     for case_id in terminal_case_ids:
         unregister_case_log_handler(case_id)
 
@@ -1400,6 +1403,162 @@ def _run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) ->
         _emit_progress(ANALYSIS_PROGRESS, case_id, {"type": "analysis_failed", "error": user_message})
 
 
+def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> None:
+    case = _get_case(case_id)
+    if case is None:
+        _set_progress_status(CHAT_PROGRESS, case_id, "failed", "Case not found.")
+        _emit_progress(CHAT_PROGRESS, case_id, {"type": "error", "message": "Case not found."})
+        return
+
+    analysis_results = _load_case_analysis_results(case)
+    if not analysis_results:
+        message_text = "No analysis results available for this case. Run analysis first."
+        _set_progress_status(CHAT_PROGRESS, case_id, "failed", message_text)
+        _emit_progress(CHAT_PROGRESS, case_id, {"type": "error", "message": message_text})
+        return
+
+    if not isinstance(config_snapshot, dict):
+        _set_progress_status(CHAT_PROGRESS, case_id, "failed", "Invalid in-memory configuration state.")
+        _emit_progress(
+            CHAT_PROGRESS,
+            case_id,
+            {"type": "error", "message": "Invalid in-memory configuration state."},
+        )
+        return
+
+    chat_max_tokens = _resolve_chat_max_tokens(config_snapshot)
+    chat_manager = ChatManager(case["case_dir"], max_context_tokens=chat_max_tokens)
+    history_snapshot = chat_manager.get_history()
+    message_index = (
+        sum(1 for entry in history_snapshot if str(entry.get("role", "")).strip().lower() == "user") + 1
+    )
+    case["audit"].log(
+        "chat_message_sent",
+        {
+            "message_index": message_index,
+            "message": _sanitize_prompt(message, max_chars=8000),
+        },
+    )
+
+    try:
+        context_block = chat_manager.build_chat_context(
+            analysis_results=analysis_results,
+            investigation_context=_resolve_case_investigation_context(case),
+            metadata=dict(case.get("image_metadata", {})),
+        )
+
+        retrieved_payload = chat_manager.retrieve_csv_data(
+            question=message,
+            parsed_dir=_resolve_case_parsed_dir(case),
+        )
+        retrieved_artifacts: list[str] = []
+        if isinstance(retrieved_payload.get("artifacts"), list):
+            retrieved_artifacts = [
+                str(item).strip()
+                for item in retrieved_payload.get("artifacts", [])
+                if str(item).strip()
+            ]
+
+        message_for_ai = message
+        retrieved_data = str(retrieved_payload.get("data", "")).strip()
+        if bool(retrieved_payload.get("retrieved")) and retrieved_data:
+            message_for_ai = (
+                "Retrieved CSV data for this question:\n"
+                f"{retrieved_data}\n\n"
+                "User question:\n"
+                f"{message}"
+            )
+            case["audit"].log(
+                "chat_data_retrieval",
+                {
+                    "message_index": message_index,
+                    "artifacts": list(retrieved_artifacts),
+                    "rows_returned": retrieved_data.count("\n"),
+                },
+            )
+
+        system_prompt = _load_forensic_system_prompt()
+        ai_messages: list[dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": context_block},
+        ]
+        for history_message in chat_manager.get_recent_history(max_pairs=CHAT_HISTORY_MAX_PAIRS):
+            role = str(history_message.get("role", "")).strip().lower()
+            content = str(history_message.get("content", "")).strip()
+            if role in {"user", "assistant"} and content:
+                ai_messages.append({"role": role, "content": content})
+        ai_messages.append({"role": "user", "content": message_for_ai})
+        chat_user_prompt = _render_chat_messages_for_provider(ai_messages)
+        if not chat_user_prompt:
+            chat_user_prompt = (
+                f"Context Block:\n{context_block}\n\n"
+                f"New User Question:\n{message_for_ai}"
+            )
+
+        provider = create_provider(copy.deepcopy(config_snapshot))
+        started_at = time.perf_counter()
+        chunks: list[str] = []
+        for chunk in provider.analyze_stream(
+            system_prompt=system_prompt,
+            user_prompt=chat_user_prompt,
+            max_tokens=chat_max_tokens,
+        ):
+            chunk_text = str(chunk)
+            if not chunk_text:
+                continue
+            chunks.append(chunk_text)
+            _emit_progress(
+                CHAT_PROGRESS,
+                case_id,
+                {"type": "token", "content": chunk_text},
+            )
+
+        response_text = "".join(chunks).strip()
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        if not response_text:
+            raise AIProviderError("Provider returned an empty response.")
+
+        chat_manager.add_message("user", message, metadata={"message_index": message_index})
+        assistant_metadata: dict[str, Any] = {"message_index": message_index}
+        if retrieved_artifacts:
+            assistant_metadata["data_retrieved"] = list(retrieved_artifacts)
+        chat_manager.add_message("assistant", response_text, metadata=assistant_metadata)
+
+        case["audit"].log(
+            "chat_response_received",
+            {
+                "message_index": message_index,
+                "duration_ms": duration_ms,
+                "response_tokens_estimate": chat_manager.estimate_token_count(response_text),
+                "data_retrieved": bool(retrieved_artifacts),
+                "retrieved_artifacts": list(retrieved_artifacts),
+            },
+        )
+
+        _set_progress_status(CHAT_PROGRESS, case_id, "completed")
+        _emit_progress(
+            CHAT_PROGRESS,
+            case_id,
+            {
+                "type": "done",
+                "data_retrieved": list(retrieved_artifacts),
+            },
+        )
+    except ValueError as error:
+        LOGGER.warning("Chat request rejected for case %s: %s", case_id, error)
+        _set_progress_status(CHAT_PROGRESS, case_id, "failed", str(error))
+        _emit_progress(CHAT_PROGRESS, case_id, {"type": "error", "message": str(error)})
+    except AIProviderError as error:
+        LOGGER.warning("Chat provider request failed for case %s: %s", case_id, error)
+        _set_progress_status(CHAT_PROGRESS, case_id, "failed", str(error))
+        _emit_progress(CHAT_PROGRESS, case_id, {"type": "error", "message": str(error)})
+    except Exception:
+        LOGGER.exception("Unexpected failure during chat for case %s", case_id)
+        error_message = "Unexpected error while generating chat response."
+        _set_progress_status(CHAT_PROGRESS, case_id, "failed", error_message)
+        _emit_progress(CHAT_PROGRESS, case_id, {"type": "error", "message": error_message})
+
+
 def _run_parse_with_case_log_context(
     case_id: str,
     parse_artifacts: list[str],
@@ -1420,6 +1579,11 @@ def _run_parse_with_case_log_context(
 def _run_analysis_with_case_log_context(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> None:
     with case_log_context(case_id):
         _run_analysis(case_id=case_id, prompt=prompt, config_snapshot=config_snapshot)
+
+
+def _run_chat_with_case_log_context(case_id: str, message: str, config_snapshot: dict[str, Any]) -> None:
+    with case_log_context(case_id):
+        _run_chat(case_id=case_id, message=message, config_snapshot=config_snapshot)
 
 
 @routes_bp.get("/")
@@ -1519,6 +1683,7 @@ def create_case() -> tuple[Response, int]:
         CASE_STATES[case_id] = case_state
         PARSE_PROGRESS[case_id] = _new_progress()
         ANALYSIS_PROGRESS[case_id] = _new_progress()
+        CHAT_PROGRESS[case_id] = _new_progress()
 
     return jsonify({"case_id": case_id, "case_name": case_name}), 201
 
@@ -1777,130 +1942,33 @@ def chat_with_case(case_id: str) -> Response | tuple[Response, int]:
     if not message:
         return _error("`message` is required.", 400)
 
-    analysis_results = _load_case_analysis_results(case)
-    if not analysis_results:
+    if not _load_case_analysis_results(case):
         return _error("No analysis results available for this case. Run analysis first.", 400)
 
     config = current_app.config.get("AIFT_CONFIG", {})
     if not isinstance(config, dict):
         return _error("Invalid in-memory configuration state.", 500)
 
-    chat_max_tokens = _resolve_chat_max_tokens(config)
-    chat_manager = ChatManager(case["case_dir"], max_context_tokens=chat_max_tokens)
-    history_snapshot = chat_manager.get_history()
-    message_index = (
-        sum(1 for entry in history_snapshot if str(entry.get("role", "")).strip().lower() == "user") + 1
-    )
-    case["audit"].log(
-        "chat_message_sent",
-        {
-            "message_index": message_index,
-            "message": _sanitize_prompt(message, max_chars=8000),
-        },
-    )
+    with STATE_LOCK:
+        chat_state = CHAT_PROGRESS.setdefault(case_id, _new_progress())
+        if chat_state.get("status") == "running":
+            return _error("Chat is already running for this case.", 409)
+        CHAT_PROGRESS[case_id] = _new_progress(status="running")
 
-    try:
-        context_block = chat_manager.build_chat_context(
-            analysis_results=analysis_results,
-            investigation_context=_resolve_case_investigation_context(case),
-            metadata=dict(case.get("image_metadata", {})),
-        )
+    config_snapshot = copy.deepcopy(config)
+    threading.Thread(
+        target=_run_chat_with_case_log_context,
+        args=(case_id, message, config_snapshot),
+        daemon=True,
+    ).start()
+    return jsonify({"status": "processing"}), 202
 
-        retrieved_payload = chat_manager.retrieve_csv_data(
-            question=message,
-            parsed_dir=_resolve_case_parsed_dir(case),
-        )
-        retrieved_artifacts: list[str] | None = None
-        if isinstance(retrieved_payload.get("artifacts"), list):
-            normalized_artifacts = [
-                str(item).strip()
-                for item in retrieved_payload.get("artifacts", [])
-                if str(item).strip()
-            ]
-            if normalized_artifacts:
-                retrieved_artifacts = normalized_artifacts
 
-        message_for_ai = message
-        retrieved_data = str(retrieved_payload.get("data", "")).strip()
-        if bool(retrieved_payload.get("retrieved")) and retrieved_data:
-            message_for_ai = (
-                "Retrieved CSV data for this question:\n"
-                f"{retrieved_data}\n\n"
-                "User question:\n"
-                f"{message}"
-            )
-            case["audit"].log(
-                "chat_data_retrieval",
-                {
-                    "message_index": message_index,
-                    "artifacts": list(retrieved_artifacts or []),
-                    "rows_returned": retrieved_data.count("\n"),
-                },
-            )
-
-        system_prompt = _load_forensic_system_prompt()
-        ai_messages: list[dict[str, str]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": context_block},
-        ]
-        for history_message in chat_manager.get_recent_history(max_pairs=CHAT_HISTORY_MAX_PAIRS):
-            role = str(history_message.get("role", "")).strip().lower()
-            content = str(history_message.get("content", "")).strip()
-            if role in {"user", "assistant"} and content:
-                ai_messages.append({"role": role, "content": content})
-        ai_messages.append({"role": "user", "content": message_for_ai})
-        chat_user_prompt = _render_chat_messages_for_provider(ai_messages)
-        if not chat_user_prompt:
-            chat_user_prompt = (
-                f"Context Block:\n{context_block}\n\n"
-                f"New User Question:\n{message_for_ai}"
-            )
-
-        provider = create_provider(copy.deepcopy(config))
-        started_at = time.perf_counter()
-        response_text = str(
-            provider.analyze(
-                system_prompt=system_prompt,
-                user_prompt=chat_user_prompt,
-                max_tokens=chat_max_tokens,
-            )
-        ).strip()
-        duration_ms = int((time.perf_counter() - started_at) * 1000)
-        if not response_text:
-            return _error("Provider returned an empty response.", 502)
-
-        chat_manager.add_message("user", message, metadata={"message_index": message_index})
-        assistant_metadata: dict[str, Any] = {"message_index": message_index}
-        if retrieved_artifacts is not None:
-            assistant_metadata["data_retrieved"] = list(retrieved_artifacts)
-        chat_manager.add_message("assistant", response_text, metadata=assistant_metadata)
-
-        case["audit"].log(
-            "chat_response_received",
-            {
-                "message_index": message_index,
-                "duration_ms": duration_ms,
-                "response_tokens_estimate": chat_manager.estimate_token_count(response_text),
-                "data_retrieved": bool(retrieved_artifacts),
-                "retrieved_artifacts": list(retrieved_artifacts or []),
-            },
-        )
-
-        return jsonify(
-            {
-                "response": response_text,
-                "data_retrieved": list(retrieved_artifacts) if retrieved_artifacts is not None else None,
-            }
-        )
-    except ValueError as error:
-        LOGGER.warning("Chat request rejected for case %s: %s", case_id, error)
-        return _error(str(error), 400)
-    except AIProviderError as error:
-        LOGGER.warning("Chat provider request failed for case %s: %s", case_id, error)
-        return _error(str(error), 502)
-    except Exception:
-        LOGGER.exception("Unexpected failure during chat for case %s", case_id)
-        return _error("Unexpected error while generating chat response.", 500)
+@routes_bp.get("/api/cases/<case_id>/chat/stream")
+def stream_chat_progress(case_id: str) -> Response | tuple[Response, int]:
+    if _get_case(case_id) is None:
+        return _error(f"Case not found: {case_id}", 404)
+    return _stream_sse(CHAT_PROGRESS, case_id)
 
 
 @routes_bp.get("/api/cases/<case_id>/chat/history")
@@ -2170,6 +2238,7 @@ def register_routes(app: Flask) -> None:
 __all__ = [
     "ANALYSIS_PROGRESS",
     "CASE_STATES",
+    "CHAT_PROGRESS",
     "PARSE_PROGRESS",
     "register_routes",
 ]
