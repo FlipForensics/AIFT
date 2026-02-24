@@ -31,9 +31,10 @@ class ChatManager:
     )
     _CSV_ROW_LIMIT = 500
 
-    def __init__(self, case_dir: str | Path) -> None:
+    def __init__(self, case_dir: str | Path, max_context_tokens: int | None = None) -> None:
         self.case_dir = Path(case_dir)
         self.chat_file = self.case_dir / "chat_history.jsonl"
+        self.MAX_CONTEXT_TOKENS = self._resolve_max_context_tokens(max_context_tokens)
 
     def add_message(
         self,
@@ -180,10 +181,6 @@ class ChatManager:
             if self._contains_heuristic_term(question_lower, header.lower())
         }
 
-        should_retrieve = bool(artifact_matches) or keyword_detected or bool(matched_columns)
-        if not should_retrieve:
-            return {"retrieved": False}
-
         if artifact_matches:
             target_paths = artifact_matches
         elif matched_columns:
@@ -192,8 +189,16 @@ class ChatManager:
                 for path, headers in headers_by_path.items()
                 if any(header.lower() in matched_columns for header in headers)
             ]
+        elif keyword_detected:
+            # Keywords detected but no specific artifact/column identified —
+            # return all CSVs only if the collection is small, otherwise skip
+            # to avoid blowing up the context window with irrelevant data.
+            if len(csv_paths) <= 3:
+                target_paths = csv_paths
+            else:
+                return {"retrieved": False}
         else:
-            target_paths = csv_paths
+            return {"retrieved": False}
 
         target_paths = list(dict.fromkeys(target_paths))
         artifacts = [path.name for path in target_paths]
@@ -238,6 +243,14 @@ class ChatManager:
         if not text:
             return 0
         return int(len(text) / 4)
+
+    @classmethod
+    def _resolve_max_context_tokens(cls, value: Any) -> int:
+        try:
+            resolved = int(value) if value is not None else int(cls.MAX_CONTEXT_TOKENS)
+        except (TypeError, ValueError):
+            resolved = int(cls.MAX_CONTEXT_TOKENS)
+        return max(1, resolved)
 
     @staticmethod
     def _stringify(value: Any, default: str = "") -> str:

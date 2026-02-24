@@ -1781,7 +1781,12 @@ def chat_with_case(case_id: str) -> Response | tuple[Response, int]:
     if not analysis_results:
         return _error("No analysis results available for this case. Run analysis first.", 400)
 
-    chat_manager = ChatManager(case["case_dir"])
+    config = current_app.config.get("AIFT_CONFIG", {})
+    if not isinstance(config, dict):
+        return _error("Invalid in-memory configuration state.", 500)
+
+    chat_max_tokens = _resolve_chat_max_tokens(config)
+    chat_manager = ChatManager(case["case_dir"], max_context_tokens=chat_max_tokens)
     history_snapshot = chat_manager.get_history()
     message_index = (
         sum(1 for entry in history_snapshot if str(entry.get("role", "")).strip().lower() == "user") + 1
@@ -1843,11 +1848,6 @@ def chat_with_case(case_id: str) -> Response | tuple[Response, int]:
                 f"New User Question:\n{message_for_ai}"
             )
 
-        config = current_app.config.get("AIFT_CONFIG", {})
-        if not isinstance(config, dict):
-            return _error("Invalid in-memory configuration state.", 500)
-
-        chat_max_tokens = _resolve_chat_max_tokens(config)
         provider = create_provider(copy.deepcopy(config))
         started_at = time.perf_counter()
         response_text = str(

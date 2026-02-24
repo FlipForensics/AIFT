@@ -119,8 +119,10 @@ class ChatManagerTests(unittest.TestCase):
     def test_estimate_token_count_and_max_context_tokens(self) -> None:
         with TemporaryDirectory(prefix="aift-chat-token-test-") as temp_dir:
             manager = ChatManager(temp_dir)
+            configured_manager = ChatManager(temp_dir, max_context_tokens=2048)
 
             self.assertEqual(manager.MAX_CONTEXT_TOKENS, 100000)
+            self.assertEqual(configured_manager.MAX_CONTEXT_TOKENS, 2048)
             self.assertEqual(manager.estimate_token_count("abcd" * 10), 10)
 
 
