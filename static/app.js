@@ -8,6 +8,7 @@
   const RECOMMENDED_PROFILE = "recommended";
   const DROP_HELP = "Drag and drop evidence here (.E01, .dd, .raw, .vmdk, .vhd, .vhdx, .vdi, .qcow2, .zip, .7z, .tar, ...)";
   const CONFIDENCE_TOKEN_PATTERN = /\b(CRITICAL|HIGH|MEDIUM|LOW)\b/gi;
+  const AI_MAX_TOKENS_WARNING_THRESHOLD = 32000;
   const CONFIDENCE_CLASS_MAP = {
     CRITICAL: "confidence-critical",
     HIGH: "confidence-high",
@@ -128,6 +129,7 @@
     el.settingsTabPanels = Array.from(document.querySelectorAll("[data-settings-panel]"));
 
     el.setAiMaxTokens = q("setting-ai-max-tokens");
+    el.setAiMaxTokensWarning = q("setting-ai-max-tokens-warning");
     el.setShortenedPromptCutoffTokens = q("setting-shortened-prompt-cutoff-tokens");
     el.setConnectionMaxTokens = q("setting-connection-max-tokens");
     el.setDateBufferDays = q("setting-date-buffer-days");
@@ -1808,6 +1810,10 @@
       el.setCsvOutputDir.addEventListener("input", updateCsvOutputHelp);
       el.setCsvOutputDir.addEventListener("change", updateCsvOutputHelp);
     }
+    if (el.setAiMaxTokens) {
+      el.setAiMaxTokens.addEventListener("input", updateAiMaxTokensWarning);
+      el.setAiMaxTokens.addEventListener("change", updateAiMaxTokensWarning);
+    }
     el.settingsForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       await saveSettings();
@@ -1909,6 +1915,7 @@
       num(obj(obj(s.ai).local).request_timeout_seconds, 3600),
       3600
     );
+    updateAiMaxTokensWarning();
     if (el.setArtifactDeduplicationEnabled) {
       el.setArtifactDeduplicationEnabled.checked = boolSetting(analysis.artifact_deduplication_enabled, true);
     }
@@ -1924,6 +1931,15 @@
     if (!input) return;
     const numeric = typeof value === "number" && Number.isFinite(value) ? value : fallback;
     input.value = String(numeric);
+  }
+
+  function updateAiMaxTokensWarning() {
+    if (!el.setAiMaxTokensWarning || !el.setAiMaxTokens) return;
+    const parsed = num(val(el.setAiMaxTokens), null);
+    const shouldWarn = typeof parsed === "number"
+      && Number.isFinite(parsed)
+      && parsed < AI_MAX_TOKENS_WARNING_THRESHOLD;
+    el.setAiMaxTokensWarning.hidden = !shouldWarn;
   }
 
   function boolSetting(value, fallback = false) {

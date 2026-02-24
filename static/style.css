@@ -373,6 +373,12 @@ form {
   gap: var(--space-2);
 }
 
+.field-warning {
+  margin: 0;
+  color: var(--warning);
+  font-size: 0.82rem;
+}
+
 label,
 legend {
   color: var(--text-secondary);

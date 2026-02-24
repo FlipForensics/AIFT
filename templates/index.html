@@ -493,6 +493,9 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
           <div class="form-row">
             <label for="setting-ai-max-tokens">Analysis Max Tokens</label>
             <input id="setting-ai-max-tokens" name="ai_max_tokens" type="number" min="1" value="128000">
+            <p id="setting-ai-max-tokens-warning" class="field-warning" hidden>
+              Warning: values below 32000 reduce context and may trigger shortened prompts or extra chunking.
+            </p>
           </div>
           <div class="form-row">
             <label for="setting-shortened-prompt-cutoff-tokens">Shortened Prompt Cutoff (tokens)</label>
