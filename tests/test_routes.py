@@ -627,11 +627,15 @@ class RoutesTests(unittest.TestCase):
                     "analysis": {
                         "date_buffer_days": 3,
                         "ai_max_tokens": 2048,
+                        "shortened_prompt_cutoff_tokens": 64000,
                         "artifact_deduplication_enabled": False,
                     },
                     "ai": {
                         "openai": {"attach_csv_as_file": False},
-                        "local": {"attach_csv_as_file": False},
+                        "local": {
+                            "attach_csv_as_file": False,
+                            "request_timeout_seconds": 5400,
+                        },
                     },
                 },
             )
@@ -639,16 +643,20 @@ class RoutesTests(unittest.TestCase):
             payload = update_resp.get_json()
             self.assertEqual(payload["analysis"]["date_buffer_days"], 3)
             self.assertEqual(payload["analysis"]["ai_max_tokens"], 2048)
+            self.assertEqual(payload["analysis"]["shortened_prompt_cutoff_tokens"], 64000)
             self.assertEqual(payload["analysis"]["artifact_deduplication_enabled"], False)
             self.assertFalse(payload["ai"]["openai"]["attach_csv_as_file"])
             self.assertFalse(payload["ai"]["local"]["attach_csv_as_file"])
+            self.assertEqual(payload["ai"]["local"]["request_timeout_seconds"], 5400)
 
         persisted = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
         self.assertEqual(persisted.get("analysis", {}).get("date_buffer_days"), 3)
         self.assertEqual(persisted.get("analysis", {}).get("ai_max_tokens"), 2048)
+        self.assertEqual(persisted.get("analysis", {}).get("shortened_prompt_cutoff_tokens"), 64000)
         self.assertEqual(persisted.get("analysis", {}).get("artifact_deduplication_enabled"), False)
         self.assertEqual(persisted.get("ai", {}).get("openai", {}).get("attach_csv_as_file"), False)
         self.assertEqual(persisted.get("ai", {}).get("local", {}).get("attach_csv_as_file"), False)
+        self.assertEqual(persisted.get("ai", {}).get("local", {}).get("request_timeout_seconds"), 5400)
 
     def test_evidence_path_strips_quotes(self) -> None:
         evidence_path = Path(self.temp_dir.name) / "quoted.E01"

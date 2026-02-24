@@ -79,8 +79,13 @@ class AnalyzerTests(unittest.TestCase):
             "Instructions={{analysis_instructions}}\n"
             "Data:\n{{data_csv}}\n"
         )
+        small_context_template = template.replace("Stats:\n{{statistics}}\n", "")
         prompts_dir.mkdir(parents=True, exist_ok=True)
         (prompts_dir / "artifact_analysis.md").write_text(template, encoding="utf-8")
+        (prompts_dir / "artifact_analysis_small_context.md").write_text(
+            small_context_template,
+            encoding="utf-8",
+        )
         (prompts_dir / "system_prompt.md").write_text("SYSTEM PROMPT", encoding="utf-8")
         (prompts_dir / "summary_prompt.md").write_text(
             (
@@ -277,6 +282,42 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("## Final Context Reminder (Do Not Ignore)", filled_prompt)
         self.assertIn("- Artifact key: runkeys", filled_prompt)
 
+    def test_prepare_artifact_data_omits_statistics_section_for_small_context_window(self) -> None:
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            prompts_dir = temp_path / "prompts"
+            self._write_prompt_template(prompts_dir)
+
+            csv_path = temp_path / "runkeys.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "name", "command", "key"])
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "ts": "2026-01-15T12:00:00+00:00",
+                        "name": "EntryA",
+                        "command": r"C:\Users\Public\evil.exe",
+                        "key": r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    }
+                )
+
+            analyzer = ForensicAnalyzer(
+                config={"analysis": {"ai_max_tokens": 63999}},
+                artifact_csv_paths={"runkeys": csv_path},
+                prompts_dir=prompts_dir,
+                random_seed=7,
+            )
+            filled_prompt = analyzer._prepare_artifact_data(
+                artifact_key="runkeys",
+                investigation_context="Focus on January 15, 2026.",
+            )
+
+        self.assertIn("Total=1", filled_prompt)
+        self.assertIn("EntryA", filled_prompt)
+        self.assertNotIn("Stats:", filled_prompt)
+        self.assertNotIn("Record count:", filled_prompt)
+        self.assertNotIn("Rows removed as timestamp/ID-only duplicates:", filled_prompt)
+
     def test_prepare_artifact_data_uses_artifact_instruction_prompt_file(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
             temp_path = Path(temp_dir)
@@ -312,6 +353,89 @@ class AnalyzerTests(unittest.TestCase):
             )
 
         self.assertIn("Instructions=RUNKEYS-SPECIFIC-INSTRUCTIONS", filled_prompt)
+
+    def test_prepare_artifact_data_uses_small_context_prompt_template(self) -> None:
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            prompts_dir = temp_path / "prompts"
+            self._write_prompt_template(prompts_dir)
+
+            (prompts_dir / "artifact_analysis_small_context.md").write_text(
+                (
+                    "SMALL-CONTEXT-TEMPLATE\n"
+                    "Key={{artifact_key}}\n"
+                    "Total={{total_records}}\n"
+                    "Data:\n{{data_csv}}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            csv_path = temp_path / "runkeys.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "name", "command", "key"])
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "ts": "2026-01-15T12:00:00+00:00",
+                        "name": "EntryA",
+                        "command": r"C:\Users\Public\evil.exe",
+                        "key": r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    }
+                )
+
+            analyzer = ForensicAnalyzer(
+                config={"analysis": {"ai_max_tokens": 63999}},
+                artifact_csv_paths={"runkeys": csv_path},
+                prompts_dir=prompts_dir,
+                random_seed=7,
+            )
+            filled_prompt = analyzer._prepare_artifact_data(
+                artifact_key="runkeys",
+                investigation_context="Focus on January 15, 2026.",
+            )
+
+        self.assertIn("SMALL-CONTEXT-TEMPLATE", filled_prompt)
+        self.assertIn("Total=1", filled_prompt)
+        self.assertNotIn("Stats:", filled_prompt)
+        self.assertNotIn("Record count:", filled_prompt)
+
+    def test_prepare_artifact_data_uses_user_configured_shortened_prompt_cutoff(self) -> None:
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            prompts_dir = temp_path / "prompts"
+            self._write_prompt_template(prompts_dir)
+
+            csv_path = temp_path / "runkeys.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "name", "command", "key"])
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "ts": "2026-01-15T12:00:00+00:00",
+                        "name": "EntryA",
+                        "command": r"C:\Users\Public\evil.exe",
+                        "key": r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    }
+                )
+
+            analyzer = ForensicAnalyzer(
+                config={
+                    "analysis": {
+                        "ai_max_tokens": 5000,
+                        "shortened_prompt_cutoff_tokens": 4000,
+                    }
+                },
+                artifact_csv_paths={"runkeys": csv_path},
+                prompts_dir=prompts_dir,
+                random_seed=7,
+            )
+            filled_prompt = analyzer._prepare_artifact_data(
+                artifact_key="runkeys",
+                investigation_context="Focus on January 15, 2026.",
+            )
+
+        self.assertIn("Stats:", filled_prompt)
+        self.assertIn("Record count: 1", filled_prompt)
 
     def test_prepare_artifact_data_uses_normalized_artifact_instruction_prompt(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
@@ -995,7 +1119,11 @@ class AnalyzerTests(unittest.TestCase):
 
         self.assertEqual(len(fake_provider.calls), 1)
         self.assertEqual(fake_provider.calls[0]["max_tokens"], "1234")
-        self.assertIn("(+/- 2 days).", fake_provider.calls[0]["user_prompt"])
+        user_prompt = fake_provider.calls[0]["user_prompt"]
+        # With date_buffer_days=2, only the Jan-15 row survives the filter;
+        # the Jan-01 row is outside the ±2 day window.
+        self.assertIn("EntryA", user_prompt)
+        self.assertNotIn("OldEntry", user_prompt)
 
     def test_run_full_analysis_continues_after_artifact_failure(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
@@ -1209,51 +1337,20 @@ class AnalyzerTests(unittest.TestCase):
         self.assertFalse(analyzer._is_dedup_safe_identifier_column("LogonID"))
         self.assertFalse(analyzer._is_dedup_safe_identifier_column("id"))
 
-    def test_build_full_data_csv_truncates_large_datasets(self) -> None:
-        """Inline CSV is truncated with a notice when it exceeds max_chars."""
+    def test_build_full_data_csv_never_truncates(self) -> None:
+        """Full CSV is always produced without truncation (DFIR requires all rows)."""
         analyzer = ForensicAnalyzer()
         rows = [
-            {"_row_ref": str(i), "name": f"entry_{i}", "data": "x" * 100}
+            {"_row_ref": str(i), "name": f"entry_{i}", "data": "x" * 200}
             for i in range(1, 201)
         ]
         columns = ["name", "data"]
 
-        # With a low limit, output should be truncated
-        result = analyzer._build_full_data_csv(rows=rows, columns=columns, max_chars=500)
-
-        self.assertIn("TRUNCATED", result)
-        self.assertIn("200 rows", result)
-        self.assertIn("attached CSV file", result)
-        self.assertLessEqual(len(result), 800)  # truncated + notice
-
-    def test_build_full_data_csv_no_truncation_when_within_limit(self) -> None:
-        """Small datasets should not be truncated."""
-        analyzer = ForensicAnalyzer()
-        rows = [
-            {"_row_ref": "1", "name": "entry_1", "data": "hello"},
-            {"_row_ref": "2", "name": "entry_2", "data": "world"},
-        ]
-        columns = ["name", "data"]
-
-        result = analyzer._build_full_data_csv(rows=rows, columns=columns, max_chars=10000)
+        result = analyzer._build_full_data_csv(rows=rows, columns=columns)
 
         self.assertNotIn("TRUNCATED", result)
         self.assertIn("entry_1", result)
-        self.assertIn("entry_2", result)
-
-    def test_build_full_data_csv_no_limit_when_max_chars_zero(self) -> None:
-        """max_chars=0 means no truncation (backwards compatible)."""
-        analyzer = ForensicAnalyzer()
-        rows = [
-            {"_row_ref": str(i), "name": f"entry_{i}", "data": "x" * 200}
-            for i in range(1, 101)
-        ]
-        columns = ["name", "data"]
-
-        result = analyzer._build_full_data_csv(rows=rows, columns=columns, max_chars=0)
-
-        self.assertNotIn("TRUNCATED", result)
-        self.assertIn("entry_100", result)
+        self.assertIn("entry_200", result)
 
     def test_timestamp_found_in_csv_uses_preloaded_lookup_keys(self) -> None:
         analyzer = ForensicAnalyzer()
@@ -1311,4 +1408,3 @@ class AnalyzerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

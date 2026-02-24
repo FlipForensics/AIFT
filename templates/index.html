@@ -85,7 +85,7 @@
             autocomplete="off"
             spellcheck="false"
           >
-          <p class="path-mode-hint">Evidence files (E01, VMDK, VHD, DD, etc.) are read in-place (read-only) &mdash; nothing is copied. Archives (ZIP, 7z, tar) are extracted into the case folder first.</p>
+          <p class="path-mode-hint">Evidence files (E01, VMDK, VHD, DD, etc.) are read in-place (read-only) &mdash; nothing is copied. Archives (ZIP, 7z, tar) are copied and extracted into the case folder first.</p>
         </section>
 
         <button id="submit-evidence" type="submit">Submit</button>
@@ -493,6 +493,20 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
           <div class="form-row">
             <label for="setting-ai-max-tokens">Analysis Max Tokens</label>
             <input id="setting-ai-max-tokens" name="ai_max_tokens" type="number" min="1" value="128000">
+            <p id="setting-ai-max-tokens-warning" class="field-warning" hidden>
+              Warning: values below 32000 reduce context and may trigger shortened prompts or extra chunking.
+            </p>
+          </div>
+          <div class="form-row">
+            <label for="setting-shortened-prompt-cutoff-tokens">Shortened Prompt Cutoff (tokens)</label>
+            <input
+              id="setting-shortened-prompt-cutoff-tokens"
+              name="shortened_prompt_cutoff_tokens"
+              type="number"
+              min="1"
+              value="64000"
+            >
+            <p class="field-help">If Analysis Max Tokens is below this value, AIFT uses the shortened artifact prompt template.</p>
           </div>
           <div class="form-row">
             <label for="setting-connection-max-tokens">Connection Test Max Tokens</label>
@@ -505,6 +519,21 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
           <div class="form-row">
             <label for="setting-citation-spot-check-limit">Citation Spot-Check Limit</label>
             <input id="setting-citation-spot-check-limit" name="citation_spot_check_limit" type="number" min="1" value="20">
+          </div>
+          <div class="form-row">
+            <label for="setting-local-request-timeout-seconds">Local Request Timeout (seconds)</label>
+            <input
+              id="setting-local-request-timeout-seconds"
+              name="local_request_timeout_seconds"
+              type="number"
+              min="1"
+              value="3600"
+            >
+          </div>
+          <div class="form-row">
+            <label for="setting-max-merge-rounds">Max Merge Rounds</label>
+            <input id="setting-max-merge-rounds" name="max_merge_rounds" type="number" min="1" value="5">
+            <p>Maximum hierarchical merge rounds for chunked analysis before falling back to concatenation.</p>
           </div>
           <div class="form-row">
             <label for="setting-artifact-deduplication-enabled">Compress Artifact Records For AI</label>

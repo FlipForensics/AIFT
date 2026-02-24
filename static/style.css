@@ -373,6 +373,26 @@ form {
   gap: var(--space-2);
 }
 
+.form-row p {
+  margin: 0;
+}
+
+.field-help {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.field-warning {
+  margin: 0;
+  color: var(--warning);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  border: 1px solid var(--warning);
+  background: rgb(255 152 0 / 14%);
+  padding: 0.25rem 0.45rem;
+}
+
 label,
 legend {
   color: var(--text-secondary);
@@ -932,6 +952,11 @@ details > :not(summary),
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
+  align-items: start;
+}
+
+.settings-grid .form-row {
+  align-self: start;
 }
 
 .settings-attachment-flags {

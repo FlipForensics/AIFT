@@ -32,15 +32,13 @@ except Exception as error:
 TOKEN_CHAR_RATIO = 4
 DATE_BUFFER_DAYS = 7
 AI_MAX_TOKENS = 128000
+DEFAULT_SHORTENED_PROMPT_CUTOFF_TOKENS = 64000
 AI_RETRY_ATTEMPTS = 3
 AI_RETRY_BASE_DELAY = 1.0
+MAX_MERGE_ROUNDS = 5
 ARTIFACT_DEDUPLICATION_ENABLED = True
 DEDUPLICATED_PARSED_DIRNAME = "parsed_deduplicated"
 DEDUP_COMMENT_COLUMN = "_dedup_comment"
-# Maximum characters of inline CSV data before switching to
-# attachment-only mode.  ~800K chars ≈ ~200K tokens — a generous limit
-# that stays within most provider context windows.
-MAX_INLINE_CSV_CHARS = 800_000
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_AI_COLUMNS_CONFIG_PATH = PROJECT_ROOT / "config" / "artifact_ai_columns.yaml"
 
@@ -195,6 +193,20 @@ _DEFAULT_ARTIFACT_PROMPT_TEMPLATE = (
     "## Full Data (CSV)\n{{data_csv}}\n"
 )
 
+_DEFAULT_ARTIFACT_PROMPT_TEMPLATE_SMALL_CONTEXT = (
+    "## Priority Directives\n{{priority_directives}}\n\n"
+    "## Investigation Context\n{{investigation_context}}\n\n"
+    "## IOC Targets\n{{ioc_targets}}\n\n"
+    "## Artifact\n- Key: {{artifact_key}}\n- Name: {{artifact_name}}\n- Description: {{artifact_description}}\n\n"
+    "## Dataset Scope\n- Total records: {{total_records}}\n"
+    "- Time range start: {{time_range_start}}\n- Time range end: {{time_range_end}}\n\n"
+    "## Incident Focus\n"
+    "- Prioritize suspicious activity that advances detection, scoping, containment, or remediation.\n"
+    "- Use baseline references only as supporting context for behavior shifts.\n\n"
+    "## Analysis Instructions\n{{analysis_instructions}}\n\n"
+    "## Full Data (CSV)\n{{data_csv}}\n"
+)
+
 _DEFAULT_SUMMARY_PROMPT_TEMPLATE = (
     "## Priority Directives\n{{priority_directives}}\n\n"
     "## Investigation Context\n{{investigation_context}}\n\n"
@@ -205,6 +217,34 @@ _DEFAULT_SUMMARY_PROMPT_TEMPLATE = (
     "- Correlate findings to identify likely intrusion activity, scope, and priority response actions.\n"
     "- Use baseline references only when they strengthen incident conclusions.\n"
 )
+
+_DEFAULT_CHUNK_MERGE_PROMPT_TEMPLATE = (
+    "You analyzed the same artifact dataset in {{chunk_count}} separate chunks "
+    "because the data was too large for a single pass.\n"
+    "Below are your findings from each chunk. Merge them into one final analysis.\n\n"
+    "## Investigation Context\n{{investigation_context}}\n\n"
+    "## Artifact: {{artifact_name}} ({{artifact_key}})\n\n"
+    "## Per-Chunk Findings\n{{per_chunk_findings}}\n\n"
+    "## Task\n"
+    "Merge the above chunk analyses into one coherent analysis. "
+    "Deduplicate repeated findings, reconcile contradictions, "
+    "and re-rank by severity then confidence. "
+    "Use the same output format as a single-pass artifact analysis:\n"
+    "- **Findings** (severity/confidence, evidence, alternative explanation, verify)\n"
+    "- **IOC Status** (if applicable)\n"
+    "- **Data Gaps**\n"
+)
+
+# Regex that matches the CSV data section heading used in prompt templates.
+# Handles both hardcoded defaults ("## Full Data (CSV)\n") and file-based
+# templates ("### Full Data (CSV)\n```\n").  The match includes everything
+# up to the start of the actual CSV rows.
+_CSV_DATA_SECTION_RE = re.compile(
+    r"#{2,3}\s+Full\s+Data\s+\(CSV\)\s*\n(?:```\s*\n)?",
+    flags=re.IGNORECASE,
+)
+# Trailing code fence that file-based templates append after {{data_csv}}.
+_CSV_TRAILING_FENCE_RE = re.compile(r"\n```\s*$")
 
 
 class _UnavailableProvider:
@@ -262,10 +302,18 @@ class ForensicAnalyzer:
             "artifact_analysis.md",
             default=_DEFAULT_ARTIFACT_PROMPT_TEMPLATE,
         )
+        self.artifact_prompt_template_small_context = self._load_prompt_template(
+            "artifact_analysis_small_context.md",
+            default=_DEFAULT_ARTIFACT_PROMPT_TEMPLATE_SMALL_CONTEXT,
+        )
         self.artifact_instruction_prompts = self._load_artifact_instruction_prompts()
         self.summary_prompt_template = self._load_prompt_template(
             "summary_prompt.md",
             default=_DEFAULT_SUMMARY_PROMPT_TEMPLATE,
+        )
+        self.chunk_merge_prompt_template = self._load_prompt_template(
+            "chunk_merge.md",
+            default=_DEFAULT_CHUNK_MERGE_PROMPT_TEMPLATE,
         )
         self.ai_provider = self._create_ai_provider()
         self.model_info = self._read_model_info()
@@ -283,6 +331,21 @@ class ForensicAnalyzer:
             default=AI_MAX_TOKENS,
             minimum=1,
         )
+        legacy_shortened_prompt_cutoff = self._read_int_setting(
+            analysis_config=analysis_config,
+            key="statistics_section_cutoff_tokens",
+            default=DEFAULT_SHORTENED_PROMPT_CUTOFF_TOKENS,
+            minimum=1,
+        )
+        self.shortened_prompt_cutoff_tokens = self._read_int_setting(
+            analysis_config=analysis_config,
+            key="shortened_prompt_cutoff_tokens",
+            default=legacy_shortened_prompt_cutoff,
+            minimum=1,
+        )
+        # Budget for CSV data per chunk when using chunked analysis.
+        # Reserves ~40% of the context window for instructions + response.
+        self.chunk_csv_budget = int(self.ai_max_tokens * TOKEN_CHAR_RATIO * 0.6)
         self.date_buffer_days = self._read_int_setting(
             analysis_config=analysis_config,
             key="date_buffer_days",
@@ -293,6 +356,12 @@ class ForensicAnalyzer:
             analysis_config=analysis_config,
             key="citation_spot_check_limit",
             default=CITATION_SPOT_CHECK_LIMIT,
+            minimum=1,
+        )
+        self.max_merge_rounds = self._read_int_setting(
+            analysis_config=analysis_config,
+            key="max_merge_rounds",
+            default=MAX_MERGE_ROUNDS,
             minimum=1,
         )
         self.artifact_deduplication_enabled = self._read_bool_setting(
@@ -529,6 +598,428 @@ class ForensicAnalyzer:
         except Exception:
             return
 
+    def _save_case_prompt(
+        self,
+        filename: str,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> None:
+        """Save a prompt to the case prompts directory for audit purposes."""
+        if self.case_dir is None:
+            return
+
+        prompts_dir = self.case_dir / "prompts"
+        try:
+            prompts_dir.mkdir(parents=True, exist_ok=True)
+            prompt_path = prompts_dir / filename
+            prompt_path.write_text(
+                f"# System Prompt\n\n{system_prompt}\n\n---\n\n# User Prompt\n\n{user_prompt}\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            self.logger.warning("Failed to save prompt to %s", prompts_dir / filename)
+
+    @staticmethod
+    def _split_csv_into_chunks(csv_text: str, max_chars: int) -> list[str]:
+        """Split CSV text into chunks that each fit within *max_chars*.
+
+        Every chunk retains the original header row so the AI can interpret
+        the data without extra context.  Splits on row boundaries only.
+        """
+        if max_chars <= 0 or len(csv_text) <= max_chars:
+            return [csv_text]
+
+        lines = csv_text.split("\n")
+        if not lines:
+            return [csv_text]
+
+        header = lines[0]
+        data_lines = lines[1:]
+        if not data_lines:
+            return [csv_text]
+
+        # Reserve space for the header in each chunk.
+        header_overhead = len(header) + 1  # +1 for newline
+        chunk_data_budget = max_chars - header_overhead
+        if chunk_data_budget <= 0:
+            # Header alone exceeds budget; return the whole thing as one chunk.
+            return [csv_text]
+
+        chunks: list[str] = []
+        current_lines: list[str] = []
+        current_size = 0
+
+        for line in data_lines:
+            line_size = len(line) + 1  # +1 for newline
+            if current_lines and current_size + line_size > chunk_data_budget:
+                chunks.append(header + "\n" + "\n".join(current_lines))
+                current_lines = []
+                current_size = 0
+            current_lines.append(line)
+            current_size += line_size
+
+        if current_lines:
+            chunks.append(header + "\n" + "\n".join(current_lines))
+
+        return chunks if chunks else [csv_text]
+
+    @staticmethod
+    def _split_csv_and_suffix(raw_csv_tail: str) -> tuple[str, str]:
+        """Separate CSV rows from trailing content (code fences, context reminders).
+
+        Returns ``(csv_data, suffix)`` where *suffix* contains any trailing
+        code fence and/or Final Context Reminder text that should be appended
+        to every chunk prompt.
+        """
+        text = raw_csv_tail
+
+        # 1. Extract the Final Context Reminder (appended after CSV + fence).
+        reminder_marker = "## Final Context Reminder"
+        reminder_pos = text.find(reminder_marker)
+        context_suffix = ""
+        if reminder_pos >= 0:
+            context_suffix = "\n\n" + text[reminder_pos:].strip()
+            text = text[:reminder_pos]
+
+        # 2. Strip a trailing markdown code fence from file-based templates.
+        #    Now that the reminder is removed, the fence (if any) is at the end.
+        trailing_fence = ""
+        fence_match = _CSV_TRAILING_FENCE_RE.search(text)
+        if fence_match:
+            trailing_fence = fence_match.group()
+            text = text[: fence_match.start()]
+
+        csv_data = text.strip()
+
+        # Reassemble the suffix: fence first (closes the code block around
+        # each chunk), then the context reminder.
+        suffix = ""
+        if trailing_fence:
+            suffix += trailing_fence
+        if context_suffix:
+            suffix += context_suffix
+        return csv_data, suffix
+
+    def _analyze_artifact_chunked(
+        self,
+        artifact_prompt: str,
+        artifact_key: str,
+        artifact_name: str,
+        investigation_context: str,
+        model: str,
+        progress_callback: Any | None = None,
+    ) -> str:
+        """Analyze an artifact in multiple chunks when data exceeds the context budget.
+
+        Splits the CSV portion of the prompt into chunks, analyzes each
+        independently, then merges the per-chunk findings with a final AI call.
+        """
+        # Split the prompt into the instruction portion and the CSV data.
+        # Handles both hardcoded ("## Full Data (CSV)") and file-based
+        # ("### Full Data (CSV)\n```") template styles.
+        marker_match = _CSV_DATA_SECTION_RE.search(artifact_prompt)
+        if marker_match is None:
+            # No CSV section found — fall back to single call.
+            return self._call_ai_with_retry(
+                lambda: self.ai_provider.analyze(
+                    system_prompt=self.system_prompt,
+                    user_prompt=artifact_prompt,
+                    max_tokens=self.ai_max_tokens,
+                )
+            )
+
+        instructions_portion = artifact_prompt[: marker_match.end()]
+        raw_csv_tail = artifact_prompt[marker_match.end():]
+
+        # Separate the CSV data from any trailing content (code fences,
+        # Final Context Reminder) so that only actual CSV rows are chunked
+        # and the reminder is appended to every chunk.
+        csv_data, context_suffix = self._split_csv_and_suffix(raw_csv_tail)
+
+        # Determine how much space is left for CSV data in each chunk.
+        suffix_chars = len(context_suffix)
+        instructions_chars = len(instructions_portion) + len(self.system_prompt) + suffix_chars
+        csv_budget = max(1000, self.chunk_csv_budget - instructions_chars)
+
+        chunks = self._split_csv_into_chunks(csv_data, csv_budget)
+        total_chunks = len(chunks)
+
+        if total_chunks <= 1:
+            return self._call_ai_with_retry(
+                lambda: self.ai_provider.analyze(
+                    system_prompt=self.system_prompt,
+                    user_prompt=artifact_prompt,
+                    max_tokens=self.ai_max_tokens,
+                )
+            )
+
+        self.logger.info(
+            "Chunked analysis for %s: splitting into %d chunks (budget %d chars/chunk).",
+            artifact_key,
+            total_chunks,
+            csv_budget,
+        )
+        self._audit_log(
+            "chunked_analysis_started",
+            {
+                "artifact_key": artifact_key,
+                "total_chunks": total_chunks,
+                "csv_budget_per_chunk": csv_budget,
+            },
+        )
+
+        chunk_findings: list[str] = []
+        for chunk_index, chunk_csv in enumerate(chunks, start=1):
+            chunk_prompt = f"{instructions_portion}{chunk_csv}{context_suffix}"
+            chunk_label = f"chunk {chunk_index}/{total_chunks}"
+
+            if progress_callback is not None:
+                self._emit_analysis_progress(
+                    progress_callback,
+                    artifact_key,
+                    "thinking",
+                    {
+                        "artifact_key": artifact_key,
+                        "artifact_name": artifact_name,
+                        "thinking_text": f"Analyzing {chunk_label}...",
+                        "partial_text": "",
+                        "model": model,
+                    },
+                )
+
+            safe_key = self._sanitize_filename(artifact_key)
+            self._save_case_prompt(
+                f"artifact_{safe_key}_chunk_{chunk_index}.md",
+                self.system_prompt,
+                chunk_prompt,
+            )
+
+            self.logger.info("Analyzing %s %s...", artifact_key, chunk_label)
+            chunk_text = self._call_ai_with_retry(
+                lambda prompt=chunk_prompt: self.ai_provider.analyze(
+                    system_prompt=self.system_prompt,
+                    user_prompt=prompt,
+                    max_tokens=self.ai_max_tokens,
+                )
+            )
+            chunk_findings.append(f"### Chunk {chunk_index} of {total_chunks}\n{chunk_text}")
+
+        # Hierarchical merge: group findings into batches that fit the
+        # context window, merge each batch via AI, then repeat until one
+        # result remains.  This preserves all information instead of
+        # truncating findings.
+        merged_text = self._hierarchical_merge_findings(
+            chunk_findings=chunk_findings,
+            artifact_key=artifact_key,
+            artifact_name=artifact_name,
+            investigation_context=investigation_context,
+            model=model,
+            progress_callback=progress_callback,
+        )
+        self.logger.info(
+            "Chunked analysis for %s complete: %d chunks merged.",
+            artifact_key,
+            total_chunks,
+        )
+        return merged_text
+
+    def _merge_findings_budget(self) -> int:
+        """Character budget available for per-chunk findings in a merge prompt."""
+        overhead = len(self.chunk_merge_prompt_template) + len(self.system_prompt) + 500
+        return max(2000, self.chunk_csv_budget - overhead)
+
+    def _build_merge_prompt(
+        self,
+        findings_text: str,
+        batch_count: int,
+        artifact_key: str,
+        artifact_name: str,
+        investigation_context: str,
+    ) -> str:
+        """Fill the chunk-merge template with the given findings."""
+        prompt = self.chunk_merge_prompt_template
+        for placeholder, value in {
+            "chunk_count": str(batch_count),
+            "investigation_context": investigation_context.strip() or "No investigation context provided.",
+            "artifact_name": artifact_name,
+            "artifact_key": artifact_key,
+            "per_chunk_findings": findings_text,
+        }.items():
+            prompt = prompt.replace(f"{{{{{placeholder}}}}}", value)
+        return prompt
+
+    def _hierarchical_merge_findings(
+        self,
+        chunk_findings: list[str],
+        artifact_key: str,
+        artifact_name: str,
+        investigation_context: str,
+        model: str,
+        progress_callback: Any | None = None,
+    ) -> str:
+        """Merge chunk findings hierarchically until one result remains.
+
+        Groups findings into batches that fit the context window, merges
+        each batch via an AI call, then repeats on the merged results.
+        This preserves all information — nothing is truncated.
+        """
+        findings_budget = self._merge_findings_budget()
+        current_findings = list(chunk_findings)
+        merge_round = 0
+
+        while len(current_findings) > 1:
+            merge_round += 1
+
+            # Fallback: after max_merge_rounds, stop recursing and just
+            # concatenate the remaining findings (capped proportionally
+            # to fit the context window).
+            if merge_round > self.max_merge_rounds:
+                self.logger.warning(
+                    "Hierarchical merge for %s hit %d-round limit with %d findings remaining. "
+                    "Falling back to concatenation.",
+                    artifact_key,
+                    self.max_merge_rounds,
+                    len(current_findings),
+                )
+                if progress_callback is not None:
+                    self._emit_analysis_progress(
+                        progress_callback,
+                        artifact_key,
+                        "thinking",
+                        {
+                            "artifact_key": artifact_key,
+                            "artifact_name": artifact_name,
+                            "thinking_text": (
+                                f"Merge round limit reached ({self.max_merge_rounds}). "
+                                f"Concatenating {len(current_findings)} remaining findings..."
+                            ),
+                            "partial_text": "",
+                            "model": model,
+                        },
+                    )
+                total_chars = sum(len(f) for f in current_findings)
+                if total_chars > findings_budget:
+                    # Cap each finding proportionally to fit the budget.
+                    per_finding_budget = max(200, findings_budget // len(current_findings))
+                    capped = []
+                    for f in current_findings:
+                        if len(f) > per_finding_budget:
+                            capped.append(f[:per_finding_budget] + "\n[... truncated ...]")
+                        else:
+                            capped.append(f)
+                    concatenated = "\n\n".join(capped)
+                else:
+                    concatenated = "\n\n".join(current_findings)
+
+                # One final merge call on the concatenated findings.
+                merge_prompt = self._build_merge_prompt(
+                    findings_text=concatenated,
+                    batch_count=len(current_findings),
+                    artifact_key=artifact_key,
+                    artifact_name=artifact_name,
+                    investigation_context=investigation_context,
+                )
+                safe_key = self._sanitize_filename(artifact_key)
+                self._save_case_prompt(
+                    f"artifact_{safe_key}_merge_fallback.md",
+                    self.system_prompt,
+                    merge_prompt,
+                )
+                return self._call_ai_with_retry(
+                    lambda prompt=merge_prompt: self.ai_provider.analyze(
+                        system_prompt=self.system_prompt,
+                        user_prompt=prompt,
+                        max_tokens=self.ai_max_tokens,
+                    )
+                )
+
+            # Group findings into batches that fit within the budget.
+            batches: list[list[str]] = []
+            current_batch: list[str] = []
+            current_batch_size = 0
+
+            for finding in current_findings:
+                entry_size = len(finding) + 2  # +2 for "\n\n" separator
+                if current_batch and current_batch_size + entry_size > findings_budget:
+                    batches.append(current_batch)
+                    current_batch = []
+                    current_batch_size = 0
+                current_batch.append(finding)
+                current_batch_size += entry_size
+
+            if current_batch:
+                batches.append(current_batch)
+
+            # If everything fits in one batch, do the final merge.
+            if len(batches) == 1 and merge_round == 1:
+                # All findings fit — single merge call.
+                pass
+
+            # Safety: if batching didn't reduce the count (single finding
+            # too large), force it into one batch to avoid infinite loop.
+            if len(batches) >= len(current_findings):
+                batches = [current_findings]
+
+            total_batches = len(batches)
+            label_prefix = f"merge round {merge_round}" if merge_round > 1 else "merge"
+
+            self.logger.info(
+                "Hierarchical %s for %s: %d batches from %d findings (budget %d chars).",
+                label_prefix,
+                artifact_key,
+                total_batches,
+                len(current_findings),
+                findings_budget,
+            )
+
+            if progress_callback is not None:
+                self._emit_analysis_progress(
+                    progress_callback,
+                    artifact_key,
+                    "thinking",
+                    {
+                        "artifact_key": artifact_key,
+                        "artifact_name": artifact_name,
+                        "thinking_text": (
+                            f"Merging findings ({label_prefix}: "
+                            f"{len(current_findings)} findings into {total_batches} groups)..."
+                        ),
+                        "partial_text": "",
+                        "model": model,
+                    },
+                )
+
+            next_findings: list[str] = []
+            for batch_index, batch in enumerate(batches, start=1):
+                batch_text = "\n\n".join(batch)
+                merge_prompt = self._build_merge_prompt(
+                    findings_text=batch_text,
+                    batch_count=len(batch),
+                    artifact_key=artifact_key,
+                    artifact_name=artifact_name,
+                    investigation_context=investigation_context,
+                )
+
+                safe_key = self._sanitize_filename(artifact_key)
+                self._save_case_prompt(
+                    f"artifact_{safe_key}_merge_r{merge_round}_b{batch_index}.md",
+                    self.system_prompt,
+                    merge_prompt,
+                )
+
+                merged = self._call_ai_with_retry(
+                    lambda prompt=merge_prompt: self.ai_provider.analyze(
+                        system_prompt=self.system_prompt,
+                        user_prompt=prompt,
+                        max_tokens=self.ai_max_tokens,
+                    )
+                )
+                next_findings.append(f"### Merged batch {batch_index}\n{merged}")
+
+            current_findings = next_findings
+
+        return current_findings[0] if current_findings else ""
+
     def analyze_artifact(
         self,
         artifact_key: str,
@@ -566,6 +1057,65 @@ class ForensicAnalyzer:
                     csv_path=analysis_csv_path,
                 )
             ]
+
+            safe_key = self._sanitize_filename(artifact_key)
+            self._save_case_prompt(
+                f"artifact_{safe_key}.md",
+                self.system_prompt,
+                artifact_prompt,
+            )
+
+            # When the prompt exceeds the context budget, use chunked analysis
+            # to ensure every row of data is seen by the model.
+            prompt_tokens_estimate = self._estimate_tokens(artifact_prompt) + self._estimate_tokens(self.system_prompt)
+            if prompt_tokens_estimate > self.ai_max_tokens:
+                self.logger.info(
+                    "Prompt for %s (~%d tokens) exceeds ai_max_tokens (%d); using chunked analysis.",
+                    artifact_key,
+                    prompt_tokens_estimate,
+                    self.ai_max_tokens,
+                )
+                if progress_callback is not None:
+                    self._emit_analysis_progress(
+                        progress_callback,
+                        artifact_key,
+                        "started",
+                        {
+                            "artifact_key": artifact_key,
+                            "artifact_name": artifact_name,
+                            "model": model,
+                        },
+                    )
+                analysis_text = self._analyze_artifact_chunked(
+                    artifact_prompt=artifact_prompt,
+                    artifact_key=artifact_key,
+                    artifact_name=artifact_name,
+                    investigation_context=investigation_context,
+                    model=model,
+                    progress_callback=progress_callback,
+                )
+                duration_seconds = perf_counter() - start_time
+                self._audit_log(
+                    "analysis_completed",
+                    {
+                        "artifact_key": artifact_key,
+                        "artifact_name": artifact_name,
+                        "token_count": self._estimate_tokens(analysis_text),
+                        "duration_seconds": round(duration_seconds, 6),
+                        "status": "success",
+                        "chunked": True,
+                    },
+                )
+                citation_warnings = self._validate_citations(artifact_key, analysis_text)
+                result: dict[str, Any] = {
+                    "artifact_key": artifact_key,
+                    "artifact_name": artifact_name,
+                    "analysis": analysis_text,
+                    "model": model,
+                }
+                if citation_warnings:
+                    result["citation_warnings"] = citation_warnings
+                return result
 
             analyze_with_progress = getattr(self.ai_provider, "analyze_with_progress", None)
             if callable(analyze_with_progress) and progress_callback is not None:
@@ -704,6 +1254,7 @@ class ForensicAnalyzer:
         provider = self.model_info.get("provider", "unknown")
         summary_artifact_key = "cross_artifact_summary"
         summary_artifact_name = "Cross-Artifact Summary"
+        summary_prompt_filename = f"{self._sanitize_filename(summary_artifact_key)}.md"
 
         self._audit_log(
             "analysis_started",
@@ -713,6 +1264,12 @@ class ForensicAnalyzer:
                 "provider": provider,
                 "model": model,
             },
+        )
+
+        self._save_case_prompt(
+            summary_prompt_filename,
+            self.system_prompt,
+            summary_prompt,
         )
 
         start_time = perf_counter()
@@ -1144,6 +1701,9 @@ class ForensicAnalyzer:
 
         return "\n".join(lines), min_time, max_time
 
+    def _should_use_shortened_prompt(self) -> bool:
+        return self.ai_max_tokens < self.shortened_prompt_cutoff_tokens
+
     def _extract_ioc_targets(self, investigation_context: str) -> dict[str, list[str]]:
         text = self._stringify_value(investigation_context)
         if not text:
@@ -1302,7 +1862,8 @@ class ForensicAnalyzer:
     ) -> str:
         """Prepare one artifact CSV as a bounded, analysis-ready prompt."""
         resolved_csv_path = csv_path if csv_path is not None else self._resolve_artifact_csv_path(artifact_key)
-        template = self.artifact_prompt_template
+        include_statistics = not self._should_use_shortened_prompt()
+        template = self.artifact_prompt_template if include_statistics else self.artifact_prompt_template_small_context
         artifact_metadata = self._resolve_artifact_metadata(artifact_key)
 
         context_dates = self._extract_dates_from_context(investigation_context)
@@ -1406,62 +1967,56 @@ class ForensicAnalyzer:
                 dedup_audit_details["write_error"] = dedup_write_error
             self._audit_log("artifact_deduplicated", dedup_audit_details)
 
-        statistics, min_time, max_time = self._compute_statistics(rows=analysis_rows, columns=analysis_columns)
-        stats_prefix: list[str] = []
-        if filter_start and filter_end:
-            if filter_source == "step_2_selection" and self._explicit_analysis_date_range_label:
-                start_date, end_date = self._explicit_analysis_date_range_label
-                filter_details = (
-                    "Date filter applied from Step 2 selection: "
-                    f"{start_date} to {end_date} (inclusive).\n"
-                    f"Rows kept after filter: {len(analysis_rows)} of {source_row_count}.\n"
-                    f"Rows without parseable timestamp (included unfiltered): {rows_without_timestamp}.\n"
-                )
-            else:
-                filter_details = (
-                    "Date filter applied from investigation context: "
-                    f"{self._format_datetime(filter_start)} to {self._format_datetime(filter_end)} "
-                    f"(+/- {self.date_buffer_days} days).\n"
-                    f"Rows kept after filter: {len(analysis_rows)} of {source_row_count}.\n"
-                    f"Rows without parseable timestamp (included unfiltered): {rows_without_timestamp}.\n"
-                )
-            stats_prefix.append(filter_details.rstrip())
+        statistics = ""
+        if include_statistics:
+            statistics, min_time, max_time = self._compute_statistics(rows=analysis_rows, columns=analysis_columns)
+            stats_prefix: list[str] = []
+            if filter_start and filter_end:
+                if filter_source == "step_2_selection" and self._explicit_analysis_date_range_label:
+                    start_date, end_date = self._explicit_analysis_date_range_label
+                    filter_details = (
+                        "Date filter applied from Step 2 selection: "
+                        f"{start_date} to {end_date} (inclusive).\n"
+                        f"Rows kept after filter: {len(analysis_rows)} of {source_row_count}.\n"
+                        f"Rows without parseable timestamp (included unfiltered): {rows_without_timestamp}.\n"
+                    )
+                else:
+                    filter_details = (
+                        "Date filter applied from investigation context: "
+                        f"{self._format_datetime(filter_start)} to {self._format_datetime(filter_end)} "
+                        f"(+/- {self.date_buffer_days} days).\n"
+                        f"Rows kept after filter: {len(analysis_rows)} of {source_row_count}.\n"
+                        f"Rows without parseable timestamp (included unfiltered): {rows_without_timestamp}.\n"
+                    )
+                stats_prefix.append(filter_details.rstrip())
 
-        if self.artifact_deduplication_enabled:
-            dedup_details = [
-                "Artifact deduplication enabled.",
-                f"Rows removed as timestamp/ID-only duplicates: {deduplicated_records}.",
-                f"Rows annotated with deduplication comment: {dedup_annotated_rows}.",
-            ]
-            if dedup_variant_columns:
-                dedup_details.append(
-                    "Dedup variant columns: " + ", ".join(dedup_variant_columns) + "."
+            if self.artifact_deduplication_enabled:
+                dedup_details = [
+                    "Artifact deduplication enabled.",
+                    f"Rows removed as timestamp/ID-only duplicates: {deduplicated_records}.",
+                    f"Rows annotated with deduplication comment: {dedup_annotated_rows}.",
+                ]
+                if dedup_variant_columns:
+                    dedup_details.append(
+                        "Dedup variant columns: " + ", ".join(dedup_variant_columns) + "."
+                    )
+                stats_prefix.append("\n".join(dedup_details))
+
+            if projection_applied:
+                stats_prefix.append(
+                    "AI column projection applied: " + ", ".join(analysis_columns) + "."
                 )
-            stats_prefix.append("\n".join(dedup_details))
 
-        if projection_applied:
-            stats_prefix.append(
-                "AI column projection applied: " + ", ".join(analysis_columns) + "."
-            )
-
-        if stats_prefix:
-            prefix_text = "\n".join(stats_prefix)
-            statistics = f"{prefix_text}\n{statistics}"
+            if stats_prefix:
+                prefix_text = "\n".join(stats_prefix)
+                statistics = f"{prefix_text}\n{statistics}"
+        else:
+            min_time, max_time = self._time_range_for_rows(analysis_rows)
 
         full_data_csv = self._build_full_data_csv(
             rows=analysis_rows,
             columns=analysis_columns,
-            max_chars=MAX_INLINE_CSV_CHARS,
         )
-        if "[TRUNCATED —" in full_data_csv:
-            self._audit_log(
-                "inline_csv_truncated",
-                {
-                    "artifact_key": artifact_key,
-                    "total_rows": len(analysis_rows),
-                    "max_inline_chars": MAX_INLINE_CSV_CHARS,
-                },
-            )
         priority_directives = self._build_priority_directives(investigation_context)
         ioc_targets = self._format_ioc_targets(investigation_context)
         artifact_guidance = self._resolve_analysis_instructions(
@@ -1930,13 +2485,12 @@ class ForensicAnalyzer:
         self,
         rows: list[dict[str, str]],
         columns: list[str],
-        max_chars: int = 0,
     ) -> str:
         """Serialize rows to inline CSV text.
 
-        When *max_chars* is positive and the full CSV exceeds that limit,
-        the output is truncated and a notice is appended telling the AI
-        that the complete data is available in the attached CSV file.
+        Always produces the complete CSV — truncation is never acceptable
+        in DFIR.  When the data exceeds the model context window, the
+        caller uses chunked analysis instead.
         """
         if not columns:
             return "No columns available."
@@ -1950,15 +2504,6 @@ class ForensicAnalyzer:
         full_csv = buffer.getvalue().strip()
         if not full_csv:
             return "No rows available after date filtering."
-
-        if max_chars > 0 and len(full_csv) > max_chars:
-            truncated = full_csv[:max_chars].rsplit("\n", 1)[0]
-            rows_shown = truncated.count("\n")  # header + data rows
-            return (
-                f"{truncated}\n"
-                f"... [TRUNCATED — showing ~{rows_shown} of {len(rows)} rows inline. "
-                f"Full dataset ({len(rows)} rows) is provided as an attached CSV file.]"
-            )
 
         return full_csv
 

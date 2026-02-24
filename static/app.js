@@ -8,6 +8,7 @@
   const RECOMMENDED_PROFILE = "recommended";
   const DROP_HELP = "Drag and drop evidence here (.E01, .dd, .raw, .vmdk, .vhd, .vhdx, .vdi, .qcow2, .zip, .7z, .tar, ...)";
   const CONFIDENCE_TOKEN_PATTERN = /\b(CRITICAL|HIGH|MEDIUM|LOW)\b/gi;
+  const AI_MAX_TOKENS_WARNING_THRESHOLD = 32000;
   const CONFIDENCE_CLASS_MAP = {
     CRITICAL: "confidence-critical",
     HIGH: "confidence-high",
@@ -128,9 +129,13 @@
     el.settingsTabPanels = Array.from(document.querySelectorAll("[data-settings-panel]"));
 
     el.setAiMaxTokens = q("setting-ai-max-tokens");
+    el.setAiMaxTokensWarning = q("setting-ai-max-tokens-warning");
+    el.setShortenedPromptCutoffTokens = q("setting-shortened-prompt-cutoff-tokens");
     el.setConnectionMaxTokens = q("setting-connection-max-tokens");
     el.setDateBufferDays = q("setting-date-buffer-days");
     el.setCitationSpotCheckLimit = q("setting-citation-spot-check-limit");
+    el.setLocalRequestTimeoutSeconds = q("setting-local-request-timeout-seconds");
+    el.setMaxMergeRounds = q("setting-max-merge-rounds");
     el.setArtifactDeduplicationEnabled = q("setting-artifact-deduplication-enabled");
 
     el.setAttachClaude = q("setting-attach-claude");
@@ -1806,6 +1811,10 @@
       el.setCsvOutputDir.addEventListener("input", updateCsvOutputHelp);
       el.setCsvOutputDir.addEventListener("change", updateCsvOutputHelp);
     }
+    if (el.setAiMaxTokens) {
+      el.setAiMaxTokens.addEventListener("input", updateAiMaxTokensWarning);
+      el.setAiMaxTokens.addEventListener("change", updateAiMaxTokensWarning);
+    }
     el.settingsForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       await saveSettings();
@@ -1894,9 +1903,21 @@
     if (!isObj(s)) return;
     const analysis = obj(s.analysis);
     setNumberInput(el.setAiMaxTokens, num(analysis.ai_max_tokens, 128000), 128000);
+    setNumberInput(
+      el.setShortenedPromptCutoffTokens,
+      num(analysis.shortened_prompt_cutoff_tokens, num(analysis.statistics_section_cutoff_tokens, 64000)),
+      64000
+    );
     setNumberInput(el.setConnectionMaxTokens, num(analysis.connection_test_max_tokens, 256), 256);
     setNumberInput(el.setDateBufferDays, num(analysis.date_buffer_days, 7), 7);
     setNumberInput(el.setCitationSpotCheckLimit, num(analysis.citation_spot_check_limit, 20), 20);
+    setNumberInput(
+      el.setLocalRequestTimeoutSeconds,
+      num(obj(obj(s.ai).local).request_timeout_seconds, 3600),
+      3600
+    );
+    setNumberInput(el.setMaxMergeRounds, num(analysis.max_merge_rounds, 5), 5);
+    updateAiMaxTokensWarning();
     if (el.setArtifactDeduplicationEnabled) {
       el.setArtifactDeduplicationEnabled.checked = boolSetting(analysis.artifact_deduplication_enabled, true);
     }
@@ -1912,6 +1933,15 @@
     if (!input) return;
     const numeric = typeof value === "number" && Number.isFinite(value) ? value : fallback;
     input.value = String(numeric);
+  }
+
+  function updateAiMaxTokensWarning() {
+    if (!el.setAiMaxTokensWarning || !el.setAiMaxTokens) return;
+    const parsed = num(val(el.setAiMaxTokens), null);
+    const shouldWarn = typeof parsed === "number"
+      && Number.isFinite(parsed)
+      && parsed < AI_MAX_TOKENS_WARNING_THRESHOLD;
+    el.setAiMaxTokensWarning.hidden = !shouldWarn;
   }
 
   function boolSetting(value, fallback = false) {
@@ -2050,9 +2080,16 @@
     if (el.setCsvOutputDir) base.evidence.csv_output_dir = val(el.setCsvOutputDir);
 
     base.analysis.ai_max_tokens = readIntInput(el.setAiMaxTokens, 128000, 1);
+    base.analysis.shortened_prompt_cutoff_tokens = readIntInput(
+      el.setShortenedPromptCutoffTokens,
+      64000,
+      1
+    );
     base.analysis.connection_test_max_tokens = readIntInput(el.setConnectionMaxTokens, 256, 1);
     base.analysis.date_buffer_days = readIntInput(el.setDateBufferDays, 7, 0);
     base.analysis.citation_spot_check_limit = readIntInput(el.setCitationSpotCheckLimit, 20, 1);
+    base.analysis.max_merge_rounds = readIntInput(el.setMaxMergeRounds, 5, 1);
+    base.ai.local.request_timeout_seconds = readIntInput(el.setLocalRequestTimeoutSeconds, 3600, 1);
     if (el.setArtifactDeduplicationEnabled) {
       base.analysis.artifact_deduplication_enabled = !!el.setArtifactDeduplicationEnabled.checked;
     }

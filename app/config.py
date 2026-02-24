@@ -33,6 +33,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "model": "llama3.1:70b",
             "api_key": "not-needed",
             "attach_csv_as_file": True,
+            "request_timeout_seconds": 3600,
         },
     },
     "server": {
@@ -46,6 +47,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "analysis": {
         "ai_max_tokens": 128000,
+        "shortened_prompt_cutoff_tokens": 64000,
         "connection_test_max_tokens": 256,
         "date_buffer_days": 7,
         "citation_spot_check_limit": 20,

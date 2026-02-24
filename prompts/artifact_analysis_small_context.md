@@ -12,9 +12,6 @@
 ## Data
 Records: {{total_records}} | Time range: {{time_range_start}} to {{time_range_end}}
 
-### Statistics
-{{statistics}}
-
 ## Task
 
 Analyze this data for evidence of compromise in the context of the investigation above.
@@ -34,17 +31,12 @@ For each finding, use this format:
   - Evidence: timestamp, value, and row reference from the data.
   - Why it matters: one sentence on incident impact or risk.
   - Alternative explanation: most likely benign reason for this, if any.
-  - Verify: one specific follow-up action.
 
 Order by severity, then confidence. Do not pad with low-value observations.
 
 **IOC Status** (only if the investigation context mentions specific IOCs)
 
-- IOC → Observed / Not Observed / Not Assessable. Evidence if observed.
-
-**Data Gaps**
-
-What can't be determined from this artifact and why. Include: missing time ranges, absent fields, signs of tampering or log clearing, and what other artifacts would help.
+- IOC -> Observed / Not Observed / Not Assessable. Evidence if observed.
 
 ### Full Data (CSV)
 ```
