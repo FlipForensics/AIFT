@@ -1119,7 +1119,11 @@ class AnalyzerTests(unittest.TestCase):
 
         self.assertEqual(len(fake_provider.calls), 1)
         self.assertEqual(fake_provider.calls[0]["max_tokens"], "1234")
-        self.assertIn("(+/- 2 days).", fake_provider.calls[0]["user_prompt"])
+        user_prompt = fake_provider.calls[0]["user_prompt"]
+        # With date_buffer_days=2, only the Jan-15 row survives the filter;
+        # the Jan-01 row is outside the ±2 day window.
+        self.assertIn("EntryA", user_prompt)
+        self.assertNotIn("OldEntry", user_prompt)
 
     def test_run_full_analysis_continues_after_artifact_failure(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:

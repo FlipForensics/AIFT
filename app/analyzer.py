@@ -234,7 +234,16 @@ _DEFAULT_CHUNK_MERGE_PROMPT_TEMPLATE = (
     "- **Data Gaps**\n"
 )
 
-_CSV_DATA_SECTION_MARKER = "## Full Data (CSV)\n"
+# Regex that matches the CSV data section heading used in prompt templates.
+# Handles both hardcoded defaults ("## Full Data (CSV)\n") and file-based
+# templates ("### Full Data (CSV)\n```\n").  The match includes everything
+# up to the start of the actual CSV rows.
+_CSV_DATA_SECTION_RE = re.compile(
+    r"#{2,3}\s+Full\s+Data\s+\(CSV\)\s*\n(?:```\s*\n)?",
+    flags=re.IGNORECASE,
+)
+# Trailing code fence that file-based templates append after {{data_csv}}.
+_CSV_TRAILING_FENCE_RE = re.compile(r"\n```\s*$")
 
 
 class _UnavailableProvider:
@@ -647,6 +656,43 @@ class ForensicAnalyzer:
 
         return chunks if chunks else [csv_text]
 
+    @staticmethod
+    def _split_csv_and_suffix(raw_csv_tail: str) -> tuple[str, str]:
+        """Separate CSV rows from trailing content (code fences, context reminders).
+
+        Returns ``(csv_data, suffix)`` where *suffix* contains any trailing
+        code fence and/or Final Context Reminder text that should be appended
+        to every chunk prompt.
+        """
+        text = raw_csv_tail
+
+        # 1. Extract the Final Context Reminder (appended after CSV + fence).
+        reminder_marker = "## Final Context Reminder"
+        reminder_pos = text.find(reminder_marker)
+        context_suffix = ""
+        if reminder_pos >= 0:
+            context_suffix = "\n\n" + text[reminder_pos:].strip()
+            text = text[:reminder_pos]
+
+        # 2. Strip a trailing markdown code fence from file-based templates.
+        #    Now that the reminder is removed, the fence (if any) is at the end.
+        trailing_fence = ""
+        fence_match = _CSV_TRAILING_FENCE_RE.search(text)
+        if fence_match:
+            trailing_fence = fence_match.group()
+            text = text[: fence_match.start()]
+
+        csv_data = text.strip()
+
+        # Reassemble the suffix: fence first (closes the code block around
+        # each chunk), then the context reminder.
+        suffix = ""
+        if trailing_fence:
+            suffix += trailing_fence
+        if context_suffix:
+            suffix += context_suffix
+        return csv_data, suffix
+
     def _analyze_artifact_chunked(
         self,
         artifact_prompt: str,
@@ -662,8 +708,10 @@ class ForensicAnalyzer:
         independently, then merges the per-chunk findings with a final AI call.
         """
         # Split the prompt into the instruction portion and the CSV data.
-        marker_pos = artifact_prompt.find(_CSV_DATA_SECTION_MARKER)
-        if marker_pos < 0:
+        # Handles both hardcoded ("## Full Data (CSV)") and file-based
+        # ("### Full Data (CSV)\n```") template styles.
+        marker_match = _CSV_DATA_SECTION_RE.search(artifact_prompt)
+        if marker_match is None:
             # No CSV section found — fall back to single call.
             return self._call_ai_with_retry(
                 lambda: self.ai_provider.analyze(
@@ -673,11 +721,17 @@ class ForensicAnalyzer:
                 )
             )
 
-        instructions_portion = artifact_prompt[: marker_pos + len(_CSV_DATA_SECTION_MARKER)]
-        csv_data = artifact_prompt[marker_pos + len(_CSV_DATA_SECTION_MARKER) :].strip()
+        instructions_portion = artifact_prompt[: marker_match.end()]
+        raw_csv_tail = artifact_prompt[marker_match.end():]
+
+        # Separate the CSV data from any trailing content (code fences,
+        # Final Context Reminder) so that only actual CSV rows are chunked
+        # and the reminder is appended to every chunk.
+        csv_data, context_suffix = self._split_csv_and_suffix(raw_csv_tail)
 
         # Determine how much space is left for CSV data in each chunk.
-        instructions_chars = len(instructions_portion) + len(self.system_prompt)
+        suffix_chars = len(context_suffix)
+        instructions_chars = len(instructions_portion) + len(self.system_prompt) + suffix_chars
         csv_budget = max(1000, self.chunk_csv_budget - instructions_chars)
 
         chunks = self._split_csv_into_chunks(csv_data, csv_budget)
@@ -709,7 +763,7 @@ class ForensicAnalyzer:
 
         chunk_findings: list[str] = []
         for chunk_index, chunk_csv in enumerate(chunks, start=1):
-            chunk_prompt = f"{instructions_portion}{chunk_csv}"
+            chunk_prompt = f"{instructions_portion}{chunk_csv}{context_suffix}"
             chunk_label = f"chunk {chunk_index}/{total_chunks}"
 
             if progress_callback is not None:
@@ -759,6 +813,32 @@ class ForensicAnalyzer:
             )
 
         per_chunk_text = "\n\n".join(chunk_findings)
+
+        # Estimate merge prompt size.  If the combined findings exceed the
+        # context budget, cap each chunk's findings so the merge fits.
+        merge_template_overhead = len(self.chunk_merge_prompt_template) + len(self.system_prompt) + 500
+        merge_findings_budget = max(
+            2000,
+            self.chunk_csv_budget - merge_template_overhead,
+        )
+        if len(per_chunk_text) > merge_findings_budget:
+            max_per_chunk = max(200, merge_findings_budget // total_chunks)
+            capped: list[str] = []
+            for chunk_index, finding in enumerate(chunk_findings, start=1):
+                if len(finding) > max_per_chunk:
+                    truncated = finding[:max_per_chunk].rsplit("\n", 1)[0]
+                    capped.append(
+                        f"{truncated}\n... [findings trimmed to fit merge context window]"
+                    )
+                else:
+                    capped.append(finding)
+            per_chunk_text = "\n\n".join(capped)
+            self.logger.info(
+                "Merge prompt for %s capped per-chunk findings to ~%d chars each to fit context window.",
+                artifact_key,
+                max_per_chunk,
+            )
+
         merge_prompt = self.chunk_merge_prompt_template
         for placeholder, value in {
             "chunk_count": str(total_chunks),

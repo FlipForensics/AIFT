@@ -106,9 +106,9 @@ ollama serve
 
 In AIFT settings: select **Local**, set URL to `http://localhost:11434/v1`, model to `llama3.1:70b`.
 
-**Important: set Analysis Max Tokens to match your model's context window.** For example, if you run `qwen3:8b` (8K context), set `Analysis Max Tokens` to `8000` in settings. This controls how much data is sent per AI call. When an artifact's data exceeds the context budget, AIFT automatically splits it into chunks - each chunk is analyzed independently and findings are merged so no rows are missed. Large-context cloud models (Claude, OpenAI) don't need this adjustment.
+**Important: set Analysis Max Tokens to match your model's context window.** For example, if you run `qwen3:8b` with 32K context, set `Analysis Max Tokens` to `32000` in settings. This controls how much data is sent per AI call. When an artifact's data exceeds the context budget, AIFT automatically splits it into chunks - each chunk is analyzed independently and findings are merged so no rows are missed. Large-context cloud models (Claude, OpenAI) don't need this adjustment.
 
-For slower local runs, increase `ai.local.request_timeout_seconds` in `config.yaml` (default: `3600`).
+As a bare minimum 32K tokens is required. 
 
 ### Kimi
 
