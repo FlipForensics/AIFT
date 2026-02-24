@@ -29,6 +29,8 @@ ACTION_TYPES = frozenset(
         "chunked_analysis_started",
         "artifact_ai_projection_warning",
         "prompt_submitted",
+        "chat_message_sent",
+        "chat_response_received",
         "report_generated",
         "hash_verification",
         "config_changed",

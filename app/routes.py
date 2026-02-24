@@ -43,6 +43,7 @@ from .case_logging import (
     unregister_case_log_handler,
 )
 from .config import LOGO_FILE_CANDIDATES, load_config, save_config
+from .chat import ChatManager
 from .hasher import compute_hashes, verify_hash
 from .parser import ARTIFACT_REGISTRY, ForensicParser
 from .reporter import ReportGenerator
@@ -102,6 +103,13 @@ PROFILE_FILE_SUFFIX = ".json"
 RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS = {"mft", "usnjrnl", "evtx", "defender.evtx"}
 CONNECTION_TEST_SYSTEM_PROMPT = "You are a connectivity test assistant. Reply briefly."
 CONNECTION_TEST_USER_PROMPT = "Reply with: Connection OK."
+DEFAULT_FORENSIC_SYSTEM_PROMPT = (
+    "You are a digital forensic analyst. "
+    "Analyze ONLY the data provided to you. "
+    "Do not fabricate evidence. "
+    "Prioritize incident-relevant findings and response actions; use baseline only as supporting context."
+)
+CHAT_HISTORY_MAX_PAIRS = 20
 TERMINAL_CASE_STATUSES = frozenset({"completed", "failed", "error"})
 SSE_POLL_INTERVAL_SECONDS = 0.2
 SSE_INITIAL_IDLE_GRACE_SECONDS = 1.0
@@ -965,6 +973,105 @@ def _read_audit_entries(case_dir: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def _load_forensic_system_prompt() -> str:
+    prompt_path = PROJECT_ROOT / "prompts" / "system_prompt.md"
+    try:
+        prompt_text = prompt_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        LOGGER.warning("Failed to read system prompt from %s; using fallback prompt.", prompt_path)
+        return DEFAULT_FORENSIC_SYSTEM_PROMPT
+    return prompt_text or DEFAULT_FORENSIC_SYSTEM_PROMPT
+
+
+def _load_case_analysis_results(case: dict[str, Any]) -> dict[str, Any] | None:
+    in_memory = case.get("analysis_results")
+    if isinstance(in_memory, dict) and in_memory:
+        return dict(in_memory)
+
+    results_path = Path(case["case_dir"]) / "analysis_results.json"
+    if not results_path.exists():
+        return dict(in_memory) if isinstance(in_memory, dict) else None
+
+    try:
+        parsed = json.loads(results_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        LOGGER.warning("Failed to load analysis results from %s", results_path, exc_info=True)
+        return dict(in_memory) if isinstance(in_memory, dict) else None
+
+    if isinstance(parsed, dict):
+        return parsed
+    return dict(in_memory) if isinstance(in_memory, dict) else None
+
+
+def _resolve_case_investigation_context(case: dict[str, Any]) -> str:
+    context = str(case.get("investigation_context", "")).strip()
+    if context:
+        return context
+
+    prompt_path = Path(case["case_dir"]) / "prompt.txt"
+    if not prompt_path.exists():
+        return ""
+
+    try:
+        return prompt_path.read_text(encoding="utf-8")
+    except OSError:
+        LOGGER.warning("Failed to read investigation context prompt at %s", prompt_path, exc_info=True)
+        return ""
+
+
+def _resolve_case_parsed_dir(case: dict[str, Any]) -> Path:
+    csv_output_dir = str(case.get("csv_output_dir", "")).strip()
+    if csv_output_dir:
+        return Path(csv_output_dir)
+
+    csv_paths = _collect_case_csv_paths(case)
+    if csv_paths:
+        return csv_paths[0].parent
+
+    return Path(case["case_dir"]) / "parsed"
+
+
+def _render_chat_messages_for_provider(messages: list[dict[str, str]]) -> str:
+    rendered_sections: list[str] = []
+    first_user_rendered = False
+    last_user_index = -1
+    for index, message in enumerate(messages):
+        role = str(message.get("role", "")).strip().lower()
+        content = str(message.get("content", "")).strip()
+        if role == "user" and content:
+            last_user_index = index
+
+    for index, message in enumerate(messages):
+        role = str(message.get("role", "")).strip().lower()
+        content = str(message.get("content", "")).strip()
+        if not content or role == "system":
+            continue
+
+        if role == "user" and not first_user_rendered:
+            rendered_sections.append(f"Context Block:\n{content}")
+            first_user_rendered = True
+            continue
+
+        if role == "user" and index == last_user_index:
+            rendered_sections.append(f"New User Question:\n{content}")
+            continue
+
+        label = "User" if role == "user" else "Assistant" if role == "assistant" else role.title()
+        rendered_sections.append(f"{label}:\n{content}")
+
+    return "\n\n".join(rendered_sections).strip()
+
+
+def _resolve_chat_max_tokens(config: dict[str, Any]) -> int:
+    analysis_config = config.get("analysis", {})
+    if not isinstance(analysis_config, dict):
+        analysis_config = {}
+    try:
+        return max(1, int(analysis_config.get("ai_max_tokens", 4096)))
+    except (TypeError, ValueError):
+        return 4096
+
+
 def _resolve_hash_verification_path(case: dict[str, Any]) -> Path | None:
     source_path = str(case.get("source_path", "")).strip()
     if source_path:
@@ -1254,6 +1361,10 @@ def _run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) ->
             metadata=metadata,
             progress_callback=_analysis_progress,
         )
+        analysis_results_path = Path(case["case_dir"]) / "analysis_results.json"
+        with analysis_results_path.open("w", encoding="utf-8") as analysis_results_file:
+            json.dump(output, analysis_results_file, indent=2, ensure_ascii=True)
+            analysis_results_file.write("\n")
         with STATE_LOCK:
             case["investigation_context"] = prompt
             case["analysis_results"] = output
@@ -1650,6 +1761,147 @@ def stream_analysis_progress(case_id: str) -> Response | tuple[Response, int]:
     if _get_case(case_id) is None:
         return _error(f"Case not found: {case_id}", 404)
     return _stream_sse(ANALYSIS_PROGRESS, case_id)
+
+
+@routes_bp.post("/api/cases/<case_id>/chat")
+def chat_with_case(case_id: str) -> Response | tuple[Response, int]:
+    case = _get_case(case_id)
+    if case is None:
+        return _error(f"Case not found: {case_id}", 404)
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _error("Chat payload must be a JSON object.", 400)
+
+    message = str(payload.get("message", "")).strip()
+    if not message:
+        return _error("`message` is required.", 400)
+
+    analysis_results = _load_case_analysis_results(case)
+    if not analysis_results:
+        return _error("No analysis results available for this case. Run analysis first.", 400)
+
+    chat_manager = ChatManager(case["case_dir"])
+    history_snapshot = chat_manager.get_history()
+    message_index = (
+        sum(1 for entry in history_snapshot if str(entry.get("role", "")).strip().lower() == "user") + 1
+    )
+    case["audit"].log(
+        "chat_message_sent",
+        {
+            "message_index": message_index,
+            "message": _sanitize_prompt(message, max_chars=8000),
+        },
+    )
+
+    try:
+        context_block = chat_manager.build_chat_context(
+            analysis_results=analysis_results,
+            investigation_context=_resolve_case_investigation_context(case),
+            metadata=dict(case.get("image_metadata", {})),
+        )
+
+        retrieved_payload = chat_manager.retrieve_csv_data(
+            question=message,
+            parsed_dir=_resolve_case_parsed_dir(case),
+        )
+        retrieved_artifacts: list[str] | None = None
+        if isinstance(retrieved_payload.get("artifacts"), list):
+            normalized_artifacts = [
+                str(item).strip()
+                for item in retrieved_payload.get("artifacts", [])
+                if str(item).strip()
+            ]
+            if normalized_artifacts:
+                retrieved_artifacts = normalized_artifacts
+
+        message_for_ai = message
+        retrieved_data = str(retrieved_payload.get("data", "")).strip()
+        if bool(retrieved_payload.get("retrieved")) and retrieved_data:
+            message_for_ai = (
+                "Retrieved CSV data for this question:\n"
+                f"{retrieved_data}\n\n"
+                "User question:\n"
+                f"{message}"
+            )
+
+        system_prompt = _load_forensic_system_prompt()
+        ai_messages: list[dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": context_block},
+        ]
+        for history_message in chat_manager.get_recent_history(max_pairs=CHAT_HISTORY_MAX_PAIRS):
+            role = str(history_message.get("role", "")).strip().lower()
+            content = str(history_message.get("content", "")).strip()
+            if role in {"user", "assistant"} and content:
+                ai_messages.append({"role": role, "content": content})
+        ai_messages.append({"role": "user", "content": message_for_ai})
+        chat_user_prompt = _render_chat_messages_for_provider(ai_messages)
+        if not chat_user_prompt:
+            chat_user_prompt = (
+                f"Context Block:\n{context_block}\n\n"
+                f"New User Question:\n{message_for_ai}"
+            )
+
+        config = current_app.config.get("AIFT_CONFIG", {})
+        if not isinstance(config, dict):
+            return _error("Invalid in-memory configuration state.", 500)
+
+        chat_max_tokens = _resolve_chat_max_tokens(config)
+        provider = create_provider(copy.deepcopy(config))
+        started_at = time.perf_counter()
+        response_text = str(
+            provider.analyze(
+                system_prompt=system_prompt,
+                user_prompt=chat_user_prompt,
+                max_tokens=chat_max_tokens,
+            )
+        ).strip()
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        if not response_text:
+            return _error("Provider returned an empty response.", 502)
+
+        chat_manager.add_message("user", message, metadata={"message_index": message_index})
+        assistant_metadata: dict[str, Any] = {"message_index": message_index}
+        if retrieved_artifacts is not None:
+            assistant_metadata["data_retrieved"] = list(retrieved_artifacts)
+        chat_manager.add_message("assistant", response_text, metadata=assistant_metadata)
+
+        case["audit"].log(
+            "chat_response_received",
+            {
+                "message_index": message_index,
+                "duration_ms": duration_ms,
+                "response_tokens_estimate": chat_manager.estimate_token_count(response_text),
+                "data_retrieved": bool(retrieved_artifacts),
+                "retrieved_artifacts": list(retrieved_artifacts or []),
+            },
+        )
+
+        return jsonify(
+            {
+                "response": response_text,
+                "data_retrieved": list(retrieved_artifacts) if retrieved_artifacts is not None else None,
+            }
+        )
+    except ValueError as error:
+        LOGGER.warning("Chat request rejected for case %s: %s", case_id, error)
+        return _error(str(error), 400)
+    except AIProviderError as error:
+        LOGGER.warning("Chat provider request failed for case %s: %s", case_id, error)
+        return _error(str(error), 502)
+    except Exception:
+        LOGGER.exception("Unexpected failure during chat for case %s", case_id)
+        return _error("Unexpected error while generating chat response.", 500)
+
+
+@routes_bp.get("/api/cases/<case_id>/chat/history")
+def get_case_chat_history(case_id: str) -> Response | tuple[Response, int]:
+    case = _get_case(case_id)
+    if case is None:
+        return _error(f"Case not found: {case_id}", 404)
+    manager = ChatManager(case["case_dir"])
+    return jsonify(manager.get_history())
 
 
 @routes_bp.get("/api/cases/<case_id>/report")

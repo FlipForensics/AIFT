@@ -927,6 +927,148 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(analyze_resp.status_code, 400)
             self.assertIn("Parse and use in AI", analyze_resp.get_json()["error"])
 
+    def test_analyze_persists_analysis_results_json(self) -> None:
+        evidence_path = Path(self.temp_dir.name) / "analysis-results.E01"
+        evidence_path.write_bytes(b"demo")
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+            patch.object(
+                routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+        ):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Persist Analysis Results Case"})
+            self.assertEqual(create_resp.status_code, 201)
+            case_id = create_resp.get_json()["case_id"]
+
+            evidence_resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                json={"path": str(evidence_path)},
+            )
+            self.assertEqual(evidence_resp.status_code, 200)
+
+            parse_resp = self.client.post(
+                f"/api/cases/{case_id}/parse",
+                json={"artifacts": ["runkeys"]},
+            )
+            self.assertEqual(parse_resp.status_code, 202)
+
+            analyze_resp = self.client.post(
+                f"/api/cases/{case_id}/analyze",
+                json={"prompt": "Investigate persistence"},
+            )
+            self.assertEqual(analyze_resp.status_code, 202)
+
+        analysis_results_path = self.cases_root / case_id / "analysis_results.json"
+        self.assertTrue(analysis_results_path.exists())
+        persisted_results = json.loads(analysis_results_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted_results["summary"], "final summary")
+        self.assertEqual(persisted_results["per_artifact"][0]["artifact_key"], "runkeys")
+
+    def test_chat_endpoints_store_history_and_return_retrieval_details(self) -> None:
+        evidence_path = Path(self.temp_dir.name) / "chat-endpoints.E01"
+        evidence_path.write_bytes(b"demo")
+
+        class FakeChatProvider:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def analyze(
+                self,
+                system_prompt: str,
+                user_prompt: str,
+                max_tokens: int = 4096,
+            ) -> str:
+                self.calls.append(
+                    {
+                        "system_prompt": system_prompt,
+                        "user_prompt": user_prompt,
+                        "max_tokens": max_tokens,
+                    }
+                )
+                return "Chat response from test provider."
+
+            def get_model_info(self) -> dict[str, str]:
+                return {"provider": "fake", "model": "fake-chat"}
+
+        fake_provider = FakeChatProvider()
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+            patch.object(routes, "create_provider", return_value=fake_provider),
+            patch.object(
+                routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+        ):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Chat Endpoints Case"})
+            self.assertEqual(create_resp.status_code, 201)
+            case_id = create_resp.get_json()["case_id"]
+
+            evidence_resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                json={"path": str(evidence_path)},
+            )
+            self.assertEqual(evidence_resp.status_code, 200)
+
+            parse_resp = self.client.post(
+                f"/api/cases/{case_id}/parse",
+                json={"artifacts": ["runkeys"]},
+            )
+            self.assertEqual(parse_resp.status_code, 202)
+
+            analyze_resp = self.client.post(
+                f"/api/cases/{case_id}/analyze",
+                json={"prompt": "Investigate persistence"},
+            )
+            self.assertEqual(analyze_resp.status_code, 202)
+
+            user_message = "Check the runkeys CSV and show me rows related to persistence."
+            chat_resp = self.client.post(
+                f"/api/cases/{case_id}/chat",
+                json={"message": user_message},
+            )
+            self.assertEqual(chat_resp.status_code, 200)
+            chat_payload = chat_resp.get_json()
+            self.assertEqual(chat_payload["response"], "Chat response from test provider.")
+            self.assertEqual(chat_payload["data_retrieved"], ["runkeys.csv"])
+
+            history_resp = self.client.get(f"/api/cases/{case_id}/chat/history")
+            self.assertEqual(history_resp.status_code, 200)
+            history = history_resp.get_json()
+            self.assertEqual([entry["role"] for entry in history], ["user", "assistant"])
+            self.assertEqual(history[0]["content"], user_message)
+            self.assertEqual(history[1]["content"], "Chat response from test provider.")
+
+            self.assertTrue(fake_provider.calls)
+            first_call = fake_provider.calls[0]
+            self.assertIn("digital forensic analyst", str(first_call["system_prompt"]).lower())
+            self.assertIn("Context Block:", str(first_call["user_prompt"]))
+            self.assertIn("New User Question:", str(first_call["user_prompt"]))
+            self.assertIn("Retrieved CSV data for this question", str(first_call["user_prompt"]))
+
+        audit_entries = routes._read_audit_entries(self.cases_root / case_id)
+        audit_actions = {str(entry.get("action", "")) for entry in audit_entries}
+        self.assertIn("chat_message_sent", audit_actions)
+        self.assertIn("chat_response_received", audit_actions)
+
     def test_parse_uses_configured_csv_output_directory(self) -> None:
         evidence_path = Path(self.temp_dir.name) / "configured-output.E01"
         evidence_path.write_bytes(b"demo")
