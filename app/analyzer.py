@@ -881,6 +881,22 @@ class ForensicAnalyzer:
                     self.max_merge_rounds,
                     len(current_findings),
                 )
+                if progress_callback is not None:
+                    self._emit_analysis_progress(
+                        progress_callback,
+                        artifact_key,
+                        "thinking",
+                        {
+                            "artifact_key": artifact_key,
+                            "artifact_name": artifact_name,
+                            "thinking_text": (
+                                f"Merge round limit reached ({self.max_merge_rounds}). "
+                                f"Concatenating {len(current_findings)} remaining findings..."
+                            ),
+                            "partial_text": "",
+                            "model": model,
+                        },
+                    )
                 total_chars = sum(len(f) for f in current_findings)
                 if total_chars > findings_budget:
                     # Cap each finding proportionally to fit the budget.
