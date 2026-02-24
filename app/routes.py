@@ -1829,6 +1829,14 @@ def chat_with_case(case_id: str) -> Response | tuple[Response, int]:
                 "User question:\n"
                 f"{message}"
             )
+            case["audit"].log(
+                "chat_data_retrieval",
+                {
+                    "message_index": message_index,
+                    "artifacts": list(retrieved_artifacts or []),
+                    "rows_returned": retrieved_data.count("\n"),
+                },
+            )
 
         system_prompt = _load_forensic_system_prompt()
         ai_messages: list[dict[str, str]] = [

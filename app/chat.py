@@ -173,32 +173,34 @@ class ChatManager:
             if any(self._contains_heuristic_term(question_lower, alias) for alias in aliases)
         ]
 
-        headers_by_path = {path: self._read_csv_headers(path) for path in csv_paths}
-        matched_columns = {
-            header.lower()
-            for headers in headers_by_path.values()
-            for header in headers
-            if self._contains_heuristic_term(question_lower, header.lower())
-        }
-
         if artifact_matches:
             target_paths = artifact_matches
-        elif matched_columns:
-            target_paths = [
-                path
-                for path, headers in headers_by_path.items()
-                if any(header.lower() in matched_columns for header in headers)
-            ]
-        elif keyword_detected:
-            # Keywords detected but no specific artifact/column identified —
-            # return all CSVs only if the collection is small, otherwise skip
-            # to avoid blowing up the context window with irrelevant data.
-            if len(csv_paths) <= 3:
-                target_paths = csv_paths
+        else:
+            # Only scan CSV headers when artifact-name matching didn't find anything,
+            # to avoid reading every CSV file on every chat message.
+            headers_by_path = {path: self._read_csv_headers(path) for path in csv_paths}
+            matched_columns = {
+                header.lower()
+                for headers in headers_by_path.values()
+                for header in headers
+                if self._contains_heuristic_term(question_lower, header.lower())
+            }
+            if matched_columns:
+                target_paths = [
+                    path
+                    for path, headers in headers_by_path.items()
+                    if any(header.lower() in matched_columns for header in headers)
+                ]
+            elif keyword_detected:
+                # Keywords detected but no specific artifact/column identified —
+                # return all CSVs only if the collection is small, otherwise skip
+                # to avoid blowing up the context window with irrelevant data.
+                if len(csv_paths) <= 3:
+                    target_paths = csv_paths
+                else:
+                    return {"retrieved": False}
             else:
                 return {"retrieved": False}
-        else:
-            return {"retrieved": False}
 
         target_paths = list(dict.fromkeys(target_paths))
         artifacts = [path.name for path in target_paths]

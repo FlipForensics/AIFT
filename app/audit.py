@@ -31,6 +31,7 @@ ACTION_TYPES = frozenset(
         "prompt_submitted",
         "chat_message_sent",
         "chat_response_received",
+        "chat_data_retrieval",
         "report_generated",
         "hash_verification",
         "config_changed",

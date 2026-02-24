@@ -1068,6 +1068,7 @@ class RoutesTests(unittest.TestCase):
         audit_actions = {str(entry.get("action", "")) for entry in audit_entries}
         self.assertIn("chat_message_sent", audit_actions)
         self.assertIn("chat_response_received", audit_actions)
+        self.assertIn("chat_data_retrieval", audit_actions)
 
     def test_parse_uses_configured_csv_output_directory(self) -> None:
         evidence_path = Path(self.temp_dir.name) / "configured-output.E01"
