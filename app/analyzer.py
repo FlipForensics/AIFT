@@ -797,71 +797,17 @@ class ForensicAnalyzer:
             )
             chunk_findings.append(f"### Chunk {chunk_index} of {total_chunks}\n{chunk_text}")
 
-        # Merge chunk findings with a final AI call.
-        if progress_callback is not None:
-            self._emit_analysis_progress(
-                progress_callback,
-                artifact_key,
-                "thinking",
-                {
-                    "artifact_key": artifact_key,
-                    "artifact_name": artifact_name,
-                    "thinking_text": f"Merging findings from {total_chunks} chunks...",
-                    "partial_text": "",
-                    "model": model,
-                },
-            )
-
-        per_chunk_text = "\n\n".join(chunk_findings)
-
-        # Estimate merge prompt size.  If the combined findings exceed the
-        # context budget, cap each chunk's findings so the merge fits.
-        merge_template_overhead = len(self.chunk_merge_prompt_template) + len(self.system_prompt) + 500
-        merge_findings_budget = max(
-            2000,
-            self.chunk_csv_budget - merge_template_overhead,
-        )
-        if len(per_chunk_text) > merge_findings_budget:
-            max_per_chunk = max(200, merge_findings_budget // total_chunks)
-            capped: list[str] = []
-            for chunk_index, finding in enumerate(chunk_findings, start=1):
-                if len(finding) > max_per_chunk:
-                    truncated = finding[:max_per_chunk].rsplit("\n", 1)[0]
-                    capped.append(
-                        f"{truncated}\n... [findings trimmed to fit merge context window]"
-                    )
-                else:
-                    capped.append(finding)
-            per_chunk_text = "\n\n".join(capped)
-            self.logger.info(
-                "Merge prompt for %s capped per-chunk findings to ~%d chars each to fit context window.",
-                artifact_key,
-                max_per_chunk,
-            )
-
-        merge_prompt = self.chunk_merge_prompt_template
-        for placeholder, value in {
-            "chunk_count": str(total_chunks),
-            "investigation_context": investigation_context.strip() or "No investigation context provided.",
-            "artifact_name": artifact_name,
-            "artifact_key": artifact_key,
-            "per_chunk_findings": per_chunk_text,
-        }.items():
-            merge_prompt = merge_prompt.replace(f"{{{{{placeholder}}}}}", value)
-
-        safe_key = self._sanitize_filename(artifact_key)
-        self._save_case_prompt(
-            f"artifact_{safe_key}_chunk_merge.md",
-            self.system_prompt,
-            merge_prompt,
-        )
-
-        merged_text = self._call_ai_with_retry(
-            lambda: self.ai_provider.analyze(
-                system_prompt=self.system_prompt,
-                user_prompt=merge_prompt,
-                max_tokens=self.ai_max_tokens,
-            )
+        # Hierarchical merge: group findings into batches that fit the
+        # context window, merge each batch via AI, then repeat until one
+        # result remains.  This preserves all information instead of
+        # truncating findings.
+        merged_text = self._hierarchical_merge_findings(
+            chunk_findings=chunk_findings,
+            artifact_key=artifact_key,
+            artifact_name=artifact_name,
+            investigation_context=investigation_context,
+            model=model,
+            progress_callback=progress_callback,
         )
         self.logger.info(
             "Chunked analysis for %s complete: %d chunks merged.",
@@ -869,6 +815,140 @@ class ForensicAnalyzer:
             total_chunks,
         )
         return merged_text
+
+    def _merge_findings_budget(self) -> int:
+        """Character budget available for per-chunk findings in a merge prompt."""
+        overhead = len(self.chunk_merge_prompt_template) + len(self.system_prompt) + 500
+        return max(2000, self.chunk_csv_budget - overhead)
+
+    def _build_merge_prompt(
+        self,
+        findings_text: str,
+        batch_count: int,
+        artifact_key: str,
+        artifact_name: str,
+        investigation_context: str,
+    ) -> str:
+        """Fill the chunk-merge template with the given findings."""
+        prompt = self.chunk_merge_prompt_template
+        for placeholder, value in {
+            "chunk_count": str(batch_count),
+            "investigation_context": investigation_context.strip() or "No investigation context provided.",
+            "artifact_name": artifact_name,
+            "artifact_key": artifact_key,
+            "per_chunk_findings": findings_text,
+        }.items():
+            prompt = prompt.replace(f"{{{{{placeholder}}}}}", value)
+        return prompt
+
+    def _hierarchical_merge_findings(
+        self,
+        chunk_findings: list[str],
+        artifact_key: str,
+        artifact_name: str,
+        investigation_context: str,
+        model: str,
+        progress_callback: Any | None = None,
+    ) -> str:
+        """Merge chunk findings hierarchically until one result remains.
+
+        Groups findings into batches that fit the context window, merges
+        each batch via an AI call, then repeats on the merged results.
+        This preserves all information — nothing is truncated.
+        """
+        findings_budget = self._merge_findings_budget()
+        current_findings = list(chunk_findings)
+        merge_round = 0
+
+        while len(current_findings) > 1:
+            merge_round += 1
+
+            # Group findings into batches that fit within the budget.
+            batches: list[list[str]] = []
+            current_batch: list[str] = []
+            current_batch_size = 0
+
+            for finding in current_findings:
+                entry_size = len(finding) + 2  # +2 for "\n\n" separator
+                if current_batch and current_batch_size + entry_size > findings_budget:
+                    batches.append(current_batch)
+                    current_batch = []
+                    current_batch_size = 0
+                current_batch.append(finding)
+                current_batch_size += entry_size
+
+            if current_batch:
+                batches.append(current_batch)
+
+            # If everything fits in one batch, do the final merge.
+            if len(batches) == 1 and merge_round == 1:
+                # All findings fit — single merge call.
+                pass
+
+            # Safety: if batching didn't reduce the count (single finding
+            # too large), force it into one batch to avoid infinite loop.
+            if len(batches) >= len(current_findings):
+                batches = [current_findings]
+
+            total_batches = len(batches)
+            label_prefix = f"merge round {merge_round}" if merge_round > 1 else "merge"
+
+            self.logger.info(
+                "Hierarchical %s for %s: %d batches from %d findings (budget %d chars).",
+                label_prefix,
+                artifact_key,
+                total_batches,
+                len(current_findings),
+                findings_budget,
+            )
+
+            if progress_callback is not None:
+                self._emit_analysis_progress(
+                    progress_callback,
+                    artifact_key,
+                    "thinking",
+                    {
+                        "artifact_key": artifact_key,
+                        "artifact_name": artifact_name,
+                        "thinking_text": (
+                            f"Merging findings ({label_prefix}: "
+                            f"{len(current_findings)} findings into {total_batches} groups)..."
+                        ),
+                        "partial_text": "",
+                        "model": model,
+                    },
+                )
+
+            next_findings: list[str] = []
+            for batch_index, batch in enumerate(batches, start=1):
+                batch_text = "\n\n".join(batch)
+                merge_prompt = self._build_merge_prompt(
+                    findings_text=batch_text,
+                    batch_count=len(batch),
+                    artifact_key=artifact_key,
+                    artifact_name=artifact_name,
+                    investigation_context=investigation_context,
+                )
+
+                safe_key = self._sanitize_filename(artifact_key)
+                self._save_case_prompt(
+                    f"artifact_{safe_key}_merge_r{merge_round}_b{batch_index}.md",
+                    self.system_prompt,
+                    merge_prompt,
+                )
+
+                merged = self._call_ai_with_retry(
+                    lambda prompt=merge_prompt: self.ai_provider.analyze(
+                        system_prompt=self.system_prompt,
+                        user_prompt=prompt,
+                        max_tokens=self.ai_max_tokens,
+                    )
+                )
+                next_findings.append(f"### Merged batch {batch_index}\n{merged}")
+
+            current_findings = next_findings
+
+        return current_findings[0] if current_findings else ""
 
     def analyze_artifact(
         self,
