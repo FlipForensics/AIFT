@@ -2004,6 +2004,16 @@ def get_case_chat_history(case_id: str) -> Response | tuple[Response, int]:
     return jsonify(manager.get_history())
 
 
+@routes_bp.delete("/api/cases/<case_id>/chat/history")
+def clear_case_chat_history(case_id: str) -> Response | tuple[Response, int]:
+    case = _get_case(case_id)
+    if case is None:
+        return _error(f"Case not found: {case_id}", 404)
+    manager = ChatManager(case["case_dir"])
+    manager.clear()
+    return jsonify({"status": "cleared", "case_id": case_id})
+
+
 @routes_bp.get("/api/cases/<case_id>/report")
 def download_report(case_id: str) -> Response | tuple[Response, int]:
     case = _get_case(case_id)

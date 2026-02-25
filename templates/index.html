@@ -396,6 +396,40 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
         <button id="download-csvs" type="button">Download CSVs (ZIP)</button>
         <button id="new-analysis" type="button">New Analysis</button>
       </div>
+
+      <section id="chat-section" aria-labelledby="chat-section-title">
+        <header class="chat-section-header">
+          <h3 id="chat-section-title">Chat with AI</h3>
+          <div class="chat-section-actions">
+            <button
+              id="chat-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="chat-panel"
+            >
+              Show Chat
+            </button>
+            <button id="clear-chat" type="button" class="danger">Clear Chat</button>
+          </div>
+        </header>
+
+        <div id="chat-panel" hidden>
+          <div id="chat-thread" aria-live="polite">
+            <p id="chat-empty-state">Chat history will appear here.</p>
+          </div>
+          <form id="chat-form" class="chat-input-bar">
+            <label for="chat-input" class="sr-only">Ask a follow-up question</label>
+            <input
+              id="chat-input"
+              type="text"
+              placeholder="Ask about findings, timelines, or artifacts..."
+              autocomplete="off"
+              spellcheck="false"
+            >
+            <button id="chat-send" type="submit">Send</button>
+          </form>
+        </div>
+      </section>
     </section>
   </main>
 

@@ -1085,6 +1085,14 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(history[1]["content"], "Chat response from test provider.")
             self.assertEqual(routes.CHAT_PROGRESS[case_id]["status"], "completed")
 
+            clear_history_resp = self.client.delete(f"/api/cases/{case_id}/chat/history")
+            self.assertEqual(clear_history_resp.status_code, 200)
+            self.assertEqual(clear_history_resp.get_json()["status"], "cleared")
+
+            history_after_clear_resp = self.client.get(f"/api/cases/{case_id}/chat/history")
+            self.assertEqual(history_after_clear_resp.status_code, 200)
+            self.assertEqual(history_after_clear_resp.get_json(), [])
+
             self.assertTrue(fake_provider.calls)
             first_call = fake_provider.calls[0]
             self.assertIn("digital forensic analyst", str(first_call["system_prompt"]).lower())
