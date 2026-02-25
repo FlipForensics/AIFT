@@ -331,6 +331,9 @@ class ForensicAnalyzer:
             default=AI_MAX_TOKENS,
             minimum=1,
         )
+        # ai_max_tokens = context window (input + output).
+        # Reserve 80% for prompt, 20% for the AI response.
+        self.ai_response_max_tokens = max(1, int(self.ai_max_tokens * 0.2))
         legacy_shortened_prompt_cutoff = self._read_int_setting(
             analysis_config=analysis_config,
             key="statistics_section_cutoff_tokens",
@@ -724,7 +727,7 @@ class ForensicAnalyzer:
                 lambda: self.ai_provider.analyze(
                     system_prompt=self.system_prompt,
                     user_prompt=artifact_prompt,
-                    max_tokens=self.ai_max_tokens,
+                    max_tokens=self.ai_response_max_tokens,
                 )
             )
 
@@ -749,7 +752,7 @@ class ForensicAnalyzer:
                 lambda: self.ai_provider.analyze(
                     system_prompt=self.system_prompt,
                     user_prompt=artifact_prompt,
-                    max_tokens=self.ai_max_tokens,
+                    max_tokens=self.ai_response_max_tokens,
                 )
             )
 
@@ -799,7 +802,7 @@ class ForensicAnalyzer:
                 lambda prompt=chunk_prompt: self.ai_provider.analyze(
                     system_prompt=self.system_prompt,
                     user_prompt=prompt,
-                    max_tokens=self.ai_max_tokens,
+                    max_tokens=self.ai_response_max_tokens,
                 )
             )
             chunk_findings.append(f"### Chunk {chunk_index} of {total_chunks}\n{chunk_text}")
@@ -929,7 +932,7 @@ class ForensicAnalyzer:
                     lambda prompt=merge_prompt: self.ai_provider.analyze(
                         system_prompt=self.system_prompt,
                         user_prompt=prompt,
-                        max_tokens=self.ai_max_tokens,
+                        max_tokens=self.ai_response_max_tokens,
                     )
                 )
 
@@ -1011,7 +1014,7 @@ class ForensicAnalyzer:
                     lambda prompt=merge_prompt: self.ai_provider.analyze(
                         system_prompt=self.system_prompt,
                         user_prompt=prompt,
-                        max_tokens=self.ai_max_tokens,
+                        max_tokens=self.ai_response_max_tokens,
                     )
                 )
                 next_findings.append(f"### Merged batch {batch_index}\n{merged}")
@@ -1153,14 +1156,14 @@ class ForensicAnalyzer:
                         user_prompt=artifact_prompt,
                         progress_callback=_provider_progress,
                         attachments=attachments,
-                        max_tokens=self.ai_max_tokens,
+                        max_tokens=self.ai_response_max_tokens,
                     )
                 except TypeError:
                     analysis_text = analyze_with_progress(
                         system_prompt=self.system_prompt,
                         user_prompt=artifact_prompt,
                         progress_callback=_provider_progress,
-                        max_tokens=self.ai_max_tokens,
+                        max_tokens=self.ai_response_max_tokens,
                     )
             else:
                 analyze_with_attachments = getattr(self.ai_provider, "analyze_with_attachments", None)
@@ -1170,7 +1173,7 @@ class ForensicAnalyzer:
                             system_prompt=self.system_prompt,
                             user_prompt=artifact_prompt,
                             attachments=attachments,
-                            max_tokens=self.ai_max_tokens,
+                            max_tokens=self.ai_response_max_tokens,
                         )
                     )
                 else:
@@ -1178,7 +1181,7 @@ class ForensicAnalyzer:
                         lambda: self.ai_provider.analyze(
                             system_prompt=self.system_prompt,
                             user_prompt=artifact_prompt,
-                            max_tokens=self.ai_max_tokens,
+                            max_tokens=self.ai_response_max_tokens,
                         )
                     )
             duration_seconds = perf_counter() - start_time
@@ -1278,7 +1281,7 @@ class ForensicAnalyzer:
                 lambda: self.ai_provider.analyze(
                     system_prompt=self.system_prompt,
                     user_prompt=summary_prompt,
-                    max_tokens=self.ai_max_tokens,
+                    max_tokens=self.ai_response_max_tokens,
                 )
             )
             duration_seconds = perf_counter() - start_time

@@ -1608,10 +1608,12 @@ def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> No
             )
         started_at = time.perf_counter()
         chunks: list[str] = []
+        # 80% of context window for prompt, 20% for AI response.
+        chat_response_max_tokens = max(1, int(chat_max_tokens * 0.2))
         for chunk in provider.analyze_stream(
             system_prompt=system_prompt,
             user_prompt=chat_user_prompt,
-            max_tokens=chat_max_tokens,
+            max_tokens=chat_response_max_tokens,
         ):
             chunk_text = str(chunk)
             if not chunk_text:
