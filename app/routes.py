@@ -11,6 +11,7 @@ import re
 import shutil
 import threading
 import time
+from collections.abc import Mapping
 from typing import Any, Callable
 from uuid import uuid4
 import tarfile
@@ -1065,6 +1066,59 @@ def _render_chat_messages_for_provider(messages: list[dict[str, str]]) -> str:
     return "\n\n".join(rendered_sections).strip()
 
 
+_COMPRESS_FINDINGS_FALLBACK_PROMPT = (
+    "You are a forensic analysis assistant. Compress per-artifact findings "
+    "while preserving all critical forensic details. Return only the "
+    "compressed text in bullet-point format, no preamble."
+)
+
+
+def _load_compress_findings_prompt() -> str:
+    prompt_path = PROJECT_ROOT / "prompts" / "compress_findings.md"
+    try:
+        prompt_text = prompt_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        LOGGER.warning("Failed to read compress findings prompt from %s; using fallback.", prompt_path)
+        return _COMPRESS_FINDINGS_FALLBACK_PROMPT
+    return prompt_text or _COMPRESS_FINDINGS_FALLBACK_PROMPT
+
+
+def _compress_findings_with_ai(
+    provider: Any,
+    findings_text: str,
+    max_tokens: int,
+) -> str | None:
+    """Use the AI provider to compress per-artifact findings.
+
+    Returns compressed text, or ``None`` when the call fails so the
+    caller can fall back to the uncompressed context.
+    """
+    if not findings_text or not findings_text.strip():
+        return None
+
+    target_tokens = max(200, int(max_tokens * 0.25))
+    try:
+        compressed = provider.analyze(
+            system_prompt=_load_compress_findings_prompt(),
+            user_prompt=(
+                f"Compress the following per-artifact forensic findings to "
+                f"roughly {target_tokens} tokens. Keep the bullet-point "
+                f"format (\"- artifact: summary\"). Preserve every "
+                f"suspicious indicator, timestamp, path, and conclusion.\n\n"
+                f"{findings_text}"
+            ),
+            max_tokens=target_tokens,
+        )
+        result = str(compressed).strip()
+        return result if result else None
+    except (AIProviderError, Exception):
+        LOGGER.warning(
+            "AI-powered findings compression failed; falling back to full context.",
+            exc_info=True,
+        )
+        return None
+
+
 def _resolve_chat_max_tokens(config: dict[str, Any]) -> int:
     analysis_config = config.get("analysis", {})
     if not isinstance(analysis_config, dict):
@@ -1468,12 +1522,30 @@ def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> No
         # Reserve 20% of the token budget for the AI response.
         prompt_budget = int(chat_max_tokens * 0.8)
 
+        provider = create_provider(copy.deepcopy(config_snapshot))
+
+        investigation_context = _resolve_case_investigation_context(case)
+        image_metadata = dict(case.get("image_metadata", {}))
+
         context_block = chat_manager.build_chat_context(
             analysis_results=analysis_results,
-            investigation_context=_resolve_case_investigation_context(case),
-            metadata=dict(case.get("image_metadata", {})),
-            token_budget=prompt_budget,
+            investigation_context=investigation_context,
+            metadata=image_metadata,
         )
+
+        # Compress per-artifact findings with AI when context exceeds budget.
+        if chat_manager.context_needs_compression(context_block, prompt_budget):
+            per_artifact_text = chat_manager._format_per_artifact_findings(
+                analysis_results if isinstance(analysis_results, Mapping) else {},
+            )
+            compressed = _compress_findings_with_ai(provider, per_artifact_text, chat_max_tokens)
+            if compressed:
+                context_block = chat_manager.rebuild_context_with_compressed_findings(
+                    analysis_results=analysis_results,
+                    investigation_context=investigation_context,
+                    metadata=image_metadata,
+                    compressed_findings=compressed,
+                )
 
         retrieved_payload = chat_manager.retrieve_csv_data(
             question=message,
@@ -1534,8 +1606,6 @@ def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> No
                 f"Context Block:\n{context_block}\n\n"
                 f"New User Question:\n{message_for_ai}"
             )
-
-        provider = create_provider(copy.deepcopy(config_snapshot))
         started_at = time.perf_counter()
         chunks: list[str] = []
         for chunk in provider.analyze_stream(

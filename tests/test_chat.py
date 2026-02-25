@@ -125,6 +125,143 @@ class ChatManagerTests(unittest.TestCase):
             self.assertEqual(configured_manager.MAX_CONTEXT_TOKENS, 2048)
             self.assertEqual(manager.estimate_token_count("abcd" * 10), 10)
 
+    # ------------------------------------------------------------------
+    # Context window management
+    # ------------------------------------------------------------------
+
+    def _make_analysis_results(self, finding_text: str = "Short.") -> dict:
+        return {
+            "summary": "Executive summary.",
+            "per_artifact": [
+                {"artifact_name": "shimcache", "analysis": finding_text},
+                {"artifact_name": "prefetch", "analysis": finding_text},
+            ],
+        }
+
+    def test_context_needs_compression_returns_false_when_within_budget(self) -> None:
+        with TemporaryDirectory(prefix="aift-chat-") as tmp:
+            mgr = ChatManager(tmp)
+            context = mgr.build_chat_context(
+                analysis_results=self._make_analysis_results(),
+                investigation_context="Test context.",
+                metadata={"hostname": "HOST"},
+            )
+            # Budget is very large — no compression needed.
+            self.assertFalse(mgr.context_needs_compression(context, 100000))
+
+    def test_context_needs_compression_returns_true_when_over_budget(self) -> None:
+        with TemporaryDirectory(prefix="aift-chat-") as tmp:
+            mgr = ChatManager(tmp)
+            # Create a large context by using verbose findings.
+            long_text = "Suspicious activity detected. " * 200
+            context = mgr.build_chat_context(
+                analysis_results=self._make_analysis_results(long_text),
+                investigation_context="Test context.",
+                metadata={"hostname": "HOST"},
+            )
+            # Budget is tiny — compression needed.
+            self.assertTrue(mgr.context_needs_compression(context, 500))
+
+    def test_context_needs_compression_handles_zero_and_negative_budget(self) -> None:
+        with TemporaryDirectory(prefix="aift-chat-") as tmp:
+            mgr = ChatManager(tmp)
+            self.assertFalse(mgr.context_needs_compression("any text", 0))
+            self.assertFalse(mgr.context_needs_compression("any text", -1))
+
+    def test_rebuild_context_with_compressed_findings(self) -> None:
+        with TemporaryDirectory(prefix="aift-chat-") as tmp:
+            mgr = ChatManager(tmp)
+            rebuilt = mgr.rebuild_context_with_compressed_findings(
+                analysis_results=self._make_analysis_results(),
+                investigation_context="Test context.",
+                metadata={"hostname": "HOST", "os_version": "Win11", "domain": "CORP"},
+                compressed_findings="- shimcache: Compressed.\n- prefetch: Compressed.",
+            )
+            self.assertIn("Per-Artifact Findings (compressed):", rebuilt)
+            self.assertIn("- shimcache: Compressed.", rebuilt)
+            self.assertIn("- prefetch: Compressed.", rebuilt)
+            # The always-included sections are still present.
+            self.assertIn("Investigation Context:", rebuilt)
+            self.assertIn("Executive Summary:", rebuilt)
+            self.assertIn("Hostname: HOST", rebuilt)
+
+    def test_rebuild_context_is_smaller_than_original(self) -> None:
+        with TemporaryDirectory(prefix="aift-chat-") as tmp:
+            mgr = ChatManager(tmp)
+            long_text = "Suspicious lateral movement via psexec. " * 100
+            results = self._make_analysis_results(long_text)
+            meta = {"hostname": "H", "os_version": "W", "domain": "D"}
+
+            original = mgr.build_chat_context(
+                analysis_results=results,
+                investigation_context="ctx",
+                metadata=meta,
+            )
+            rebuilt = mgr.rebuild_context_with_compressed_findings(
+                analysis_results=results,
+                investigation_context="ctx",
+                metadata=meta,
+                compressed_findings="- shimcache: Compressed.\n- prefetch: Compressed.",
+            )
+            self.assertLess(len(rebuilt), len(original))
+
+    # ------------------------------------------------------------------
+    # fit_history
+    # ------------------------------------------------------------------
+
+    def _make_history(self, pairs: int, content_size: int = 20) -> list[dict]:
+        """Create *pairs* user/assistant message pairs."""
+        history: list[dict] = []
+        for i in range(1, pairs + 1):
+            history.append({"role": "user", "content": f"Q{i} " + "x" * content_size})
+            history.append({"role": "assistant", "content": f"A{i} " + "y" * content_size})
+        return history
+
+    def test_fit_history_returns_all_when_within_budget(self) -> None:
+        with TemporaryDirectory(prefix="aift-chat-") as tmp:
+            mgr = ChatManager(tmp)
+            history = self._make_history(3, content_size=10)
+            fitted = mgr.fit_history(history, max_tokens=100000)
+            self.assertEqual(len(fitted), 6)
+
+    def test_fit_history_drops_oldest_pairs_first(self) -> None:
+        with TemporaryDirectory(prefix="aift-chat-") as tmp:
+            mgr = ChatManager(tmp)
+            history = self._make_history(5, content_size=100)
+            # Budget only fits ~1-2 pairs.
+            fitted = mgr.fit_history(history, max_tokens=60)
+            self.assertGreater(len(fitted), 0)
+            self.assertLess(len(fitted), len(history))
+            # The remaining messages should be from the most recent pairs.
+            roles = [m["role"] for m in fitted]
+            self.assertEqual(roles, ["user", "assistant"] * (len(fitted) // 2))
+            # Last pair should be the newest.
+            self.assertIn("Q5", fitted[-2]["content"])
+            self.assertIn("A5", fitted[-1]["content"])
+
+    def test_fit_history_returns_empty_on_zero_budget(self) -> None:
+        with TemporaryDirectory(prefix="aift-chat-") as tmp:
+            mgr = ChatManager(tmp)
+            self.assertEqual(mgr.fit_history(self._make_history(3), max_tokens=0), [])
+
+    def test_fit_history_returns_empty_on_negative_budget(self) -> None:
+        with TemporaryDirectory(prefix="aift-chat-") as tmp:
+            mgr = ChatManager(tmp)
+            self.assertEqual(mgr.fit_history(self._make_history(3), max_tokens=-10), [])
+
+    def test_fit_history_returns_empty_for_empty_input(self) -> None:
+        with TemporaryDirectory(prefix="aift-chat-") as tmp:
+            mgr = ChatManager(tmp)
+            self.assertEqual(mgr.fit_history([], max_tokens=10000), [])
+
+    def test_fit_history_drops_all_when_single_pair_exceeds_budget(self) -> None:
+        with TemporaryDirectory(prefix="aift-chat-") as tmp:
+            mgr = ChatManager(tmp)
+            # Each message is ~250 tokens → pair is ~500 tokens.
+            history = self._make_history(1, content_size=1000)
+            fitted = mgr.fit_history(history, max_tokens=5)
+            self.assertEqual(fitted, [])
+
 
 if __name__ == "__main__":
     unittest.main()
