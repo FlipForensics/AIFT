@@ -2,7 +2,7 @@
   <img src="images/AIFT Logo - White Text.png" alt="AIFT Logo" width="400">
 </p>
 
-# AIFT - AI Forensic Triage V1.1.1
+# AIFT - AI Forensic Triage V1.2
 
 **Automated Windows forensic triage, powered by AI.**
 
@@ -22,7 +22,7 @@ Upload Evidence → Select Artifacts → Parse → AI Analysis → HTML Report
 
 1. **Run the app** - a local web interface opens in your browser.
 2. **Upload evidence** - drag-and-drop an E01, VMDK, VHD, raw image, or archive, or point to a local path for large images.
-3. **Pick artifacts** - choose from 25+ Windows forensic artifacts.
+3. **Pick artifacts** - choose from 25+ Windows forensic artifacts, which will be parsed by [Dissect](https://github.com/fox-it/dissect).
 4. **Get results** - AI analyzes each artifact for indicators of compromise, correlates findings across artifacts, and generates a self-contained HTML report with evidence hashes and full audit trail.
 
 No Elasticsearch. No Docker. No database. One Python script, one command.
@@ -83,6 +83,13 @@ Click **Test Connection** to verify everything works. That's it - you're ready t
 - Enter your investigation context (e.g., "Suspected unauthorized access between Jan 1-15, 2026. Look for new accounts and remote access tools. IOC identified: abc.exe").
 - Click **Analyze**. Per-artifact findings stream in as the AI completes each one, followed by a cross-artifact summary.
 - Download the HTML report and/or the raw CSV data.
+- **Chat with the AI** about the results - ask follow-up questions, request correlations, or drill into specific artifacts without re-running the analysis.
+
+---
+
+## AI Chat (Q&A)
+
+After analysis completes, click **Show Chat** on the Results page to ask follow-up questions, request cross-artifact correlations, or drill into specific CSV data - the AI references its own prior analysis and automatically retrieves matching rows when needed. 
 
 ---
 
@@ -174,7 +181,6 @@ For images over 2 GB, use **Path Mode** instead of uploading - enter the local f
 
 Features under active development:
 
-- **AI Chat**: Ask follow-up questions about findings directly on the results page. Drill into specific artifacts, request correlations, or clarify timeline gaps without re-running the analysis.
 - **Multi-Image Support**: Analyze multiple evidence sources in a single case (e.g., workstation + server + domain controller). Includes cross-system correlation to identify lateral movement and shared IOCs.
 - **Linux Support**: Full analysis of Linux disk images using Dissect. Covers bash/zsh/fish history, wtmp/btmp, syslog, journald, cron jobs, systemd services, SSH keys, package history, and user accounts.
 - **Mobile Support**: iOS and Android device analysis using [iLEAPP](https://github.com/abrignoni/iLEAPP) and [ALEAPP](https://github.com/abrignoni/ALEAPP). Covers call logs, SMS, browser history, installed apps, location data, and more.
@@ -231,7 +237,6 @@ aift/
 ├── profile/             # Artifact selection presets
 ├── prompts/             # AI prompt templates (customizable)
 │   ├── artifact_instructions/  # Per-artifact analysis guidance
-│   └── chunk_merge.md          # Merge template for chunked analysis
 ├── static/              # Frontend assets (CSS + vanilla JS)
 ├── templates/           # Jinja2 templates (UI + report)
 ├── tests/               # Unit tests
@@ -241,6 +246,7 @@ aift/
         ├── parsed/              # Parsed artifact CSVs
         ├── prompts/             # Saved AI prompts (auto-generated)
         ├── reports/             # Generated HTML reports
+        ├── chat_history.jsonl   # Chat conversation log (per case)
         └── audit.jsonl          # Append-only audit trail
 ```
 
