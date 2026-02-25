@@ -10,7 +10,7 @@ AIFT turns hours of manual artifact analysis into minutes. Upload a disk image, 
 
 Built for incident responders who need fast answers, and simple enough for non-forensic team members to operate.
 
-**This project is under active development. Contributions are welcome.**
+**This project is under active development. Contributions are welcome. If you run into any bugs, let me know!**
 
 ---
 
