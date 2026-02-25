@@ -61,7 +61,6 @@
     setupSettings();
     resetCaseUi();
     showStep(1);
-    loadChatHistory().catch((e) => setMsg(el.resultsMsg, `Unable to load chat history: ${e.message}`, "error"));
     loadSettings().catch((e) => setMsg(el.settingsMsg, `Unable to load settings: ${e.message}`, "error"));
     loadArtifactProfiles().catch((e) => setMsg(el.artifactsMsg, `Unable to load profiles: ${e.message}`, "error"));
   }
@@ -1786,7 +1785,7 @@
     el.chatToggle.setAttribute("aria-expanded", open ? "true" : "false");
     el.chatToggle.textContent = open ? "Hide Chat" : "Show Chat";
     if (!open) return;
-    if (!st.chat.run) {
+    if (!st.chat.run && st.chat.historyLoadedCaseId !== activeCaseId()) {
       loadChatHistory().catch((e) => setMsg(el.resultsMsg, `Unable to load chat history: ${e.message}`, "error"));
     }
     scrollChatToBottom();
@@ -1796,6 +1795,7 @@
   async function loadChatHistory() {
     const caseId = activeCaseId();
     if (!caseId || !el.chatThread || st.chat.run) return;
+    if (st.chat.historyLoadedCaseId === caseId) return;
     const history = await apiJson(`/api/cases/${encodeURIComponent(caseId)}/chat/history`, { method: "GET" });
     if (caseId !== activeCaseId()) return;
     renderChatHistory(Array.isArray(history) ? history : []);

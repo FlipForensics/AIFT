@@ -1465,10 +1465,14 @@ def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> No
     )
 
     try:
+        # Reserve 20% of the token budget for the AI response.
+        prompt_budget = int(chat_max_tokens * 0.8)
+
         context_block = chat_manager.build_chat_context(
             analysis_results=analysis_results,
             investigation_context=_resolve_case_investigation_context(case),
             metadata=dict(case.get("image_metadata", {})),
+            token_budget=prompt_budget,
         )
 
         retrieved_payload = chat_manager.retrieve_csv_data(
@@ -1502,11 +1506,23 @@ def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> No
             )
 
         system_prompt = _load_forensic_system_prompt()
+
+        # Calculate remaining token budget for conversation history.
+        fixed_tokens = (
+            chat_manager.estimate_token_count(system_prompt)
+            + chat_manager.estimate_token_count(context_block)
+            + chat_manager.estimate_token_count(message_for_ai)
+        )
+        history_budget = max(0, prompt_budget - fixed_tokens)
+
+        recent_history = chat_manager.get_recent_history(max_pairs=CHAT_HISTORY_MAX_PAIRS)
+        fitted_history = chat_manager.fit_history(recent_history, history_budget)
+
         ai_messages: list[dict[str, str]] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": context_block},
         ]
-        for history_message in chat_manager.get_recent_history(max_pairs=CHAT_HISTORY_MAX_PAIRS):
+        for history_message in fitted_history:
             role = str(history_message.get("role", "")).strip().lower()
             content = str(history_message.get("content", "")).strip()
             if role in {"user", "assistant"} and content:
@@ -2011,6 +2027,7 @@ def clear_case_chat_history(case_id: str) -> Response | tuple[Response, int]:
         return _error(f"Case not found: {case_id}", 404)
     manager = ChatManager(case["case_dir"])
     manager.clear()
+    case["audit"].log("chat_history_cleared", {"case_id": case_id})
     return jsonify({"status": "cleared", "case_id": case_id})
 
 

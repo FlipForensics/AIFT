@@ -121,8 +121,15 @@ class ChatManager:
         analysis_results: Mapping[str, Any] | None,
         investigation_context: str,
         metadata: Mapping[str, Any] | None,
+        token_budget: int | None = None,
     ) -> str:
-        """Build a compact, complete context block for chat prompts."""
+        """Build a compact, complete context block for chat prompts.
+
+        When *token_budget* is given the method checks whether the full
+        context exceeds 80 % of that budget.  If it does, per-artifact
+        findings are compressed to ~2 sentences each so that more room
+        remains for conversation history and the AI response.
+        """
         analysis = analysis_results if isinstance(analysis_results, Mapping) else {}
         metadata_map = metadata if isinstance(metadata, Mapping) else {}
 
@@ -135,8 +142,7 @@ class ChatManager:
             default="No investigation context provided.",
         )
 
-        per_artifact_lines = self._format_per_artifact_findings(analysis)
-        sections = [
+        base_sections = [
             f"Investigation Context:\n{context_text}",
             (
                 "System Under Analysis:\n"
@@ -145,9 +151,19 @@ class ChatManager:
                 f"- Domain: {domain}"
             ),
             f"Executive Summary:\n{summary}",
-            f"Per-Artifact Findings:\n{per_artifact_lines}",
         ]
-        return "\n\n".join(sections)
+        base_text = "\n\n".join(base_sections)
+
+        per_artifact_lines = self._format_per_artifact_findings(analysis)
+        full_context = f"{base_text}\n\nPer-Artifact Findings:\n{per_artifact_lines}"
+
+        if token_budget is not None and token_budget > 0:
+            threshold = int(token_budget * 0.8)
+            if self.estimate_token_count(full_context) > threshold:
+                compressed = self._compress_findings(per_artifact_lines)
+                full_context = f"{base_text}\n\nPer-Artifact Findings (compressed):\n{compressed}"
+
+        return full_context
 
     def retrieve_csv_data(self, question: str, parsed_dir: str | Path) -> dict[str, Any]:
         """Best-effort retrieval of raw CSV rows for data-centric chat questions."""
@@ -245,6 +261,86 @@ class ChatManager:
         if not text:
             return 0
         return int(len(text) / 4)
+
+    def fit_history(
+        self,
+        history: list[dict[str, Any]],
+        max_tokens: int,
+    ) -> list[dict[str, Any]]:
+        """Trim conversation history to fit within *max_tokens*.
+
+        Drops the oldest complete user/assistant pairs first.  Returns a
+        (possibly shorter) list that fits within the budget.
+        """
+        if max_tokens <= 0:
+            return []
+        if not history:
+            return []
+
+        # Pair up messages so we can drop oldest pairs.
+        pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        pending_user: dict[str, Any] | None = None
+        for msg in history:
+            role = msg.get("role")
+            if role == "user":
+                pending_user = msg
+            elif role == "assistant" and pending_user is not None:
+                pairs.append((pending_user, msg))
+                pending_user = None
+
+        # Drop oldest pairs until total fits.
+        while pairs:
+            total = sum(
+                self.estimate_token_count(str(u.get("content", "")))
+                + self.estimate_token_count(str(a.get("content", "")))
+                for u, a in pairs
+            )
+            if total <= max_tokens:
+                break
+            pairs.pop(0)
+
+        result: list[dict[str, Any]] = []
+        for user_msg, assistant_msg in pairs:
+            result.append(user_msg)
+            result.append(assistant_msg)
+        return result
+
+    @staticmethod
+    def _compress_findings(findings_text: str) -> str:
+        """Shorten per-artifact findings to ~2 sentences each."""
+        if not findings_text or not findings_text.strip():
+            return findings_text
+
+        compressed_lines: list[str] = []
+        for line in findings_text.split("\n"):
+            stripped = line.strip()
+            if not stripped.startswith("- "):
+                compressed_lines.append(line)
+                continue
+
+            # Format: "- artifact_name: analysis text..."
+            colon_pos = stripped.find(": ", 2)
+            if colon_pos < 0:
+                compressed_lines.append(line)
+                continue
+
+            prefix = stripped[: colon_pos + 2]
+            analysis = stripped[colon_pos + 2 :]
+
+            # Keep first ~2 sentences.
+            sentences: list[str] = []
+            for part in re.split(r"(?<=\.)\s+", analysis):
+                sentences.append(part)
+                if len(sentences) >= 2:
+                    break
+
+            shortened = " ".join(sentences)
+            # Hard cap at 300 chars for safety.
+            if len(shortened) > 300:
+                shortened = shortened[:297] + "..."
+            compressed_lines.append(f"{prefix}{shortened}")
+
+        return "\n".join(compressed_lines)
 
     @classmethod
     def _resolve_max_context_tokens(cls, value: Any) -> int:

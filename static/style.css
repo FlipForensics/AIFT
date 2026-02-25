@@ -871,6 +871,10 @@ tbody td:nth-child(3) {
   max-height: 36rem;
 }
 
+#chat-panel[hidden] {
+  display: none;
+}
+
 #chat-thread {
   flex: 1 1 auto;
   overflow-y: auto;
