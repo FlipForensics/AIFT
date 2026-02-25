@@ -1,38 +1,35 @@
-# Chunk Merge — Artifact Analysis
+# Chunk Merge — {{artifact_name}}
 
-The dataset for this artifact was too large for a single pass, so it was analyzed in {{chunk_count}} separate chunks. Below are the findings from each chunk. Merge them into one final, coherent analysis.
+This artifact's dataset was split into {{chunk_count}} chunks. Below are the per-chunk findings. Merge them into one final analysis.
 
 ## Investigation Context
 {{investigation_context}}
 
-## Artifact: {{artifact_name}} ({{artifact_key}})
-
 ## Per-Chunk Findings
 {{per_chunk_findings}}
 
-## Task
+## Merge Rules
 
-Merge the above chunk analyses into one final analysis. Deduplicate repeated findings, reconcile any contradictions, and re-rank by severity then confidence.
-
-Do not invent new findings. Only work with what is present in the chunk analyses above. If chunks contradict each other, note the conflict and state which evidence is stronger.
+1. Deduplicate: if the same finding appears in multiple chunks, keep it once with the strongest evidence from any chunk.
+2. Contradictions: if chunks disagree, state both positions and which has stronger evidence.
+3. Drop anything that is purely informative, contextual, or a recommendation — keep only suspicious/anomalous findings.
+4. Preserve all cited evidence exactly: timestamps, paths, values, row references.
+5. Reorder by severity (CRITICAL → HIGH → MEDIUM → LOW), then by confidence.
 
 ## Output Format
 
-**Findings** (skip this section entirely if nothing suspicious across all chunks)
+**Findings** (skip entirely if nothing suspicious across all chunks)
 
-For each finding, use this format:
-- [SEVERITY: CRITICAL|HIGH|MEDIUM|LOW] [CONFIDENCE: HIGH|MEDIUM|LOW] What you found.
-  - Evidence: timestamp, value, and row reference from the data.
-  - Why it matters: one sentence on incident impact or risk.
-  - Alternative explanation: most likely benign reason for this, if any.
-  - Verify: one specific follow-up action.
+- CRITICAL | HIGH confidence — What you found.
+  Evidence: cited data.
+  Alt: benign explanation, if any.
 
-Order by severity, then confidence. Do not pad with low-value observations.
+- HIGH | MEDIUM confidence — ...
 
-**IOC Status** (only if the investigation context mentions specific IOCs)
+**IOC Status** (only if investigation context mentions IOCs)
 
-- IOC → Observed / Not Observed / Not Assessable. Evidence if observed.
+- IOC_value → Observed / Not Observed / Not Assessable. Cite evidence if observed.
 
 **Data Gaps**
 
-What can't be determined from this artifact and why. Include: missing time ranges, absent fields, signs of tampering or log clearing, and what other artifacts would help.
+What couldn't be assessed due to chunking limitations (e.g., cross-chunk patterns that may have been missed).
