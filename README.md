@@ -40,7 +40,7 @@ A [publicly available test image](https://cfreds.nist.gov/all/BenjaminDonnachie/
 | Kimi | $0.20 | ~5 min | :star::star::star: | [View report](https://flipforensics.github.io/AIFT/example_reports/KIMI.html) |
 | OpenAI GPT | $0.94 | ~8 min | :star::star::star::star: | [View report](https://flipforensics.github.io/AIFT/example_reports/ChatGPT5.2.html) |
 | Claude Opus 4.6 | $3.01 | ~20 min | :star::star::star::star::star: | [View report](https://flipforensics.github.io/AIFT/example_reports/Opus4.6.html) |
-
+| qwen3:8b (8GB VRAM) | $0 | ~2.5h | :star: | [View report](https://flipforensics.github.io/AIFT/example_reports/qwen-3-8b.html) |
 ---
 
 ## Quick Start
