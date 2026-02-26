@@ -1406,5 +1406,109 @@ class AnalyzerTests(unittest.TestCase):
         self.assertNotIn("id", variant_cols)
 
 
+class PathResolutionTests(unittest.TestCase):
+    """Verify that ForensicAnalyzer resolves paths relative to PROJECT_ROOT,
+    not the current working directory."""
+
+    def test_default_prompts_dir_is_project_root_based(self) -> None:
+        """When no prompts_dir is given, it should point to PROJECT_ROOT/prompts
+        regardless of the CWD."""
+        from app.analyzer import PROJECT_ROOT
+
+        with TemporaryDirectory(prefix="aift-cwd-test-") as fake_cwd:
+            with patch("os.getcwd", return_value=fake_cwd):
+                analyzer = ForensicAnalyzer()
+
+        expected = PROJECT_ROOT / "prompts"
+        self.assertEqual(analyzer.prompts_dir, expected)
+
+    def test_default_prompts_dir_loads_real_prompt_files(self) -> None:
+        """The default prompts_dir should contain the actual prompt templates
+        shipped with the project."""
+        from app.analyzer import PROJECT_ROOT
+
+        analyzer = ForensicAnalyzer()
+        self.assertTrue(
+            (analyzer.prompts_dir / "system_prompt.md").exists(),
+            "system_prompt.md should be found via the default prompts_dir",
+        )
+        self.assertTrue(
+            (analyzer.prompts_dir / "artifact_analysis.md").exists(),
+            "artifact_analysis.md should be found via the default prompts_dir",
+        )
+
+    def test_explicit_prompts_dir_is_respected(self) -> None:
+        with TemporaryDirectory(prefix="aift-prompts-test-") as temp_dir:
+            custom = Path(temp_dir) / "my_prompts"
+            custom.mkdir()
+            analyzer = ForensicAnalyzer(prompts_dir=custom)
+            self.assertEqual(analyzer.prompts_dir, custom)
+
+    def test_artifact_ai_columns_config_resolves_to_project_root(self) -> None:
+        """The relative artifact_ai_columns_config_path should resolve against
+        PROJECT_ROOT, not CWD, when the file only exists in the project tree."""
+        from app.analyzer import PROJECT_ROOT
+
+        with TemporaryDirectory(prefix="aift-cwd-test-") as fake_cwd:
+            with patch("os.getcwd", return_value=fake_cwd):
+                analyzer = ForensicAnalyzer()
+                resolved = analyzer._resolve_artifact_ai_columns_config_path()
+
+        self.assertTrue(
+            str(resolved).startswith(str(PROJECT_ROOT)),
+            f"Expected path under PROJECT_ROOT ({PROJECT_ROOT}), got {resolved}",
+        )
+        self.assertNotIn(
+            fake_cwd,
+            str(resolved),
+            "Resolved path should NOT reference the fake CWD",
+        )
+
+    def test_artifact_ai_columns_config_does_not_use_cwd(self) -> None:
+        """Even if a matching file exists in CWD, it should NOT be preferred
+        over the PROJECT_ROOT copy."""
+        from app.analyzer import PROJECT_ROOT
+
+        with TemporaryDirectory(prefix="aift-cwd-test-") as fake_cwd:
+            # Create a decoy file in the fake CWD.
+            decoy_dir = Path(fake_cwd) / "config"
+            decoy_dir.mkdir()
+            decoy_file = decoy_dir / "artifact_ai_columns.yaml"
+            decoy_file.write_text("decoy: true", encoding="utf-8")
+
+            with patch("os.getcwd", return_value=fake_cwd):
+                analyzer = ForensicAnalyzer()
+                resolved = analyzer._resolve_artifact_ai_columns_config_path()
+
+        self.assertNotEqual(
+            resolved,
+            decoy_file,
+            "Should not resolve to a file in CWD",
+        )
+
+
+class AppFactoryPathResolutionTests(unittest.TestCase):
+    """Verify that create_app stores an absolute config path."""
+
+    def test_create_app_stores_absolute_config_path(self) -> None:
+        from app import create_app
+        from app.config import PROJECT_ROOT
+
+        app = create_app()
+        stored_path = app.config.get("AIFT_CONFIG_PATH", "")
+        self.assertTrue(
+            Path(stored_path).is_absolute() or str(PROJECT_ROOT) in stored_path,
+            f"AIFT_CONFIG_PATH should be absolute, got: {stored_path}",
+        )
+
+    def test_create_app_with_explicit_path_stores_that_path(self) -> None:
+        from app import create_app
+
+        with TemporaryDirectory(prefix="aift-factory-test-") as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            app = create_app(str(config_path))
+            self.assertEqual(app.config["AIFT_CONFIG_PATH"], str(config_path))
+
+
 if __name__ == "__main__":
     unittest.main()

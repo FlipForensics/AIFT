@@ -9,6 +9,8 @@ from typing import Any
 
 import yaml
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "ai": {
         "provider": "claude",
@@ -95,8 +97,8 @@ def apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
-def load_config(path: str | Path = "config.yaml", use_env_overrides: bool = True) -> dict[str, Any]:
-    config_path = Path(path)
+def load_config(path: str | Path | None = None, use_env_overrides: bool = True) -> dict[str, Any]:
+    config_path = Path(path) if path is not None else PROJECT_ROOT / "config.yaml"
     config = get_default_config()
 
     if config_path.exists():
@@ -115,8 +117,8 @@ def load_config(path: str | Path = "config.yaml", use_env_overrides: bool = True
     return config
 
 
-def save_config(config: dict[str, Any], path: str | Path = "config.yaml") -> None:
-    config_path = Path(path)
+def save_config(config: dict[str, Any], path: str | Path | None = None) -> None:
+    config_path = Path(path) if path is not None else PROJECT_ROOT / "config.yaml"
     if config_path.parent != Path("."):
         config_path.parent.mkdir(parents=True, exist_ok=True)
 

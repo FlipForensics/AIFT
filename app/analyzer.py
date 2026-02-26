@@ -269,7 +269,7 @@ class ForensicAnalyzer:
         config: Mapping[str, Any] | None = None,
         audit_logger: Any | None = None,
         artifact_csv_paths: Mapping[str, str | Path] | None = None,
-        prompts_dir: str | Path = "prompts",
+        prompts_dir: str | Path | None = None,
         random_seed: int | None = None,
     ) -> None:
         if (
@@ -290,7 +290,7 @@ class ForensicAnalyzer:
             for artifact_key, csv_path in (artifact_csv_paths or {}).items()
         }
         self._analysis_input_csv_paths: dict[str, Path] = {}
-        self.prompts_dir = Path(prompts_dir)
+        self.prompts_dir = Path(prompts_dir) if prompts_dir is not None else PROJECT_ROOT / "prompts"
         self._random = random.Random(random_seed)
         self._load_analysis_settings()
         self.artifact_ai_column_projections = self._load_artifact_ai_column_projections()
@@ -437,7 +437,6 @@ class ForensicAnalyzer:
         candidates: list[Path] = []
         if self.case_dir is not None:
             candidates.append(self.case_dir / configured)
-        candidates.append(Path.cwd() / configured)
         candidates.append(PROJECT_ROOT / configured)
 
         for candidate in candidates:

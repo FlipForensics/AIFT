@@ -16,12 +16,12 @@ def main() -> None:
     from app import create_app
     from app.config import load_config
 
-    config = load_config("config.yaml")
+    config = load_config()
     server_config = config.get("server", {})
     host = server_config.get("host", "127.0.0.1")
     port = int(server_config.get("port", 5000))
 
-    app = create_app("config.yaml")
+    app = create_app()
     url = f"http://{host}:{port}"
 
     def _open_browser() -> None:
