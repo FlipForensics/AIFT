@@ -1118,7 +1118,9 @@ class AnalyzerTests(unittest.TestCase):
                 )
 
         self.assertEqual(len(fake_provider.calls), 1)
-        self.assertEqual(fake_provider.calls[0]["max_tokens"], "1234")
+        # ai_max_tokens is the context window; the provider receives 20% for the response.
+        expected_response_tokens = str(max(1, int(1234 * 0.2)))
+        self.assertEqual(fake_provider.calls[0]["max_tokens"], expected_response_tokens)
         user_prompt = fake_provider.calls[0]["user_prompt"]
         # With date_buffer_days=2, only the Jan-15 row survives the filter;
         # the Jan-01 row is outside the ±2 day window.
