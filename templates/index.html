@@ -316,6 +316,7 @@
       <label for="parse-overall-progress">Overall progress</label>
       <progress id="parse-overall-progress" max="100" value="0">0%</progress>
 
+      <button id="cancel-parse" type="button" hidden>Cancel Parsing</button>
       <p id="parse-error-message" role="alert" hidden></p>
 
       <table>
@@ -361,6 +362,7 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
         </p>
 
         <button id="run-analysis" type="submit">Run Analysis</button>
+        <button id="cancel-analysis" type="button" hidden>Cancel Analysis</button>
       </form>
 
       <section id="analysis-stream" aria-live="polite" aria-labelledby="analysis-stream-title">

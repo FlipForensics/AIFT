@@ -30,8 +30,8 @@
     pendingFiles: [],
     settings: null,
     settingsTab: "basic",
-    parse: { run: false, done: false, fail: false, es: null, retry: null, retryCount: 0, seq: -1, rows: {}, status: {}, timer: null, started: 0 },
-    analysis: { run: false, done: false, fail: false, es: null, retry: null, retryCount: 0, seq: -1, order: [], byKey: {}, summary: "", model: {}, timer: null, started: 0 },
+    parse: { run: false, done: false, fail: false, es: null, retry: null, retryCount: 0, seq: -1, rows: {}, status: {}, timer: null, started: 0, abort: null },
+    analysis: { run: false, done: false, fail: false, es: null, retry: null, retryCount: 0, seq: -1, order: [], byKey: {}, summary: "", model: {}, timer: null, started: 0, abort: null },
     chat: {
       run: false,
       es: null,
@@ -113,12 +113,14 @@
     el.analysisDateEnd = q("analysis-date-end");
 
     el.parseProgress = q("parse-overall-progress");
+    el.cancelParse = q("cancel-parse");
     el.parseErr = q("parse-error-message");
     el.parseRows = q("parse-progress-rows");
 
     el.analysisForm = q("analysis-form");
     el.prompt = q("investigation-context");
     el.runBtn = q("run-analysis");
+    el.cancelAnalysis = q("cancel-analysis");
     el.providerName = q("provider-name");
     el.settingsLink = q("provider-settings-link");
     el.analysisList = q("analysis-results-list");
@@ -319,8 +321,14 @@
     const rawStep = Number(n);
     const normalizedStep = Number.isFinite(rawStep) ? Math.trunc(rawStep) : 1;
     st.step = Math.max(1, Math.min(STEP_IDS.length, normalizedStep));
-    if (priorStep === 3 && st.step !== 3 && !st.parse.run) closeParseSse();
-    if (priorStep === 4 && st.step !== 4 && !st.analysis.run) closeAnalysisSse();
+    if (priorStep === 3 && st.step !== 3) {
+      if (st.parse.run) cancelParse();
+      else closeParseSse();
+    }
+    if (priorStep === 4 && st.step !== 4) {
+      if (st.analysis.run) cancelAnalysis();
+      else closeAnalysisSse();
+    }
     if (priorStep === 5 && st.step !== 5 && !st.chat.run) closeChatSse();
     el.steps.forEach((s) => {
       const on = Number(s.dataset.step || 0) === st.step;
@@ -931,6 +939,7 @@
       e.preventDefault();
       await submitParse();
     });
+    if (el.cancelParse) el.cancelParse.addEventListener("click", cancelParse);
   }
 
   function applyPreset(mode) {
@@ -955,6 +964,7 @@
     const dateRangeValidation = validateAnalysisDateRange();
     const disabled = !activeCaseId() || st.parse.run || parseArtifacts.length === 0 || !dateRangeValidation.ok;
     if (el.parseBtn) el.parseBtn.disabled = disabled;
+    if (el.cancelParse) el.cancelParse.hidden = !st.parse.run;
     updateNav();
   }
 
@@ -978,6 +988,8 @@
     st.selectedAi = aiArtifacts;
     resetParseState();
     st.parse.run = true;
+    const abortCtrl = new AbortController();
+    st.parse.abort = abortCtrl;
     initParseRows(arts);
     updateParseProgress();
     if (el.parseBtn) el.parseBtn.disabled = true;
@@ -989,11 +1001,13 @@
         artifact_options: artifactOptions,
       };
       if (dateRangeValidation.range) parsePayload.analysis_date_range = dateRangeValidation.range;
-      await apiJson(`/api/cases/${encodeURIComponent(caseId)}/parse`, { method: "POST", json: parsePayload });
+      await apiJson(`/api/cases/${encodeURIComponent(caseId)}/parse`, { method: "POST", json: parsePayload, signal: abortCtrl.signal });
       startTimer("parse");
       startParseSse();
       showStep(3);
     } catch (e) {
+      st.parse.abort = null;
+      if (e.name === "AbortError") return;
       st.parse.run = false;
       stopTimer("parse");
       setMsg(el.artifactsMsg, `Failed to start parsing: ${e.message}`, "error");
@@ -1179,6 +1193,10 @@
   }
 
   function closeParseSse() {
+    if (st.parse.abort) {
+      st.parse.abort.abort();
+      st.parse.abort = null;
+    }
     if (st.parse.retry) {
       window.clearTimeout(st.parse.retry);
       st.parse.retry = null;
@@ -1187,6 +1205,22 @@
       st.parse.es.close();
       st.parse.es = null;
     }
+  }
+
+  function cancelParse() {
+    if (st.parse.abort) {
+      st.parse.abort.abort();
+      st.parse.abort = null;
+    }
+    closeParseSse();
+    if (!st.parse.run) return;
+    st.parse.run = false;
+    st.parse.done = false;
+    st.parse.fail = true;
+    stopTimer("parse");
+    setMsg(el.parseErr, "Parsing cancelled.", "info");
+    updateParseButton();
+    updateNav();
   }
 
   function resetParseState() {
@@ -1211,6 +1245,7 @@
       e.preventDefault();
       await submitAnalysis();
     });
+    if (el.cancelAnalysis) el.cancelAnalysis.addEventListener("click", cancelAnalysis);
     if (el.settingsLink) {
       el.settingsLink.addEventListener("click", (e) => {
         e.preventDefault();
@@ -1241,18 +1276,24 @@
 
     resetAnalysisState();
     st.analysis.run = true;
+    const abortCtrl = new AbortController();
+    st.analysis.abort = abortCtrl;
     clearMsg(el.resultsMsg);
     if (el.runBtn) el.runBtn.disabled = true;
+    if (el.cancelAnalysis) el.cancelAnalysis.hidden = false;
 
     try {
-      await apiJson(`/api/cases/${encodeURIComponent(caseId)}/analyze`, { method: "POST", json: { prompt: val(el.prompt) } });
+      await apiJson(`/api/cases/${encodeURIComponent(caseId)}/analyze`, { method: "POST", json: { prompt: val(el.prompt) }, signal: abortCtrl.signal });
       startTimer("analysis");
       startAnalysisSse();
       showStep(4);
     } catch (e) {
+      st.analysis.abort = null;
+      if (e.name === "AbortError") return;
       st.analysis.run = false;
       stopTimer("analysis");
       if (el.runBtn) el.runBtn.disabled = false;
+      if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
       setMsg(el.analysisMsg, `Failed to start analysis: ${e.message}`, "error");
     } finally {
       updateNav();
@@ -1337,6 +1378,7 @@
       stopTimer("analysis");
       closeAnalysisSse();
       if (el.runBtn) el.runBtn.disabled = false;
+      if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
       clearMsg(el.analysisMsg);
       updateNav();
       return showStep(5);
@@ -1348,6 +1390,7 @@
       stopTimer("analysis");
       closeAnalysisSse();
       if (el.runBtn) el.runBtn.disabled = false;
+      if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
       setMsg(el.analysisMsg, String(p.error || "Analysis failed."), "error");
       updateNav();
       return;
@@ -1741,6 +1784,10 @@
   }
 
   function closeAnalysisSse() {
+    if (st.analysis.abort) {
+      st.analysis.abort.abort();
+      st.analysis.abort = null;
+    }
     if (st.analysis.retry) {
       window.clearTimeout(st.analysis.retry);
       st.analysis.retry = null;
@@ -1749,6 +1796,23 @@
       st.analysis.es.close();
       st.analysis.es = null;
     }
+  }
+
+  function cancelAnalysis() {
+    if (st.analysis.abort) {
+      st.analysis.abort.abort();
+      st.analysis.abort = null;
+    }
+    closeAnalysisSse();
+    if (!st.analysis.run) return;
+    st.analysis.run = false;
+    st.analysis.done = false;
+    st.analysis.fail = true;
+    stopTimer("analysis");
+    if (el.runBtn) el.runBtn.disabled = false;
+    if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
+    setMsg(el.analysisMsg, "Analysis cancelled.", "info");
+    updateNav();
   }
 
   function resetAnalysisState() {
@@ -1765,6 +1829,7 @@
     st.analysis.model = {};
     clearMsg(el.analysisMsg);
     if (el.runBtn) el.runBtn.disabled = false;
+    if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
     renderAnalysis();
     renderExecSummary();
     renderFindings();
@@ -2674,6 +2739,7 @@
       headers["X-CSRF-Token"] = csrfToken;
     }
     const init = { method, headers };
+    if (opts.signal) init.signal = opts.signal;
     if (Object.prototype.hasOwnProperty.call(opts, "json")) {
       headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(opts.json);
@@ -2685,6 +2751,7 @@
     try {
       r = await fetch(url, init);
     } catch (e) {
+      if (e.name === "AbortError") throw e;
       throw new Error(`Network error while calling ${url}: ${e.message}`);
     }
     const ct = r.headers.get("content-type") || "";
