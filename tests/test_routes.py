@@ -150,7 +150,9 @@ class RoutesTests(unittest.TestCase):
         self.config_path = Path(self.temp_dir.name) / "config.yaml"
         self.app = create_app(str(self.config_path))
         self.app.testing = True
+        self.csrf_token = self.app.config["CSRF_TOKEN"]
         self.client = self.app.test_client()
+        self.client.environ_base["HTTP_X_CSRF_TOKEN"] = self.csrf_token
         routes.CASE_STATES.clear()
         routes.PARSE_PROGRESS.clear()
         routes.ANALYSIS_PROGRESS.clear()

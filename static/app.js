@@ -43,6 +43,8 @@
     },
   };
 
+  let csrfToken = "";
+
   const el = {};
   const q = (id) => document.getElementById(id);
 
@@ -61,8 +63,17 @@
     setupSettings();
     resetCaseUi();
     showStep(1);
+    fetchCsrfToken().catch(() => {});
     loadSettings().catch((e) => setMsg(el.settingsMsg, `Unable to load settings: ${e.message}`, "error"));
     loadArtifactProfiles().catch((e) => setMsg(el.artifactsMsg, `Unable to load profiles: ${e.message}`, "error"));
+  }
+
+  async function fetchCsrfToken() {
+    const r = await fetch("/api/csrf-token", { method: "GET" });
+    if (r.ok) {
+      const data = await r.json();
+      csrfToken = data.csrf_token || "";
+    }
   }
 
   function cache() {
@@ -2657,7 +2668,11 @@
 
   async function apiJson(url, opts = {}) {
     const headers = Object.assign({}, opts.headers || {});
-    const init = { method: opts.method || "GET", headers };
+    const method = opts.method || "GET";
+    if (csrfToken && method !== "GET" && method !== "HEAD") {
+      headers["X-CSRF-Token"] = csrfToken;
+    }
+    const init = { method, headers };
     if (Object.prototype.hasOwnProperty.call(opts, "json")) {
       headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(opts.json);

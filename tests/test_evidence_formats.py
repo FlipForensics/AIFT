@@ -433,6 +433,7 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
         self.app = create_app(str(self.config_path))
         self.app.testing = True
         self.client = self.app.test_client()
+        self.client.environ_base["HTTP_X_CSRF_TOKEN"] = self.app.config["CSRF_TOKEN"]
         routes.CASE_STATES.clear()
         routes.PARSE_PROGRESS.clear()
         routes.ANALYSIS_PROGRESS.clear()
