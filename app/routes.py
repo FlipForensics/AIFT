@@ -63,6 +63,8 @@ Attributes:
     SSE_POLL_INTERVAL_SECONDS: Sleep interval between SSE polling iterations.
     SSE_INITIAL_IDLE_GRACE_SECONDS: Grace period before an idle SSE stream is
         terminated.
+    CASE_TTL_SECONDS: Maximum age (in seconds) for in-memory case state before
+        TTL-based eviction removes it, regardless of status.
     CASE_STATES: In-memory dictionary mapping case IDs to their full state
         dictionaries. Protected by ``STATE_LOCK``.
     PARSE_PROGRESS: In-memory dictionary mapping case IDs to parsing progress
@@ -189,6 +191,7 @@ CHAT_HISTORY_MAX_PAIRS = 20
 TERMINAL_CASE_STATUSES = frozenset({"completed", "failed", "error"})
 SSE_POLL_INTERVAL_SECONDS = 0.2
 SSE_INITIAL_IDLE_GRACE_SECONDS = 1.0
+CASE_TTL_SECONDS = 21600  # 6 hour TTL for in-memory case state eviction.
 
 CASE_STATES: dict[str, dict[str, Any]] = {}
 PARSE_PROGRESS: dict[str, dict[str, Any]] = {}
@@ -315,9 +318,10 @@ def _new_progress(status: str = "idle") -> dict[str, Any]:
 
     Returns:
         A dictionary with keys ``"status"`` (str), ``"events"`` (empty list),
-        and ``"error"`` (None).
+        ``"error"`` (None), and ``"created_at"`` (monotonic timestamp for
+        TTL-based eviction).
     """
-    return {"status": status, "events": [], "error": None}
+    return {"status": status, "events": [], "error": None, "created_at": time.monotonic()}
 
 
 def _set_progress_status(
@@ -421,31 +425,88 @@ def _cleanup_case_entries(case_id: str) -> None:
 
 
 def _cleanup_terminal_cases(exclude_case_id: str | None = None) -> None:
-    """Remove in-memory state for all cases that have reached a terminal status.
+    """Remove in-memory state for cases that are terminal or have exceeded TTL.
 
     Terminal statuses are defined in ``TERMINAL_CASE_STATUSES`` (completed,
-    failed, error). This prevents unbounded memory growth from accumulated
-    finished cases.
+    failed, error). Cases whose progress entries are older than
+    ``CASE_TTL_SECONDS`` are also evicted regardless of status, as a safety
+    net against orphaned entries. This prevents unbounded memory growth from
+    accumulated finished or abandoned cases.
 
     Args:
         exclude_case_id: Optional case ID to exempt from cleanup, even if it
             is in a terminal status. Useful when a new case is being created
             immediately after another completes.
     """
+    now = time.monotonic()
     with STATE_LOCK:
-        terminal_case_ids = [
-            case_id
-            for case_id, case in CASE_STATES.items()
-            if case_id != exclude_case_id
-            and _normalize_case_status(case.get("status")) in TERMINAL_CASE_STATUSES
-        ]
+        terminal_case_ids = []
+        for case_id, case in CASE_STATES.items():
+            if case_id == exclude_case_id:
+                continue
+            is_terminal = (
+                _normalize_case_status(case.get("status")) in TERMINAL_CASE_STATUSES
+            )
+            is_expired = _is_case_expired(case_id, now)
+            if is_terminal or is_expired:
+                terminal_case_ids.append(case_id)
         for case_id in terminal_case_ids:
             CASE_STATES.pop(case_id, None)
             PARSE_PROGRESS.pop(case_id, None)
             ANALYSIS_PROGRESS.pop(case_id, None)
             CHAT_PROGRESS.pop(case_id, None)
+        # Also clean up orphaned progress entries with no CASE_STATES entry.
+        _evict_orphaned_progress(now)
     for case_id in terminal_case_ids:
         unregister_case_log_handler(case_id)
+
+
+def _is_case_expired(case_id: str, now: float) -> bool:
+    """Check whether a case's progress entries have exceeded the TTL.
+
+    Inspects ``created_at`` timestamps in all three progress stores and
+    returns ``True`` if the most recent one is older than ``CASE_TTL_SECONDS``.
+
+    Must be called while holding ``STATE_LOCK``.
+
+    Args:
+        case_id: UUID of the case to check.
+        now: Current monotonic timestamp from ``time.monotonic()``.
+
+    Returns:
+        ``True`` if the case has exceeded the TTL, ``False`` otherwise.
+    """
+    latest_created = 0.0
+    for store in (PARSE_PROGRESS, ANALYSIS_PROGRESS, CHAT_PROGRESS):
+        entry = store.get(case_id)
+        if entry is not None:
+            latest_created = max(latest_created, entry.get("created_at", 0.0))
+    if latest_created == 0.0:
+        return False
+    return (now - latest_created) > CASE_TTL_SECONDS
+
+
+def _evict_orphaned_progress(now: float) -> None:
+    """Remove progress entries that have no corresponding CASE_STATES entry.
+
+    Catches entries left behind if CASE_STATES was cleaned but a progress
+    store was missed, or if a progress entry outlived its case. Only evicts
+    entries older than ``CASE_TTL_SECONDS`` to avoid removing entries for
+    cases that are still being initialized.
+
+    Must be called while holding ``STATE_LOCK``.
+
+    Args:
+        now: Current monotonic timestamp from ``time.monotonic()``.
+    """
+    for store in (PARSE_PROGRESS, ANALYSIS_PROGRESS, CHAT_PROGRESS):
+        orphan_ids = [
+            cid for cid in store
+            if cid not in CASE_STATES
+            and (now - store[cid].get("created_at", 0.0)) > CASE_TTL_SECONDS
+        ]
+        for cid in orphan_ids:
+            store.pop(cid, None)
 
 
 def _mask_sensitive(data: Any) -> Any:
@@ -1195,12 +1256,30 @@ def _build_csv_map(parse_results: list[dict[str, Any]]) -> dict[str, str]:
     return mapping
 
 
+def _cleanup_progress_store(store: dict[str, dict[str, Any]], case_id: str) -> None:
+    """Remove a finished case's entry from a specific progress store.
+
+    Called after an SSE stream ends to free the accumulated events list.
+    Thread-safe: acquires ``STATE_LOCK`` before modifying the store.
+
+    Args:
+        store: One of ``PARSE_PROGRESS``, ``ANALYSIS_PROGRESS``, or
+            ``CHAT_PROGRESS``.
+        case_id: UUID of the case whose progress entry should be removed.
+    """
+    with STATE_LOCK:
+        entry = store.get(case_id)
+        if entry is not None and entry.get("status") in {"completed", "failed", "error"}:
+            store.pop(case_id, None)
+
+
 def _stream_sse(store: dict[str, dict[str, Any]], case_id: str) -> Response:
     """Create an SSE streaming ``Response`` that polls a progress event store.
 
     Yields ``data:`` frames containing JSON-serialized events from the
     specified store. The stream terminates when the store's status reaches
     a terminal state (completed, failed, error) or an idle timeout expires.
+    After the stream ends, the progress entry is cleaned up to free memory.
 
     Args:
         store: One of ``PARSE_PROGRESS``, ``ANALYSIS_PROGRESS``, or
@@ -1215,37 +1294,40 @@ def _stream_sse(store: dict[str, dict[str, Any]], case_id: str) -> Response:
         """Generate SSE data frames by polling the progress event store."""
         last = 0
         initial_idle_deadline = time.monotonic() + SSE_INITIAL_IDLE_GRACE_SECONDS
-        while True:
-            with STATE_LOCK:
-                state = store.get(case_id)
-                if state is None:
-                    missing = {"type": "error", "message": "Case not found."}
-                    status = "failed"
-                    pending: list[dict[str, Any]] = [missing]
-                else:
-                    status = str(state.get("status", "idle"))
-                    events = list(state.get("events", []))
-                    pending = events[last:]
-                    last = len(events)
+        try:
+            while True:
+                with STATE_LOCK:
+                    state = store.get(case_id)
+                    if state is None:
+                        missing = {"type": "error", "message": "Case not found."}
+                        status = "failed"
+                        pending: list[dict[str, Any]] = [missing]
+                    else:
+                        status = str(state.get("status", "idle"))
+                        events = list(state.get("events", []))
+                        pending = events[last:]
+                        last = len(events)
 
-            if not pending and status == "idle":
-                if time.monotonic() < initial_idle_deadline:
+                if not pending and status == "idle":
+                    if time.monotonic() < initial_idle_deadline:
+                        yield ": keep-alive\n\n"
+                        time.sleep(SSE_POLL_INTERVAL_SECONDS)
+                        continue
+                    idle = {"type": "idle", "status": "idle"}
+                    yield f"data: {json.dumps(idle, separators=(',', ':'))}\n\n"
+                    break
+
+                for event in pending:
+                    yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+
+                if status in {"completed", "failed", "error"} and not pending:
+                    break
+
+                if not pending:
                     yield ": keep-alive\n\n"
-                    time.sleep(SSE_POLL_INTERVAL_SECONDS)
-                    continue
-                idle = {"type": "idle", "status": "idle"}
-                yield f"data: {json.dumps(idle, separators=(',', ':'))}\n\n"
-                break
-
-            for event in pending:
-                yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
-
-            if status in {"completed", "failed", "error"} and not pending:
-                break
-
-            if not pending:
-                yield ": keep-alive\n\n"
-            time.sleep(SSE_POLL_INTERVAL_SECONDS)
+                time.sleep(SSE_POLL_INTERVAL_SECONDS)
+        finally:
+            _cleanup_progress_store(store, case_id)
 
     return Response(
         stream(),
