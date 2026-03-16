@@ -2091,7 +2091,12 @@ def _run_parse(
         _emit_progress(PARSE_PROGRESS, case_id, {"type": "parse_failed", "error": "Case not found."})
         return
 
-    evidence_path = str(case.get("evidence_path", "")).strip()
+    with STATE_LOCK:
+        evidence_path = str(case.get("evidence_path", "")).strip()
+        case_dir = case["case_dir"]
+        audit_logger = case["audit"]
+        case_snapshot = dict(case)
+
     if not evidence_path:
         _mark_case_status(case_id, "failed")
         _set_progress_status(PARSE_PROGRESS, case_id, "failed", "No evidence available for parsing.")
@@ -2104,11 +2109,11 @@ def _run_parse(
 
     parser: Any | None = None
     try:
-        csv_output_dir = _resolve_case_csv_output_dir(case, config_snapshot=config_snapshot)
+        csv_output_dir = _resolve_case_csv_output_dir(case_snapshot, config_snapshot=config_snapshot)
         parser = ForensicParser(
             evidence_path=evidence_path,
-            case_dir=case["case_dir"],
-            audit_logger=case["audit"],
+            case_dir=case_dir,
+            audit_logger=audit_logger,
             parsed_dir=csv_output_dir,
         )
         results: list[dict[str, Any]] = []
@@ -2204,14 +2209,23 @@ def _run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) ->
         _emit_progress(ANALYSIS_PROGRESS, case_id, {"type": "analysis_failed", "error": "Case not found."})
         return
 
-    csv_map = dict(case.get("artifact_csv_paths", {}))
+    with STATE_LOCK:
+        csv_map = dict(case.get("artifact_csv_paths", {}))
+        parse_results_snapshot = list(case.get("parse_results", []))
+        analysis_artifacts_state = case.get("analysis_artifacts")
+        selected_artifacts_snapshot = list(case.get("selected_artifacts", []))
+        case_dir = case["case_dir"]
+        audit_logger = case["audit"]
+        image_metadata_snapshot = dict(case.get("image_metadata", {}))
+        artifact_options_snapshot = list(case.get("artifact_options", []))
+        analysis_date_range = case.get("analysis_date_range")
+
     if not csv_map:
-        csv_map = _build_csv_map(list(case.get("parse_results", [])))
-    analysis_artifacts_state = case.get("analysis_artifacts")
+        csv_map = _build_csv_map(parse_results_snapshot)
     if isinstance(analysis_artifacts_state, list):
         artifacts = [str(item) for item in analysis_artifacts_state if str(item) in csv_map]
     else:
-        artifacts = [item for item in case.get("selected_artifacts", []) if item in csv_map]
+        artifacts = [item for item in selected_artifacts_snapshot if item in csv_map]
     if not artifacts and not isinstance(analysis_artifacts_state, list):
         artifacts = sorted(csv_map.keys())
     if not artifacts:
@@ -2231,17 +2245,16 @@ def _run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) ->
 
     try:
         analyzer = ForensicAnalyzer(
-            case_dir=case["case_dir"],
+            case_dir=case_dir,
             config=config_snapshot,
-            audit_logger=case["audit"],
+            audit_logger=audit_logger,
             artifact_csv_paths=csv_map,
         )
-        metadata = dict(case.get("image_metadata", {}))
+        metadata = dict(image_metadata_snapshot)
         metadata["artifact_csv_paths"] = csv_map
-        metadata["parse_results"] = list(case.get("parse_results", []))
+        metadata["parse_results"] = parse_results_snapshot
         metadata["analysis_artifacts"] = list(artifacts)
-        metadata["artifact_options"] = list(case.get("artifact_options", []))
-        analysis_date_range = case.get("analysis_date_range")
+        metadata["artifact_options"] = artifact_options_snapshot
         if isinstance(analysis_date_range, dict):
             metadata["analysis_date_range"] = {
                 "start_date": str(analysis_date_range.get("start_date", "")).strip(),
@@ -2311,7 +2324,7 @@ def _run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) ->
             metadata=metadata,
             progress_callback=_analysis_progress,
         )
-        analysis_results_path = Path(case["case_dir"]) / "analysis_results.json"
+        analysis_results_path = Path(case_dir) / "analysis_results.json"
         with analysis_results_path.open("w", encoding="utf-8") as analysis_results_file:
             json.dump(output, analysis_results_file, indent=2, ensure_ascii=True)
             analysis_results_file.write("\n")
@@ -2370,7 +2383,11 @@ def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> No
         _emit_progress(CHAT_PROGRESS, case_id, {"type": "error", "message": "Case not found."})
         return
 
-    analysis_results = _load_case_analysis_results(case)
+    with STATE_LOCK:
+        case_snapshot = dict(case)
+        audit_logger = case["audit"]
+
+    analysis_results = _load_case_analysis_results(case_snapshot)
     if not analysis_results:
         message_text = "No analysis results available for this case. Run analysis first."
         _set_progress_status(CHAT_PROGRESS, case_id, "failed", message_text)
@@ -2395,12 +2412,13 @@ def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> No
         _emit_progress(CHAT_PROGRESS, case_id, {"type": "error", "message": message_text})
         return
 
-    chat_manager = ChatManager(case["case_dir"], max_context_tokens=chat_max_tokens)
+    case_dir = case_snapshot["case_dir"]
+    chat_manager = ChatManager(case_dir, max_context_tokens=chat_max_tokens)
     history_snapshot = chat_manager.get_history()
     message_index = (
         sum(1 for entry in history_snapshot if str(entry.get("role", "")).strip().lower() == "user") + 1
     )
-    case["audit"].log(
+    audit_logger.log(
         "chat_message_sent",
         {
             "message_index": message_index,
@@ -2414,8 +2432,8 @@ def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> No
 
         provider = create_provider(copy.deepcopy(config_snapshot))
 
-        investigation_context = _resolve_case_investigation_context(case)
-        image_metadata = dict(case.get("image_metadata", {}))
+        investigation_context = _resolve_case_investigation_context(case_snapshot)
+        image_metadata = dict(case_snapshot.get("image_metadata", {}))
 
         context_block = chat_manager.build_chat_context(
             analysis_results=analysis_results,
@@ -2439,7 +2457,7 @@ def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> No
 
         retrieved_payload = chat_manager.retrieve_csv_data(
             question=message,
-            parsed_dir=_resolve_case_parsed_dir(case),
+            parsed_dir=_resolve_case_parsed_dir(case_snapshot),
         )
         retrieved_artifacts: list[str] = []
         if isinstance(retrieved_payload.get("artifacts"), list):
@@ -2458,7 +2476,7 @@ def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> No
                 "User question:\n"
                 f"{message}"
             )
-            case["audit"].log(
+            audit_logger.log(
                 "chat_data_retrieval",
                 {
                     "message_index": message_index,
@@ -2526,7 +2544,7 @@ def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> No
             assistant_metadata["data_retrieved"] = list(retrieved_artifacts)
         chat_manager.add_message("assistant", response_text, metadata=assistant_metadata)
 
-        case["audit"].log(
+        audit_logger.log(
             "chat_response_received",
             {
                 "message_index": message_index,
@@ -2771,8 +2789,12 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
 
+    with STATE_LOCK:
+        case_dir = case["case_dir"]
+        audit_logger = case["audit"]
+
     try:
-        evidence_payload = _resolve_evidence_payload(case["case_dir"])
+        evidence_payload = _resolve_evidence_payload(case_dir)
         source_path = Path(evidence_payload["source_path"])
         dissect_path = Path(evidence_payload["dissect_path"])
 
@@ -2784,8 +2806,8 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
 
         parser = ForensicParser(
             evidence_path=dissect_path,
-            case_dir=case["case_dir"],
-            audit_logger=case["audit"],
+            case_dir=case_dir,
+            audit_logger=audit_logger,
         )
         try:
             metadata = parser.get_image_metadata()
@@ -2793,7 +2815,7 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
         finally:
             _close_forensic_parser(parser)
 
-        case["audit"].log(
+        audit_logger.log(
             "evidence_intake",
             {
                 "filename": source_path.name,
@@ -2807,7 +2829,7 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
                 "file_size_bytes": hashes["size_bytes"],
             },
         )
-        case["audit"].log(
+        audit_logger.log(
             "image_opened",
             {
                 "hostname": metadata.get("hostname", "Unknown"),
@@ -2872,7 +2894,9 @@ def start_parse(case_id: str) -> tuple[Response, int]:
     case = _get_case(case_id)
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
-    if not str(case.get("evidence_path", "")).strip():
+    with STATE_LOCK:
+        has_evidence = bool(str(case.get("evidence_path", "")).strip())
+    if not has_evidence:
         return _error("No evidence loaded for this case.", 400)
 
     payload = request.get_json(silent=True) or {}
@@ -2968,9 +2992,16 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
     case = _get_case(case_id)
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
-    if not case.get("parse_results") and not case.get("artifact_csv_paths"):
+
+    with STATE_LOCK:
+        has_results = bool(case.get("parse_results") or case.get("artifact_csv_paths"))
+        analysis_artifacts_state = case.get("analysis_artifacts")
+        case_dir = case["case_dir"]
+        analysis_date_range = case.get("analysis_date_range")
+        audit_logger = case["audit"]
+
+    if not has_results:
         return _error("No parsed artifacts found. Run parsing first.", 400)
-    analysis_artifacts_state = case.get("analysis_artifacts")
     if isinstance(analysis_artifacts_state, list):
         configured_analysis_artifacts = [
             artifact
@@ -2986,9 +3017,8 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
     payload = request.get_json(silent=True) or {}
     prompt = str(payload.get("prompt", "")).strip()
 
-    prompt_path = Path(case["case_dir"]) / "prompt.txt"
+    prompt_path = Path(case_dir) / "prompt.txt"
     prompt_details: dict[str, Any] = {"prompt": _sanitize_prompt(prompt)}
-    analysis_date_range = case.get("analysis_date_range")
     if isinstance(analysis_date_range, dict):
         start_date = str(analysis_date_range.get("start_date", "")).strip()
         end_date = str(analysis_date_range.get("end_date", "")).strip()
@@ -3005,8 +3035,9 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
         ANALYSIS_PROGRESS[case_id] = _new_progress(status="running")
         case["status"] = "running"
         case["investigation_context"] = prompt
+        analysis_artifacts_snapshot = list(case.get("analysis_artifacts", []))
 
-    case["audit"].log("prompt_submitted", prompt_details)
+    audit_logger.log("prompt_submitted", prompt_details)
 
     _emit_progress(
         ANALYSIS_PROGRESS,
@@ -3014,7 +3045,7 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
         {
             "type": "analysis_started",
             "prompt_provided": bool(prompt),
-            "analysis_artifact_count": len(case.get("analysis_artifacts", [])),
+            "analysis_artifact_count": len(analysis_artifacts_snapshot),
         },
     )
     config_snapshot = copy.deepcopy(current_app.config.get("AIFT_CONFIG", {}))
@@ -3028,7 +3059,7 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
         {
             "status": "started",
             "case_id": case_id,
-            "analysis_artifacts": list(case.get("analysis_artifacts", [])),
+            "analysis_artifacts": analysis_artifacts_snapshot,
         }
     ), 202
 
@@ -3076,7 +3107,9 @@ def chat_with_case(case_id: str) -> Response | tuple[Response, int]:
     if not message:
         return _error("`message` is required.", 400)
 
-    if not _load_case_analysis_results(case):
+    with STATE_LOCK:
+        case_snapshot_for_check = dict(case)
+    if not _load_case_analysis_results(case_snapshot_for_check):
         return _error("No analysis results available for this case. Run analysis first.", 400)
 
     config = current_app.config.get("AIFT_CONFIG", {})
@@ -3128,7 +3161,9 @@ def get_case_chat_history(case_id: str) -> Response | tuple[Response, int]:
     case = _get_case(case_id)
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
-    manager = ChatManager(case["case_dir"])
+    with STATE_LOCK:
+        case_dir = case["case_dir"]
+    manager = ChatManager(case_dir)
     return jsonify(manager.get_history())
 
 
@@ -3148,9 +3183,12 @@ def clear_case_chat_history(case_id: str) -> Response | tuple[Response, int]:
     case = _get_case(case_id)
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
-    manager = ChatManager(case["case_dir"])
+    with STATE_LOCK:
+        case_dir = case["case_dir"]
+        audit_logger = case["audit"]
+    manager = ChatManager(case_dir)
     manager.clear()
-    case["audit"].log("chat_history_cleared", {"case_id": case_id})
+    audit_logger.log("chat_history_cleared", {"case_id": case_id})
     return jsonify({"status": "cleared", "case_id": case_id})
 
 
@@ -3173,9 +3211,13 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
 
-    hashes = dict(case.get("evidence_hashes", {}))
+    with STATE_LOCK:
+        case_snapshot = dict(case)
+        audit_logger = case["audit"]
+
+    hashes = dict(case_snapshot.get("evidence_hashes", {}))
     intake_sha256 = str(hashes.get("sha256", "")).strip()
-    verification_path = _resolve_hash_verification_path(case)
+    verification_path = _resolve_hash_verification_path(case_snapshot)
 
     # Directory evidence cannot be hashed; skip verification.
     if intake_sha256.startswith("N/A"):
@@ -3191,7 +3233,7 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
             intake_sha256,
             return_computed=True,
         )
-    case["audit"].log(
+    audit_logger.log(
         "hash_verification",
         {
             "expected_sha256": intake_sha256,
@@ -3205,27 +3247,28 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
     hashes["expected_sha256"] = intake_sha256
     hashes["hash_verified"] = hash_ok
 
-    analysis_results = dict(case.get("analysis_results", {}))
+    analysis_results = dict(case_snapshot.get("analysis_results", {}))
     analysis_results.setdefault("case_id", case_id)
-    analysis_results.setdefault("case_name", str(case.get("case_name", "")))
+    analysis_results.setdefault("case_name", str(case_snapshot.get("case_name", "")))
     analysis_results.setdefault("per_artifact", [])
     analysis_results.setdefault("summary", "")
 
-    investigation_context = str(case.get("investigation_context", ""))
+    case_dir = case_snapshot["case_dir"]
+    investigation_context = str(case_snapshot.get("investigation_context", ""))
     if not investigation_context:
-        prompt_path = Path(case["case_dir"]) / "prompt.txt"
+        prompt_path = Path(case_dir) / "prompt.txt"
         if prompt_path.exists():
             investigation_context = prompt_path.read_text(encoding="utf-8")
 
     report_generator = ReportGenerator(cases_root=CASES_ROOT)
     report_path = report_generator.generate(
         analysis_results=analysis_results,
-        image_metadata=dict(case.get("image_metadata", {})),
+        image_metadata=dict(case_snapshot.get("image_metadata", {})),
         evidence_hashes=hashes,
         investigation_context=investigation_context,
-        audit_log_entries=_read_audit_entries(Path(case["case_dir"])),
+        audit_log_entries=_read_audit_entries(Path(case_dir)),
     )
-    case["audit"].log(
+    audit_logger.log(
         "report_generated",
         {"report_filename": report_path.name, "hash_verified": hash_ok},
     )
@@ -3258,11 +3301,14 @@ def download_csv_bundle(case_id: str) -> Response | tuple[Response, int]:
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
 
-    csv_paths = _collect_case_csv_paths(case)
+    with STATE_LOCK:
+        case_snapshot = dict(case)
+
+    csv_paths = _collect_case_csv_paths(case_snapshot)
     if not csv_paths:
         return _error("No parsed CSV files available for this case.", 404)
 
-    reports_dir = Path(case["case_dir"]) / "reports"
+    reports_dir = Path(case_snapshot["case_dir"]) / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     zip_path = reports_dir / f"parsed_csvs_{timestamp}.zip"
