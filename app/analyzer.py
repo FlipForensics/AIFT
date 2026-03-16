@@ -1,4 +1,64 @@
-"""AI analysis orchestration module."""
+"""AI analysis orchestration module for forensic triage.
+
+This module implements the core AI analysis pipeline for AIFT (AI Forensic
+Triage).  It prepares artifact CSV data into bounded, token-budgeted prompts
+suitable for large language model analysis.  The pipeline handles:
+
+- **Token budgeting**: Estimates token counts and selects prompt templates
+  (full or small-context) based on the configured AI context window size.
+- **Date filtering**: Extracts date references from investigation context
+  (ISO, DMY, textual) and filters artifact rows to a relevant window
+  (configurable buffer, default +/- 7 days).
+- **Column projection**: Optionally selects a subset of CSV columns per
+  artifact type using a YAML configuration file, reducing noise for AI.
+- **Deduplication**: Removes rows that differ only in timestamp or
+  auto-incremented record ID columns, annotating representatives with
+  dedup counts so the AI retains awareness of repeated events.
+- **Anomaly pre-filtering and statistics**: Computes per-column frequency
+  statistics (top-20 values) and time ranges to provide AI with context.
+- **Chunked analysis**: When the prepared prompt exceeds the context
+  window, the CSV data is split into row-boundary-aligned chunks.  Each
+  chunk retains the CSV header and is analyzed independently.  Findings
+  are merged hierarchically via additional AI calls until a single
+  consolidated analysis remains.
+- **Citation validation**: Post-analysis spot-checking of AI-cited
+  timestamps and row references against the source CSV to flag potential
+  hallucinations.
+- **IOC extraction**: Regex-based extraction of URLs, IPv4 addresses,
+  domains, hashes, emails, file paths, filenames, and known malicious
+  tool keywords from investigation context for IOC-focused analysis.
+- **Prompt templating**: Supports file-based prompt templates (Markdown)
+  with ``{{placeholder}}`` substitution, falling back to built-in defaults.
+- **Audit logging**: Every analysis action (start, complete, fail, chunk,
+  merge, projection, deduplication, citation validation) is recorded to
+  the case audit trail.
+
+Module-Level Constants:
+    TOKEN_CHAR_RATIO (int): Approximate characters per token for budget
+        estimation (default 4).
+    DATE_BUFFER_DAYS (int): Default number of days to add/subtract from
+        context-extracted dates when filtering artifact rows.
+    AI_MAX_TOKENS (int): Default AI context window size in tokens.
+    DEFAULT_SHORTENED_PROMPT_CUTOFF_TOKENS (int): Token threshold below
+        which the shortened (no-statistics) prompt template is used.
+    AI_RETRY_ATTEMPTS (int): Maximum number of retry attempts for
+        transient AI provider failures.
+    AI_RETRY_BASE_DELAY (float): Base delay in seconds for exponential
+        backoff between retries.
+    MAX_MERGE_ROUNDS (int): Maximum hierarchical merge iterations before
+        falling back to concatenation.
+    ARTIFACT_DEDUPLICATION_ENABLED (bool): Default toggle for artifact
+        row deduplication.
+    DEDUPLICATED_PARSED_DIRNAME (str): Directory name for writing
+        deduplicated/projected CSV files.
+    DEDUP_COMMENT_COLUMN (str): Column name appended to deduplicated CSVs
+        containing deduplication annotations.
+    CITATION_SPOT_CHECK_LIMIT (int): Maximum number of AI-cited values
+        to validate against source CSV per artifact.
+    PROJECT_ROOT (Path): Absolute path to the project root directory.
+    DEFAULT_ARTIFACT_AI_COLUMNS_CONFIG_PATH (Path): Default path to the
+        artifact AI column projection YAML configuration.
+"""
 
 from __future__ import annotations
 
@@ -248,20 +308,121 @@ _CSV_TRAILING_FENCE_RE = re.compile(r"\n```\s*$")
 
 
 class _UnavailableProvider:
-    """Fallback provider used when provider initialization fails."""
+    """Fallback AI provider used when the configured provider fails to initialize.
+
+    This sentinel object implements the same interface as a real AI provider
+    but raises ``AIProviderError`` on every ``analyze`` call, ensuring that
+    the analyzer reports a clear error instead of crashing with an
+    ``AttributeError``.
+
+    Attributes:
+        _error_message: Human-readable description of why the real provider
+            could not be created.
+    """
 
     def __init__(self, error_message: str) -> None:
+        """Initialize the unavailable provider with an error message.
+
+        Args:
+            error_message: Description of the initialization failure to
+                surface when ``analyze`` is called.
+        """
         self._error_message = error_message or "AI provider is unavailable."
 
     def analyze(self, system_prompt: str, user_prompt: str, max_tokens: int = AI_MAX_TOKENS) -> str:
+        """Always raises ``AIProviderError`` with the stored error message.
+
+        Args:
+            system_prompt: The system prompt (unused).
+            user_prompt: The user prompt (unused).
+            max_tokens: Maximum response tokens (unused).
+
+        Raises:
+            AIProviderError: Always raised with the initialization error.
+        """
         raise AIProviderError(self._error_message)
 
     def get_model_info(self) -> dict[str, str]:
+        """Return placeholder model info indicating unavailability.
+
+        Returns:
+            A dict with ``provider`` and ``model`` both set to
+            ``"unavailable"``.
+        """
         return {"provider": "unavailable", "model": "unavailable"}
 
 
 class ForensicAnalyzer:
-    """Prepare artifact CSV data into bounded prompts for AI analysis."""
+    """Orchestrates AI-powered forensic analysis of parsed artifact CSV data.
+
+    This class is the central analysis engine for AIFT.  It reads parsed
+    artifact CSV files, applies date filtering, column projection, and
+    deduplication, then builds token-budgeted prompts and sends them to
+    a configured AI provider.  For large datasets that exceed the model
+    context window, it automatically splits data into chunks, analyzes
+    each independently, and hierarchically merges the findings.
+
+    After analysis, citations (timestamps, row references) are spot-checked
+    against the source CSV to detect potential hallucinations.
+
+    Typical usage::
+
+        analyzer = ForensicAnalyzer(
+            case_dir="cases/abc123",
+            config=loaded_config,
+            audit_logger=audit_logger,
+            artifact_csv_paths={"evtx": "cases/abc123/parsed/evtx.csv"},
+        )
+        results = analyzer.run_full_analysis(
+            artifact_keys=["evtx", "amcache"],
+            investigation_context="Investigate lateral movement on 2025-01-15",
+            metadata={"hostname": "WORKSTATION01"},
+        )
+
+    Attributes:
+        case_dir: Path to the case directory, or ``None`` if operating
+            without a case directory.
+        logger: Module-level logger instance.
+        config: Merged configuration dictionary (from ``config.yaml``).
+        audit_logger: Optional audit logger with a ``log(action, details)``
+            method for forensic audit trail entries.
+        artifact_csv_paths: Mapping of artifact keys to their parsed CSV
+            file paths.
+        prompts_dir: Directory containing prompt template files.
+        ai_max_tokens: Configured AI context window size in tokens.
+        ai_response_max_tokens: Token budget reserved for the AI response
+            (20% of ``ai_max_tokens``).
+        shortened_prompt_cutoff_tokens: Token threshold below which the
+            small-context (no-statistics) prompt template is used.
+        chunk_csv_budget: Character budget for CSV data per chunk in
+            chunked analysis mode.
+        date_buffer_days: Number of days to pad around context-extracted
+            dates for filtering.
+        citation_spot_check_limit: Maximum citations to validate per
+            artifact.
+        max_merge_rounds: Maximum hierarchical merge iterations.
+        artifact_deduplication_enabled: Whether to deduplicate rows before
+            analysis.
+        artifact_ai_columns_config_path: Path to the column projection
+            YAML config.
+        artifact_ai_column_projections: Loaded per-artifact column
+            projection mappings.
+        system_prompt: The system prompt sent to the AI provider.
+        artifact_prompt_template: Full prompt template for artifact
+            analysis.
+        artifact_prompt_template_small_context: Shortened prompt template
+            for small context windows.
+        artifact_instruction_prompts: Per-artifact analysis instruction
+            overrides loaded from ``prompts/artifact_instructions/``.
+        summary_prompt_template: Prompt template for the cross-artifact
+            summary.
+        chunk_merge_prompt_template: Prompt template for merging chunk
+            findings.
+        ai_provider: The configured AI provider instance (or
+            ``_UnavailableProvider`` on failure).
+        model_info: Dictionary with ``provider`` and ``model`` keys
+            describing the active AI backend.
+    """
 
     def __init__(
         self,
@@ -272,6 +433,28 @@ class ForensicAnalyzer:
         prompts_dir: str | Path | None = None,
         random_seed: int | None = None,
     ) -> None:
+        """Initialize the forensic analyzer with case context and configuration.
+
+        Supports a convenience shorthand where ``case_dir`` can be passed as
+        a mapping of artifact CSV paths when no other arguments are provided.
+
+        Args:
+            case_dir: Path to the case directory, or a mapping of artifact
+                keys to CSV paths (convenience shorthand when ``config``,
+                ``audit_logger``, and ``artifact_csv_paths`` are all None).
+            config: Application configuration dictionary, typically loaded
+                from ``config.yaml``.  The ``analysis`` sub-key controls
+                token budgets, date buffer, and other tuning parameters.
+            audit_logger: Optional object with a ``log(action, details)``
+                method for recording forensic audit trail entries.
+            artifact_csv_paths: Explicit mapping of artifact keys to their
+                parsed CSV file paths.  Supplements automatic discovery
+                from ``case_dir/parsed/``.
+            prompts_dir: Directory containing prompt template Markdown
+                files.  Defaults to ``<project_root>/prompts/``.
+            random_seed: Optional seed for the internal random number
+                generator (used in sample building for reproducibility).
+        """
         if (
             isinstance(case_dir, Mapping)
             and config is None
@@ -321,6 +504,13 @@ class ForensicAnalyzer:
         self._explicit_analysis_date_range_label: tuple[str, str] | None = None
 
     def _load_analysis_settings(self) -> None:
+        """Load and validate analysis tuning parameters from the config dict.
+
+        Reads values from ``self.config["analysis"]`` with sensible defaults
+        and bounds checking.  Sets instance attributes for token budgets,
+        date buffer, citation limits, merge rounds, deduplication toggle,
+        and column projection config path.
+        """
         analysis_config = self.config.get("analysis")
         if not isinstance(analysis_config, Mapping):
             analysis_config = {}
@@ -386,6 +576,18 @@ class ForensicAnalyzer:
         minimum: int = 1,
         maximum: int | None = None,
     ) -> int:
+        """Read an integer setting from the analysis config with bounds clamping.
+
+        Args:
+            analysis_config: The ``analysis`` sub-dictionary of the config.
+            key: Configuration key name.
+            default: Value returned when the key is missing or unparseable.
+            minimum: Lower bound (inclusive); values below are clamped.
+            maximum: Optional upper bound (inclusive); values above are clamped.
+
+        Returns:
+            The parsed and clamped integer value.
+        """
         raw_value = analysis_config.get(key, default)
         try:
             parsed_value = int(raw_value)
@@ -403,6 +605,20 @@ class ForensicAnalyzer:
         key: str,
         default: bool,
     ) -> bool:
+        """Read a boolean setting from the analysis config.
+
+        Accepts actual booleans, truthy/falsy strings (``"true"``,
+        ``"false"``, ``"yes"``, ``"no"``, ``"1"``, ``"0"``, etc.),
+        and numeric values.
+
+        Args:
+            analysis_config: The ``analysis`` sub-dictionary of the config.
+            key: Configuration key name.
+            default: Value returned when the key is missing or ambiguous.
+
+        Returns:
+            The parsed boolean value.
+        """
         raw_value = analysis_config.get(key, default)
         if isinstance(raw_value, bool):
             return raw_value
@@ -422,6 +638,16 @@ class ForensicAnalyzer:
         key: str,
         default: str,
     ) -> str:
+        """Read a file-path setting from the analysis config as a string.
+
+        Args:
+            analysis_config: The ``analysis`` sub-dictionary of the config.
+            key: Configuration key name.
+            default: Value returned when the key is missing or empty.
+
+        Returns:
+            The cleaned path string, or *default* if the value is empty.
+        """
         raw_value = analysis_config.get(key, default)
         if isinstance(raw_value, (str, Path)):
             cleaned = str(raw_value).strip()
@@ -430,6 +656,15 @@ class ForensicAnalyzer:
         return default
 
     def _resolve_artifact_ai_columns_config_path(self) -> Path:
+        """Resolve the artifact AI columns config path to an absolute Path.
+
+        If the configured path is relative, searches the case directory
+        first, then the project root.  Returns the first candidate that
+        exists on disk, or the last candidate if none exist.
+
+        Returns:
+            Resolved absolute ``Path`` to the YAML config file.
+        """
         configured = Path(self.artifact_ai_columns_config_path).expanduser()
         if configured.is_absolute():
             return configured
@@ -445,6 +680,17 @@ class ForensicAnalyzer:
         return candidates[-1]
 
     def _load_artifact_ai_column_projections(self) -> dict[str, tuple[str, ...]]:
+        """Load per-artifact column projection configuration from YAML.
+
+        The YAML file maps normalized artifact keys to lists of column
+        names that should be retained when building AI prompts.  This
+        reduces prompt size by excluding low-value columns.
+
+        Returns:
+            A dict mapping normalized artifact keys to tuples of column
+            names.  Returns an empty dict if the config file is missing,
+            malformed, or unreadable.
+        """
         config_path = self._resolve_artifact_ai_columns_config_path()
         try:
             with config_path.open("r", encoding="utf-8") as handle:
@@ -489,6 +735,17 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _coerce_projection_columns(value: Any) -> list[str]:
+        """Coerce a raw YAML value into a deduplicated list of column names.
+
+        Accepts either a comma-separated string or a list of strings.
+
+        Args:
+            value: Raw value from the YAML config (string, list, or other).
+
+        Returns:
+            A deduplicated list of non-empty column name strings, preserving
+            the original order.  Returns an empty list for unsupported types.
+        """
         if isinstance(value, str):
             candidates = [part.strip() for part in value.split(",")]
         elif isinstance(value, list):
@@ -503,7 +760,15 @@ class ForensicAnalyzer:
         return deduplicated
 
     def _load_prompt_template(self, filename: str, default: str) -> str:
-        """Read a prompt template file from the prompts directory, falling back to default."""
+        """Read a prompt template file from the prompts directory.
+
+        Args:
+            filename: Name of the template file (e.g., ``"system_prompt.md"``).
+            default: Fallback template string used when the file cannot be read.
+
+        Returns:
+            The template text, either from the file or the default string.
+        """
         try:
             prompt_path = self.prompts_dir / filename
             return prompt_path.read_text(encoding="utf-8")
@@ -511,7 +776,16 @@ class ForensicAnalyzer:
             return default
 
     def _load_artifact_instruction_prompts(self) -> dict[str, str]:
-        """Load per-artifact analysis instruction prompts from prompts/artifact_instructions."""
+        """Load per-artifact analysis instruction prompts from the prompts directory.
+
+        Scans ``prompts/artifact_instructions/*.md`` for Markdown files whose
+        stem (lowercased) is used as the artifact key.  These override the
+        default analysis instructions embedded in artifact metadata.
+
+        Returns:
+            A dict mapping lowercased artifact keys to their instruction
+            prompt text.  Returns an empty dict if the directory is missing.
+        """
         instructions_dir = self.prompts_dir / "artifact_instructions"
         if not instructions_dir.exists() or not instructions_dir.is_dir():
             return {}
@@ -528,6 +802,17 @@ class ForensicAnalyzer:
         return prompts
 
     def _create_ai_provider(self) -> Any:
+        """Instantiate the configured AI provider, or a fallback on failure.
+
+        Uses the ``ai`` section of the config to create a provider via
+        ``create_provider()``.  If no config is available, defaults to a
+        local Ollama endpoint.  On any initialization error, returns an
+        ``_UnavailableProvider`` sentinel instead of raising.
+
+        Returns:
+            An AI provider instance with ``analyze()`` and
+            ``get_model_info()`` methods, or an ``_UnavailableProvider``.
+        """
         provider_config: Mapping[str, Any]
         if self.config:
             provider_config = self.config
@@ -549,6 +834,13 @@ class ForensicAnalyzer:
             return _UnavailableProvider(str(error))
 
     def _read_model_info(self) -> dict[str, str]:
+        """Read provider and model metadata from the AI provider.
+
+        Returns:
+            A dict with at least ``provider`` and ``model`` keys.
+            Returns ``{"provider": "unknown", "model": "unknown"}`` if
+            the provider raises or returns an invalid type.
+        """
         try:
             model_info = self.ai_provider.get_model_info()
         except Exception:
@@ -565,7 +857,21 @@ class ForensicAnalyzer:
     def _call_ai_with_retry(self, call: Callable[[], str]) -> str:
         """Call the AI provider with retry on transient failures.
 
-        Retries up to AI_RETRY_ATTEMPTS times with exponential backoff.
+        Retries up to ``AI_RETRY_ATTEMPTS`` times with exponential backoff.
+        Permanent ``AIProviderError`` exceptions are re-raised immediately
+        without retry.
+
+        Args:
+            call: A zero-argument callable that invokes the AI provider and
+                returns the response text.
+
+        Returns:
+            The AI provider's response string.
+
+        Raises:
+            AIProviderError: If the provider raises a permanent error.
+            Exception: The last transient error after all retries are
+                exhausted.
         """
         last_error: Exception | None = None
         for attempt in range(AI_RETRY_ATTEMPTS):
@@ -588,6 +894,16 @@ class ForensicAnalyzer:
         raise last_error  # type: ignore[misc]
 
     def _audit_log(self, action: str, details: dict[str, Any]) -> None:
+        """Write an entry to the forensic audit trail.
+
+        Silently no-ops if no audit logger is configured or if the logger
+        raises.  This ensures analysis never fails due to audit logging
+        issues.
+
+        Args:
+            action: The audit action name (e.g., ``"analysis_started"``).
+            details: Arbitrary key-value details for the audit entry.
+        """
         if self.audit_logger is None:
             return
 
@@ -606,7 +922,17 @@ class ForensicAnalyzer:
         system_prompt: str,
         user_prompt: str,
     ) -> None:
-        """Save a prompt to the case prompts directory for audit purposes."""
+        """Save a prompt to the case prompts directory for audit and debugging.
+
+        Writes a Markdown file containing both the system and user prompts
+        to ``<case_dir>/prompts/<filename>``.  Silently no-ops if no case
+        directory is configured or the write fails.
+
+        Args:
+            filename: Output filename (e.g., ``"artifact_evtx.md"``).
+            system_prompt: The system prompt text.
+            user_prompt: The user prompt text.
+        """
         if self.case_dir is None:
             return
 
@@ -626,7 +952,17 @@ class ForensicAnalyzer:
         """Split CSV text into chunks that each fit within *max_chars*.
 
         Every chunk retains the original header row so the AI can interpret
-        the data without extra context.  Splits on row boundaries only.
+        the data without extra context.  Splits on row boundaries only --
+        no row is ever split across chunks.
+
+        Args:
+            csv_text: Full CSV text including the header row.
+            max_chars: Maximum character count per chunk (including header).
+
+        Returns:
+            A list of CSV text chunks, each starting with the header row.
+            Returns ``[csv_text]`` if the text already fits or cannot be
+            split (e.g., header alone exceeds the budget).
         """
         if max_chars <= 0 or len(csv_text) <= max_chars:
             return [csv_text]
@@ -667,11 +1003,23 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _split_csv_and_suffix(raw_csv_tail: str) -> tuple[str, str]:
-        """Separate CSV rows from trailing content (code fences, context reminders).
+        """Separate CSV rows from trailing content in a rendered prompt.
 
-        Returns ``(csv_data, suffix)`` where *suffix* contains any trailing
-        code fence and/or Final Context Reminder text that should be appended
-        to every chunk prompt.
+        File-based templates may append a Markdown code fence and/or a
+        Final Context Reminder section after the CSV data placeholder.
+        This method extracts the actual CSV rows from those trailing
+        elements so that only the data is chunked, while the suffix is
+        appended to every chunk prompt.
+
+        Args:
+            raw_csv_tail: The portion of the rendered prompt that follows
+                the ``## Full Data (CSV)`` heading (including the CSV
+                rows, optional code fence, and optional context reminder).
+
+        Returns:
+            A ``(csv_data, suffix)`` tuple where *csv_data* is the
+            stripped CSV text and *suffix* contains any trailing code
+            fence and/or Final Context Reminder text.
         """
         text = raw_csv_tail
 
@@ -713,8 +1061,29 @@ class ForensicAnalyzer:
     ) -> str:
         """Analyze an artifact in multiple chunks when data exceeds the context budget.
 
-        Splits the CSV portion of the prompt into chunks, analyzes each
-        independently, then merges the per-chunk findings with a final AI call.
+        Splits the CSV portion of the prompt into row-boundary-aligned
+        chunks, analyzes each independently via the AI provider, then
+        merges the per-chunk findings hierarchically with additional AI
+        calls until a single consolidated analysis remains.
+
+        Falls back to a single AI call if the CSV data section cannot be
+        located in the prompt or if only one chunk is needed after splitting.
+
+        Args:
+            artifact_prompt: The fully rendered artifact analysis prompt
+                (including instructions, statistics, and CSV data).
+            artifact_key: Unique identifier for the artifact being analyzed.
+            artifact_name: Human-readable artifact name for progress
+                reporting and audit logging.
+            investigation_context: The user's investigation context text,
+                passed through to the merge prompt.
+            model: AI model identifier for progress reporting.
+            progress_callback: Optional callback for streaming progress
+                updates to the frontend.
+
+        Returns:
+            The merged analysis text from all chunks, or a single-pass
+            analysis if chunking was not required.
         """
         # Split the prompt into the instruction portion and the CSV data.
         # Handles both hardcoded ("## Full Data (CSV)") and file-based
@@ -826,7 +1195,13 @@ class ForensicAnalyzer:
         return merged_text
 
     def _merge_findings_budget(self) -> int:
-        """Character budget available for per-chunk findings in a merge prompt."""
+        """Calculate the character budget available for per-chunk findings in a merge prompt.
+
+        Returns:
+            Maximum number of characters that can be allocated to the
+            ``per_chunk_findings`` section of a merge prompt, after
+            reserving space for the template overhead and system prompt.
+        """
         overhead = len(self.chunk_merge_prompt_template) + len(self.system_prompt) + 500
         return max(2000, self.chunk_csv_budget - overhead)
 
@@ -838,7 +1213,19 @@ class ForensicAnalyzer:
         artifact_name: str,
         investigation_context: str,
     ) -> str:
-        """Fill the chunk-merge template with the given findings."""
+        """Fill the chunk-merge template with the given findings.
+
+        Args:
+            findings_text: Combined text of per-chunk findings to merge.
+            batch_count: Number of chunks/batches that produced the findings.
+            artifact_key: Unique identifier for the artifact.
+            artifact_name: Human-readable artifact name.
+            investigation_context: The user's investigation context text.
+
+        Returns:
+            The fully rendered merge prompt string with all placeholders
+            replaced.
+        """
         prompt = self.chunk_merge_prompt_template
         for placeholder, value in {
             "chunk_count": str(batch_count),
@@ -863,7 +1250,23 @@ class ForensicAnalyzer:
 
         Groups findings into batches that fit the context window, merges
         each batch via an AI call, then repeats on the merged results.
-        This preserves all information — nothing is truncated.
+        This preserves all information -- nothing is truncated during
+        normal operation.  If the maximum merge round limit is reached,
+        falls back to proportional truncation and a final merge call.
+
+        Args:
+            chunk_findings: List of per-chunk finding texts to merge.
+            artifact_key: Unique identifier for the artifact.
+            artifact_name: Human-readable artifact name for progress
+                reporting.
+            investigation_context: The user's investigation context text.
+            model: AI model identifier for progress reporting.
+            progress_callback: Optional callback for streaming progress
+                updates to the frontend.
+
+        Returns:
+            A single merged analysis text.  Returns an empty string if
+            *chunk_findings* is empty.
         """
         findings_budget = self._merge_findings_budget()
         current_findings = list(chunk_findings)
@@ -1028,7 +1431,38 @@ class ForensicAnalyzer:
         investigation_context: str,
         progress_callback: Any | None = None,
     ) -> dict[str, Any]:
-        """Analyze one artifact and return AI findings."""
+        """Analyze a single artifact's CSV data and return AI findings.
+
+        This is the primary per-artifact entry point.  It resolves the CSV
+        path, prepares a token-budgeted prompt (with date filtering, column
+        projection, deduplication, and statistics), sends it to the AI
+        provider, and validates the resulting citations.  If the prompt
+        exceeds the context window, chunked analysis is used automatically.
+
+        The method supports streaming progress via *progress_callback* when
+        the AI provider implements ``analyze_with_progress()``.
+
+        Args:
+            artifact_key: Unique identifier for the artifact (e.g.,
+                ``"evtx"``, ``"amcache"``).
+            investigation_context: Free-text investigation context provided
+                by the user, used for date extraction, IOC targeting, and
+                prompt enrichment.
+            progress_callback: Optional callable for streaming progress
+                updates to the frontend.  Signature:
+                ``(artifact_key, status, payload)`` or ``(event_dict)``.
+
+        Returns:
+            A dict containing:
+
+            - ``artifact_key``: The artifact key.
+            - ``artifact_name``: Human-readable artifact name.
+            - ``analysis``: The AI's analysis text, or an error message
+              prefixed with ``"Analysis failed: "``.
+            - ``model``: The AI model identifier used.
+            - ``citation_warnings`` (optional): List of warning strings
+              for citations that could not be verified.
+        """
         artifact_metadata = self._resolve_artifact_metadata(artifact_key)
         artifact_name = artifact_metadata.get("name", artifact_key)
         model = self.model_info.get("model", "unknown")
@@ -1227,7 +1661,25 @@ class ForensicAnalyzer:
         investigation_context: str,
         metadata: Mapping[str, Any] | None,
     ) -> str:
-        """Generate the cross-artifact summary."""
+        """Generate a cross-artifact summary by correlating per-artifact findings.
+
+        Collates the analysis text from each artifact result, fills the
+        summary prompt template with host metadata and investigation
+        context, and sends it to the AI provider for correlation and
+        prioritization.
+
+        Args:
+            per_artifact_results: List of per-artifact result dicts as
+                returned by ``analyze_artifact()``.  Each must contain
+                ``artifact_key``, ``artifact_name``, and ``analysis``.
+            investigation_context: The user's investigation context text.
+            metadata: Optional host metadata mapping with keys such as
+                ``hostname``, ``os_version``, and ``domain``.
+
+        Returns:
+            The AI-generated cross-artifact summary text, or an error
+            message prefixed with ``"Analysis failed: "`` on failure.
+        """
         metadata_map = metadata if isinstance(metadata, Mapping) else {}
         findings_blocks: list[str] = []
         for result in per_artifact_results:
@@ -1318,7 +1770,31 @@ class ForensicAnalyzer:
         metadata: Mapping[str, Any] | None,
         progress_callback: Any | None = None,
     ) -> dict[str, Any]:
-        """Run per-artifact analysis sequentially and then generate summary."""
+        """Run the complete analysis pipeline: per-artifact then summary.
+
+        Iterates over the given artifact keys, analyzes each sequentially
+        via ``analyze_artifact()``, emits per-artifact completion events,
+        and finishes with a cross-artifact summary via ``generate_summary()``.
+
+        Before analysis begins, artifact CSV paths and an explicit date
+        range (if present) are extracted from *metadata*.
+
+        Args:
+            artifact_keys: Iterable of artifact key strings to analyze.
+            investigation_context: The user's investigation context text.
+            metadata: Optional metadata mapping that may contain
+                ``artifact_csv_paths``, ``analysis_date_range``, and
+                host information (``hostname``, ``os_version``, ``domain``).
+            progress_callback: Optional callable for streaming progress
+                updates to the frontend.
+
+        Returns:
+            A dict containing:
+
+            - ``per_artifact``: List of per-artifact result dicts.
+            - ``summary``: The cross-artifact summary text.
+            - ``model_info``: Dict with ``provider`` and ``model`` keys.
+        """
         self._register_artifact_paths_from_metadata(metadata)
         self._configure_explicit_analysis_date_range(metadata)
         per_artifact_results: list[dict[str, Any]] = []
@@ -1355,6 +1831,20 @@ class ForensicAnalyzer:
         status: str,
         payload: dict[str, Any],
     ) -> None:
+        """Emit a progress event to the frontend via the callback.
+
+        Attempts to call the callback with ``(artifact_key, status, payload)``
+        first.  If that raises ``TypeError`` (wrong arity), falls back to
+        a single-dict call.  All exceptions are silently swallowed to
+        prevent progress reporting from breaking analysis.
+
+        Args:
+            progress_callback: The user-supplied progress callback.
+            artifact_key: Artifact identifier for the event.
+            status: Event status (e.g., ``"started"``, ``"thinking"``,
+                ``"complete"``).
+            payload: Event payload dict with artifact-specific details.
+        """
         try:
             progress_callback(artifact_key, status, payload)
             return
@@ -1377,8 +1867,22 @@ class ForensicAnalyzer:
     def _validate_citations(self, artifact_key: str, analysis_text: str) -> list[str]:
         """Spot-check timestamps and row references cited by the AI against source CSV.
 
-        Returns a list of human-readable warning strings for values that could
-        not be verified.  An empty list means all checked citations were found.
+        Extracts ISO timestamps and ``row <N>`` references from the AI's
+        analysis text, then verifies each against the source CSV data.
+        This helps detect potential hallucinations where the AI cites
+        records or timestamps that do not exist in the evidence.
+
+        Only checks up to ``self.citation_spot_check_limit`` values per
+        category.  Warnings are logged to the audit trail.
+
+        Args:
+            artifact_key: Artifact identifier used to resolve the CSV path.
+            analysis_text: The AI's analysis text to scan for citations.
+
+        Returns:
+            A list of human-readable warning strings for values that could
+            not be verified.  An empty list means all checked citations
+            were found (or the analysis failed / no citations were present).
         """
         if analysis_text.startswith("Analysis failed:"):
             return []
@@ -1445,7 +1949,20 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _timestamp_lookup_keys(value: str) -> set[str]:
-        """Build comparable lookup keys for a timestamp string."""
+        """Build comparable lookup keys for a timestamp string.
+
+        Generates multiple normalized representations of the input timestamp
+        (with/without timezone, with/without fractional seconds, space vs ``T``
+        separator) so that citation checks can match regardless of formatting
+        differences.
+
+        Args:
+            value: Raw timestamp string from the CSV data.
+
+        Returns:
+            A set of non-empty string keys suitable for membership testing.
+            Returns an empty set if *value* is blank.
+        """
         text = value.strip()
         if not text:
             return set()
@@ -1499,6 +2016,15 @@ class ForensicAnalyzer:
 
         Lookup keys are generated once from CSV data, so each citation check is
         a small constant-time membership test.
+
+        Args:
+            cited: Timestamp string cited by the AI in its analysis text.
+            csv_timestamp_lookup: Pre-built set of normalized timestamp keys
+                from the source CSV.
+
+        Returns:
+            ``True`` if any normalized form of *cited* is present in the
+            lookup set, ``False`` otherwise (including when the set is empty).
         """
         if not csv_timestamp_lookup:
             return False
@@ -1508,6 +2034,17 @@ class ForensicAnalyzer:
         )
 
     def _register_artifact_paths_from_metadata(self, metadata: Mapping[str, Any] | None) -> None:
+        """Extract and register artifact CSV paths from run metadata.
+
+        Inspects several well-known keys in *metadata* (``artifact_csv_paths``,
+        ``artifacts``, ``artifact_results``, ``parse_results``,
+        ``parsed_artifacts``) and registers any discovered CSV paths into
+        ``self.artifact_csv_paths``.
+
+        Args:
+            metadata: Optional metadata mapping provided by the caller.
+                No-ops if ``None`` or not a mapping.
+        """
         if not isinstance(metadata, Mapping):
             return
 
@@ -1529,6 +2066,16 @@ class ForensicAnalyzer:
                             self._register_artifact_path_entry(artifact_key=str(artifact_key), value=item)
 
     def _register_artifact_path_entry(self, artifact_key: Any, value: Any) -> None:
+        """Register a single artifact CSV path from a metadata entry.
+
+        Handles multiple value shapes: a mapping with ``csv_path`` or
+        ``csv_paths`` keys, or a bare string/Path.  No-ops if *artifact_key*
+        is empty or *value* does not contain a usable path.
+
+        Args:
+            artifact_key: Artifact identifier (stringified before use).
+            value: Metadata entry -- may be a mapping, string, or Path.
+        """
         if artifact_key in (None, ""):
             return
 
@@ -1546,6 +2093,18 @@ class ForensicAnalyzer:
             self.artifact_csv_paths[str(artifact_key)] = Path(str(value))
 
     def _configure_explicit_analysis_date_range(self, metadata: Mapping[str, Any] | None) -> None:
+        """Set explicit analysis date range from metadata if present.
+
+        Reads ``analysis_date_range.start_date`` and ``end_date`` from
+        *metadata* and, if both are valid ISO dates with start <= end,
+        stores the parsed range on the instance for use during artifact
+        date filtering.
+
+        Args:
+            metadata: Optional metadata mapping that may contain an
+                ``analysis_date_range`` sub-mapping with ``start_date``
+                and ``end_date`` strings (``YYYY-MM-DD``).
+        """
         self._explicit_analysis_date_range = None
         self._explicit_analysis_date_range_label = None
         if not isinstance(metadata, Mapping):
@@ -1579,11 +2138,37 @@ class ForensicAnalyzer:
         )
 
     def _artifact_uses_explicit_date_range(self, artifact_key: str) -> bool:
+        """Check whether an artifact should use the explicit date range filter.
+
+        Currently only MFT and EVTX artifacts use the explicit date range
+        selected in Step 2 of the wizard, because they can produce very
+        large datasets.
+
+        Args:
+            artifact_key: Artifact identifier to check.
+
+        Returns:
+            ``True`` if the artifact should be filtered using the explicit
+            date range; ``False`` otherwise.
+        """
         normalized_key = self._normalize_artifact_key(artifact_key)
         return normalized_key in {"mft", "evtx"}
 
     def _extract_dates_from_context(self, text: str) -> list[datetime]:
-        """Extract date references from free-text context."""
+        """Extract date references from free-text investigation context.
+
+        Recognizes ISO dates (``YYYY-MM-DD``), DMY with dashes or slashes,
+        textual dates (``January 15, 2025``), and textual ranges
+        (``January 10-15, 2025``).  Duplicate dates are suppressed.
+
+        Args:
+            text: Free-text investigation context string.
+
+        Returns:
+            A sorted list of unique ``datetime`` objects (midnight) for
+            each date found.  Returns an empty list if *text* is empty
+            or contains no recognizable dates.
+        """
         if not text:
             return []
 
@@ -1670,7 +2255,15 @@ class ForensicAnalyzer:
     ) -> tuple[str, datetime | None, datetime | None]:
         """Compute record count, time range, and top-20 frequent values per key column.
 
-        Returns a tuple of (statistics_text, min_time, max_time).
+        Args:
+            rows: List of normalized CSV row dicts to analyze.
+            columns: Column names to compute frequency statistics for.
+
+        Returns:
+            A 3-tuple of ``(statistics_text, min_time, max_time)`` where
+            *statistics_text* is a human-readable multi-line summary and
+            *min_time*/*max_time* are the earliest/latest timestamps found
+            (or ``None`` if no parseable timestamps exist).
         """
         total_records = len(rows)
         min_time, max_time = self._time_range_for_rows(rows)
@@ -1704,9 +2297,30 @@ class ForensicAnalyzer:
         return "\n".join(lines), min_time, max_time
 
     def _should_use_shortened_prompt(self) -> bool:
+        """Determine whether to use the small-context prompt template.
+
+        Returns:
+            ``True`` if the configured AI context window is smaller than
+            the shortened-prompt cutoff threshold, indicating the statistics
+            section should be omitted to save tokens.
+        """
         return self.ai_max_tokens < self.shortened_prompt_cutoff_tokens
 
     def _extract_ioc_targets(self, investigation_context: str) -> dict[str, list[str]]:
+        """Extract Indicators of Compromise from investigation context text.
+
+        Uses regex patterns to identify URLs, IPv4 addresses, domains,
+        hashes (MD5/SHA1/SHA256), email addresses, Windows file paths,
+        executable filenames, and known malicious tool keywords.
+
+        Args:
+            investigation_context: Free-text investigation context string.
+
+        Returns:
+            A dict mapping IOC category names (e.g., ``"URLs"``,
+            ``"IPv4"``, ``"Domains"``) to deduplicated lists of extracted
+            values.  Returns an empty dict if no IOCs are found.
+        """
         text = self._stringify_value(investigation_context)
         if not text:
             return {}
@@ -1759,6 +2373,15 @@ class ForensicAnalyzer:
         return iocs
 
     def _format_ioc_targets(self, investigation_context: str) -> str:
+        """Format extracted IOC targets as a human-readable bullet list.
+
+        Args:
+            investigation_context: Free-text investigation context string.
+
+        Returns:
+            A multi-line string with one bullet per IOC category (up to
+            20 values each), or a message indicating no IOCs were found.
+        """
         ioc_map = self._extract_ioc_targets(investigation_context)
         if not ioc_map:
             return "No explicit IOC patterns were extracted from the investigation context."
@@ -1771,6 +2394,19 @@ class ForensicAnalyzer:
         return "\n".join(lines)
 
     def _build_priority_directives(self, investigation_context: str) -> str:
+        """Build numbered priority directives for the AI analysis prompt.
+
+        Generates a set of directives that instruct the AI to prioritize
+        the user's investigation context, check IOCs, and run standard
+        DFIR checks.
+
+        Args:
+            investigation_context: Free-text investigation context string
+                used to determine whether IOC-specific directives apply.
+
+        Returns:
+            A multi-line numbered list of priority directives.
+        """
         ioc_map = self._extract_ioc_targets(investigation_context)
         has_iocs = bool(ioc_map)
         lines = [
@@ -1792,7 +2428,21 @@ class ForensicAnalyzer:
         artifact_name: str,
         investigation_context: str,
     ) -> str:
-        """Append a short end-of-prompt reminder that survives left-side truncation."""
+        """Build a short end-of-prompt reminder that survives left-side truncation.
+
+        Places critical context (artifact identity, investigation focus, IOC
+        targets, DFIR checks) at the very end of the prompt so that models
+        with left-side attention decay still see the most important instructions.
+
+        Args:
+            artifact_key: Unique identifier for the artifact.
+            artifact_name: Human-readable artifact name.
+            investigation_context: The user's investigation context text.
+
+        Returns:
+            A multi-line reminder section string starting with a Markdown
+            heading.
+        """
         context_text = self._stringify_value(investigation_context)
         if context_text:
             context_text = self._truncate_for_prompt(context_text, limit=1200)
@@ -1815,6 +2465,14 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _extract_url_host(url: str) -> str:
+        """Extract the lowercase hostname from a URL string.
+
+        Args:
+            url: A URL string (e.g., ``"https://example.com:8080/path"``).
+
+        Returns:
+            The lowercased hostname portion without scheme, port, or path.
+        """
         text = url.strip()
         if "://" in text:
             text = text.split("://", 1)[1]
@@ -1823,6 +2481,15 @@ class ForensicAnalyzer:
         return text.lower().strip()
 
     def _extract_tool_keywords(self, text: str) -> list[str]:
+        """Extract known malicious tool keyword matches from text.
+
+        Args:
+            text: Free-text string to scan for tool keywords.
+
+        Returns:
+            A deduplicated list of matched tool keyword strings, preserving
+            the order of first occurrence.
+        """
         lowered = text.lower()
         hits: list[str] = []
         for keyword in _KNOWN_MALICIOUS_TOOL_KEYWORDS:
@@ -1832,6 +2499,19 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _truncate_for_prompt(value: str, limit: int) -> str:
+        """Truncate a string to fit within a character limit for prompt inclusion.
+
+        Appends ``" ... [truncated]"`` when truncation occurs, unless the
+        limit is very small (20 or fewer characters).
+
+        Args:
+            value: The string to truncate.
+            limit: Maximum allowed character count.
+
+        Returns:
+            The original string if it fits, or a truncated version with
+            a trailing truncation marker.
+        """
         text = str(value or "").strip()
         if len(text) <= limit:
             return text
@@ -1841,6 +2521,17 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _unique_preserve_order(values: Iterable[str]) -> list[str]:
+        """Deduplicate strings while preserving first-occurrence order.
+
+        Values are stripped, surrounding quotes/brackets are removed, and
+        trailing punctuation is trimmed before deduplication (case-insensitive).
+
+        Args:
+            values: Iterable of raw string values to deduplicate.
+
+        Returns:
+            A list of cleaned, unique strings in their original order.
+        """
         unique: list[str] = []
         seen: set[str] = set()
         for raw_value in values:
@@ -1862,7 +2553,26 @@ class ForensicAnalyzer:
         investigation_context: str,
         csv_path: Path | None = None,
     ) -> str:
-        """Prepare one artifact CSV as a bounded, analysis-ready prompt."""
+        """Prepare one artifact CSV as a bounded, analysis-ready prompt.
+
+        Reads the artifact CSV, applies date filtering (from investigation
+        context or explicit range), column projection, deduplication, and
+        statistics computation.  Fills the appropriate prompt template with
+        all gathered data and appends a final context reminder.
+
+        Args:
+            artifact_key: Unique identifier for the artifact to prepare.
+            investigation_context: Free-text investigation context for date
+                extraction, IOC targeting, and prompt enrichment.
+            csv_path: Explicit path to the artifact CSV.  If ``None``, the
+                path is resolved via ``_resolve_artifact_csv_path()``.
+
+        Returns:
+            The fully rendered prompt string ready for AI consumption.
+
+        Raises:
+            FileNotFoundError: If the artifact CSV cannot be located.
+        """
         resolved_csv_path = csv_path if csv_path is not None else self._resolve_artifact_csv_path(artifact_key)
         include_statistics = not self._should_use_shortened_prompt()
         template = self.artifact_prompt_template if include_statistics else self.artifact_prompt_template_small_context
@@ -2060,6 +2770,17 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _build_datetime(year: str, month: str, day: str) -> datetime | None:
+        """Construct a datetime from string year, month, and day components.
+
+        Args:
+            year: Year string (e.g., ``"2025"``).
+            month: Month string (``"1"`` through ``"12"``).
+            day: Day string (``"1"`` through ``"31"``).
+
+        Returns:
+            A ``datetime`` at midnight for the given date, or ``None`` if
+            the components do not form a valid date.
+        """
         try:
             return datetime(int(year), int(month), int(day))
         except ValueError:
@@ -2067,6 +2788,18 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _normalize_artifact_key(artifact_key: str) -> str:
+        """Normalize an artifact key to its canonical short form.
+
+        Maps variations like ``"evtx_security"``, ``"amcache.applications"``
+        to their base keys (``"evtx"``, ``"amcache"``) for consistent
+        lookups in column projections, metadata, and instruction prompts.
+
+        Args:
+            artifact_key: Raw artifact key string.
+
+        Returns:
+            The lowercased, normalized artifact key.
+        """
         key = artifact_key.strip().lower()
         if key == "mft":
             return "mft"
@@ -2089,6 +2822,18 @@ class ForensicAnalyzer:
         return key
 
     def _resolve_artifact_metadata(self, artifact_key: str) -> dict[str, str]:
+        """Look up artifact metadata (name, description, hints) from the registry.
+
+        Tries the raw key first, then the normalized key.  Returns a
+        generic fallback dict if the artifact is not found in the registry.
+
+        Args:
+            artifact_key: Artifact identifier to look up.
+
+        Returns:
+            A dict with at least ``name``, ``description``, and
+            ``analysis_hint`` keys (all strings).
+        """
         if artifact_key in ARTIFACT_REGISTRY:
             metadata = ARTIFACT_REGISTRY[artifact_key]
             return {str(key): str(value) for key, value in metadata.items()}
@@ -2109,6 +2854,21 @@ class ForensicAnalyzer:
         artifact_key: str,
         artifact_metadata: Mapping[str, str],
     ) -> str:
+        """Resolve artifact-specific analysis instructions for the AI prompt.
+
+        Checks, in order: file-based instruction prompts (by raw and
+        normalized key), then metadata fields ``artifact_guidance``,
+        ``analysis_instructions``, and ``analysis_hint``.
+
+        Args:
+            artifact_key: Artifact identifier to look up instructions for.
+            artifact_metadata: Metadata dict for the artifact, used as
+                a fallback source for guidance text.
+
+        Returns:
+            The analysis instruction text, or a generic fallback message
+            if no specific instructions are available.
+        """
         normalized_key = self._normalize_artifact_key(artifact_key)
         for key in (artifact_key, normalized_key):
             prompt = self.artifact_instruction_prompts.get(key.strip().lower(), "").strip()
@@ -2130,6 +2890,21 @@ class ForensicAnalyzer:
         return "No specific analysis instructions are available for this artifact."
 
     def _resolve_artifact_csv_path(self, artifact_key: str) -> Path:
+        """Resolve the CSV file path for a given artifact key.
+
+        Searches in order: explicit mappings (raw then normalized key),
+        the key as a literal file path, and finally ``case_dir/parsed/``
+        with various filename patterns.
+
+        Args:
+            artifact_key: Artifact identifier to resolve.
+
+        Returns:
+            A ``Path`` to the artifact's CSV file.
+
+        Raises:
+            FileNotFoundError: If no CSV path can be found for the artifact.
+        """
         mapped = self.artifact_csv_paths.get(artifact_key)
         if mapped is not None:
             return mapped
@@ -2168,11 +2943,27 @@ class ForensicAnalyzer:
         )
 
     def _set_analysis_input_csv_path(self, artifact_key: str, csv_path: Path) -> None:
+        """Store the analysis-input CSV path for an artifact (raw and normalized keys).
+
+        Args:
+            artifact_key: Artifact identifier.
+            csv_path: Path to the CSV that was actually used for analysis
+                (may be deduplicated/projected).
+        """
         self._analysis_input_csv_paths[artifact_key] = csv_path
         normalized = self._normalize_artifact_key(artifact_key)
         self._analysis_input_csv_paths[normalized] = csv_path
 
     def _resolve_analysis_input_csv_path(self, artifact_key: str, fallback: Path) -> Path:
+        """Retrieve the analysis-input CSV path, falling back to a default.
+
+        Args:
+            artifact_key: Artifact identifier to look up.
+            fallback: Path returned if no analysis-input CSV was stored.
+
+        Returns:
+            The stored analysis-input CSV path, or *fallback*.
+        """
         mapped = self._analysis_input_csv_paths.get(artifact_key)
         if mapped is not None:
             return mapped
@@ -2183,6 +2974,17 @@ class ForensicAnalyzer:
         return fallback
 
     def _resolve_analysis_input_output_dir(self, source_csv_path: Path) -> Path:
+        """Determine the output directory for deduplicated/projected CSV files.
+
+        Uses ``<case_dir>/parsed_deduplicated/`` if a case directory is set.
+        Otherwise, places the directory alongside the source CSV's parent.
+
+        Args:
+            source_csv_path: Path to the original parsed CSV file.
+
+        Returns:
+            A ``Path`` to the output directory for analysis-input CSVs.
+        """
         if self.case_dir is not None:
             return self.case_dir / DEDUPLICATED_PARSED_DIRNAME
 
@@ -2197,6 +2999,23 @@ class ForensicAnalyzer:
         rows: list[dict[str, str]],
         columns: list[str],
     ) -> Path:
+        """Write deduplicated/projected rows to a new CSV file for audit.
+
+        Creates the output directory if needed and writes the CSV with the
+        same filename as the source.
+
+        Args:
+            source_csv_path: Path to the original parsed CSV (used for
+                deriving the output directory and filename).
+            rows: Row dicts to write.
+            columns: Column names for the CSV header.
+
+        Returns:
+            Path to the newly written analysis-input CSV file.
+
+        Raises:
+            OSError: If the directory creation or file write fails.
+        """
         output_dir = self._resolve_analysis_input_output_dir(source_csv_path=source_csv_path)
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / source_csv_path.name
@@ -2210,6 +3029,16 @@ class ForensicAnalyzer:
         return output_path
 
     def _build_artifact_csv_attachment(self, artifact_key: str, csv_path: Path) -> dict[str, str]:
+        """Build an attachment descriptor dict for an artifact CSV file.
+
+        Args:
+            artifact_key: Artifact identifier used to derive the filename.
+            csv_path: Path to the CSV file on disk.
+
+        Returns:
+            A dict with ``path``, ``name``, and ``mime_type`` keys suitable
+            for passing to AI provider attachment APIs.
+        """
         filename_stem = self._sanitize_filename(artifact_key)
         filename = f"{filename_stem}.csv" if not filename_stem.lower().endswith(".csv") else filename_stem
         return {
@@ -2220,10 +3049,36 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _sanitize_filename(value: str) -> str:
+        """Sanitize a string for use as a safe filename.
+
+        Replaces any characters that are not alphanumeric, dot, hyphen,
+        or underscore with underscores and strips leading/trailing
+        underscores.
+
+        Args:
+            value: Raw string to sanitize.
+
+        Returns:
+            A filesystem-safe filename string, or ``"artifact"`` if the
+            result would be empty.
+        """
         cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("_")
         return cleaned or "artifact"
 
     def _normalize_csv_row(self, row: dict[str | None, str | None | list[str]], columns: list[str]) -> dict[str, str]:
+        """Normalize a raw CSV DictReader row to a clean string-to-string dict.
+
+        Stringifies all values and moves any ``None``-keyed overflow columns
+        (from rows with more fields than headers) into an ``__extra__`` key.
+
+        Args:
+            row: Raw row dict from ``csv.DictReader`` (may contain ``None``
+                keys and non-string values).
+            columns: Expected column names in the CSV.
+
+        Returns:
+            A normalized dict mapping column names to stripped string values.
+        """
         normalized: dict[str, str] = {}
         for column in columns:
             normalized[column] = self._stringify_value(row.get(column))
@@ -2237,6 +3092,15 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _stringify_value(value: Any) -> str:
+        """Convert an arbitrary value to a stripped string.
+
+        Args:
+            value: Any value (string, ``None``, number, etc.).
+
+        Returns:
+            The stripped string representation, or an empty string for
+            ``None``.
+        """
         if value is None:
             return ""
         if isinstance(value, str):
@@ -2245,17 +3109,45 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _format_datetime(value: datetime | None) -> str:
+        """Format a datetime as an ISO string, or ``"N/A"`` for ``None``.
+
+        Args:
+            value: Datetime to format, or ``None``.
+
+        Returns:
+            ISO-formatted datetime string or ``"N/A"``.
+        """
         if value is None:
             return "N/A"
         return value.isoformat()
 
     def _counter_normalize(self, value: str) -> str:
+        """Normalize a cell value for frequency counting in statistics.
+
+        Cleans the value, truncates it, and returns an empty string for
+        low-signal values (e.g., ``"none"``, ``"null"``, ``"n/a"``).
+
+        Args:
+            value: Raw cell value string.
+
+        Returns:
+            The normalized value, or an empty string if it is low-signal.
+        """
         cleaned = self._normalize_table_cell(value=value, cell_limit=120)
         if cleaned.lower() in _LOW_SIGNAL_VALUES:
             return ""
         return cleaned
 
     def _time_range_for_rows(self, rows: Iterable[dict[str, str]]) -> tuple[datetime | None, datetime | None]:
+        """Compute the earliest and latest timestamps across all rows.
+
+        Args:
+            rows: Iterable of row dicts to scan for timestamp values.
+
+        Returns:
+            A ``(min_time, max_time)`` tuple.  Both are ``None`` if no
+            parseable timestamps are found.
+        """
         min_time: datetime | None = None
         max_time: datetime | None = None
         for row in rows:
@@ -2269,6 +3161,20 @@ class ForensicAnalyzer:
         return min_time, max_time
 
     def _extract_row_datetime(self, row: dict[str, str], columns: list[str] | None = None) -> datetime | None:
+        """Extract the first parseable timestamp from a CSV row.
+
+        Prioritizes columns whose names look like timestamps, then falls
+        back to scanning all values.
+
+        Args:
+            row: Normalized row dict.
+            columns: Optional explicit column list to constrain the search
+                for timestamp-like column names.
+
+        Returns:
+            The first successfully parsed ``datetime``, or ``None`` if no
+            timestamp can be extracted.
+        """
         candidate_columns: list[str] = []
         if columns:
             candidate_columns.extend(
@@ -2297,10 +3203,32 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _looks_like_timestamp_column(column_name: str) -> bool:
+        """Check whether a column name suggests it contains timestamp data.
+
+        Args:
+            column_name: CSV column header name.
+
+        Returns:
+            ``True`` if the lowercased name contains any of the known
+            timestamp hint substrings (e.g., ``"ts"``, ``"timestamp"``,
+            ``"date"``, ``"created"``).
+        """
         lowered = column_name.strip().lower()
         return any(hint in lowered for hint in _TIMESTAMP_COLUMN_HINTS)
 
     def _parse_datetime_value(self, value: str) -> datetime | None:
+        """Attempt to parse a string value into a naive UTC datetime.
+
+        Tries ISO format first, then a series of common date/time formats,
+        and finally epoch timestamps (seconds or milliseconds).
+
+        Args:
+            value: Raw string that may contain a date or timestamp.
+
+        Returns:
+            A naive ``datetime`` in UTC, or ``None`` if parsing fails for
+            all attempted formats.
+        """
         text = self._stringify_value(value)
         if not text:
             return None
@@ -2348,12 +3276,32 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _normalize_datetime(value: datetime) -> datetime:
+        """Convert a datetime to a naive UTC datetime.
+
+        If the datetime is already naive (no tzinfo), it is returned as-is.
+        Otherwise, it is converted to UTC and the tzinfo is stripped.
+
+        Args:
+            value: Datetime to normalize.
+
+        Returns:
+            A naive ``datetime`` representing the same instant in UTC.
+        """
         if value.tzinfo is None:
             return value
         return value.astimezone(timezone.utc).replace(tzinfo=None)
 
     @staticmethod
     def _parse_int(value: str) -> int | None:
+        """Extract and parse the first integer from a string.
+
+        Args:
+            value: String that may contain an integer.
+
+        Returns:
+            The parsed integer, or ``None`` if no integer pattern is found
+            or parsing fails.
+        """
         if not value:
             return None
         match = _INTEGER_RE.search(value)
@@ -2365,6 +3313,22 @@ class ForensicAnalyzer:
             return None
 
     def _select_ai_columns(self, artifact_key: str, available_columns: list[str]) -> tuple[list[str], bool]:
+        """Select the subset of CSV columns to include in the AI prompt.
+
+        Looks up the artifact's configured column projection and matches
+        it case-insensitively against the available columns.  Missing
+        configured columns are logged to the audit trail.
+
+        Args:
+            artifact_key: Artifact identifier for projection lookup.
+            available_columns: Column names present in the source CSV.
+
+        Returns:
+            A 2-tuple of ``(selected_columns, projection_applied)`` where
+            *selected_columns* is the list of column names to use and
+            *projection_applied* is ``True`` if a projection was applied
+            (i.e., not all columns were kept).
+        """
         normalized_key = self._normalize_artifact_key(artifact_key)
         configured_columns = self.artifact_ai_column_projections.get(normalized_key)
         if not configured_columns:
@@ -2410,6 +3374,19 @@ class ForensicAnalyzer:
         rows: list[dict[str, str]],
         columns: list[str],
     ) -> list[dict[str, str]]:
+        """Project rows to only the selected columns for analysis.
+
+        Preserves the ``_row_ref`` field (if present) alongside the
+        selected columns so that row references remain traceable.
+
+        Args:
+            rows: List of normalized row dicts.
+            columns: Column names to retain in the projection.
+
+        Returns:
+            A new list of row dicts containing only the specified columns
+            and ``_row_ref``.
+        """
         projected_rows: list[dict[str, str]] = []
         for row in rows:
             projected: dict[str, str] = {
@@ -2427,6 +3404,29 @@ class ForensicAnalyzer:
         rows: list[dict[str, str]],
         columns: list[str],
     ) -> tuple[list[dict[str, str]], list[str], int, int, list[str]]:
+        """Deduplicate rows that differ only in timestamp or record-ID columns.
+
+        Groups rows by their non-variant (base) columns.  When multiple
+        rows share the same base values, only the first is kept and it
+        is annotated with a dedup comment indicating how many duplicates
+        were removed.
+
+        Args:
+            rows: List of projected row dicts to deduplicate.
+            columns: Column names present in the rows.
+
+        Returns:
+            A 5-tuple of ``(kept_rows, output_columns, removed_count,
+            annotated_count, variant_columns)`` where:
+
+            - *kept_rows*: Deduplicated row dicts (with annotations).
+            - *output_columns*: Updated column list (may include the
+              dedup comment column).
+            - *removed_count*: Total number of rows removed.
+            - *annotated_count*: Number of representative rows annotated.
+            - *variant_columns*: Column names treated as variants
+              (timestamps and safe identifiers).
+        """
         if not rows or not columns:
             return list(rows), list(columns), 0, 0, []
 
@@ -2488,11 +3488,19 @@ class ForensicAnalyzer:
         rows: list[dict[str, str]],
         columns: list[str],
     ) -> str:
-        """Serialize rows to inline CSV text.
+        """Serialize rows to inline CSV text for prompt inclusion.
 
-        Always produces the complete CSV — truncation is never acceptable
+        Always produces the complete CSV -- truncation is never acceptable
         in DFIR.  When the data exceeds the model context window, the
         caller uses chunked analysis instead.
+
+        Args:
+            rows: List of row dicts to serialize.
+            columns: Column names for the CSV header (in order).
+
+        Returns:
+            A CSV-formatted string with a ``row_ref`` column prepended,
+            or a placeholder message if no columns or rows are available.
         """
         if not columns:
             return "No columns available."
@@ -2511,6 +3519,18 @@ class ForensicAnalyzer:
 
     @staticmethod
     def _normalize_table_cell(value: str, cell_limit: int) -> str:
+        """Normalize and truncate a cell value for table/statistics display.
+
+        Replaces newlines and pipe characters, strips whitespace, and
+        truncates with an ellipsis if the value exceeds *cell_limit*.
+
+        Args:
+            value: Raw cell value string.
+            cell_limit: Maximum character length for the output.
+
+        Returns:
+            The cleaned and possibly truncated string.
+        """
         text = value.replace("\r", " ").replace("\n", " ").replace("|", r"\|").strip()
         if len(text) <= cell_limit:
             return text
@@ -2519,5 +3539,16 @@ class ForensicAnalyzer:
         return f"{text[: cell_limit - 3]}..."
 
     def _estimate_tokens(self, text: str) -> int:
+        """Estimate the token count of a text string.
+
+        Uses a simple character-to-token ratio (``TOKEN_CHAR_RATIO``)
+        for fast approximation without requiring a tokenizer.
+
+        Args:
+            text: The text to estimate token count for.
+
+        Returns:
+            Estimated number of tokens (minimum 1).
+        """
         ratio = max(1, TOKEN_CHAR_RATIO)
         return max(1, len(text) // ratio)

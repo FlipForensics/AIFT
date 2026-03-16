@@ -1,4 +1,79 @@
-"""HTTP route definitions for AIFT."""
+"""HTTP route definitions for the AIFT (AI Forensic Triage) Flask application.
+
+This module implements all HTTP endpoints for the 5-step forensic analysis wizard:
+
+1. **Evidence** -- Upload or reference a disk image (E01, ZIP, 7z, tar, raw, VMDK, etc.).
+2. **Artifacts** -- Select which forensic artifacts to parse and whether each should
+   be included in AI analysis.
+3. **Parsing** -- Background parsing via Dissect with real-time SSE progress streaming.
+4. **Analysis** -- AI-powered forensic analysis of parsed CSV artifacts with SSE
+   progress streaming.
+5. **Results** -- Download the HTML report, CSV bundle, or engage in follow-up chat
+   with the AI about analysis findings.
+
+The module also provides endpoints for:
+
+* Application settings management (read, update, test AI provider connection).
+* Artifact profile management (list, create/update user-defined profiles).
+* Chat with the AI about completed analysis results, with SSE streaming for tokens.
+* Static asset serving (logo images, favicon).
+
+All long-running operations (parsing, analysis, chat) execute on background
+``threading.Thread`` instances. Progress is communicated to the frontend via
+Server-Sent Events (SSE) using in-memory event stores guarded by a reentrant lock.
+
+Attributes:
+    LOGGER: Module-level logger instance for application logging.
+    PROJECT_ROOT: Absolute ``Path`` to the AIFT project root directory (one level
+        above the ``app/`` package).
+    CASES_ROOT: Absolute ``Path`` to the ``cases/`` directory where per-case data
+        is stored.
+    IMAGES_ROOT: Absolute ``Path`` to the ``images/`` directory for logo and static
+        image assets.
+    SENSITIVE_KEYS: Set of lowercase key names whose values must be masked in API
+        responses (e.g., ``api_key``, ``token``, ``secret``, ``password``).
+    MASKED: Placeholder string used when masking sensitive configuration values.
+    SAFE_NAME_RE: Compiled regex that matches non-alphanumeric characters (excluding
+        dots, hyphens, underscores) for sanitizing file and profile names.
+    EWF_SEGMENT_RE: Compiled regex for matching EWF (EnCase) split segment filenames
+        (e.g., ``image.E01``, ``image.E02``).
+    SPLIT_RAW_SEGMENT_RE: Compiled regex for matching split raw disk image segments
+        (e.g., ``image.000``, ``image.001``).
+    DISSECT_EVIDENCE_EXTENSIONS: Frozen set of all file extensions that Dissect's
+        ``Target.open()`` can handle, including containers, loaders, and archives.
+    PROFILE_NAME_RE: Compiled regex for validating artifact profile names
+        (1-64 alphanumeric characters, spaces, dots, underscores, or hyphens).
+    MODE_PARSE_AND_AI: Constant string indicating an artifact should be both parsed
+        and included in AI analysis.
+    MODE_PARSE_ONLY: Constant string indicating an artifact should be parsed but
+        excluded from AI analysis.
+    BUILTIN_RECOMMENDED_PROFILE: Name of the built-in recommended artifact profile.
+    PROFILE_DIRNAME: Subdirectory name where artifact profile JSON files are stored.
+    PROFILE_FILE_SUFFIX: File extension for artifact profile files.
+    RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS: Set of artifact keys excluded from the
+        built-in recommended profile due to their large output size.
+    CONNECTION_TEST_SYSTEM_PROMPT: System prompt used when testing AI provider
+        connectivity.
+    CONNECTION_TEST_USER_PROMPT: User prompt used when testing AI provider
+        connectivity.
+    CHAT_HISTORY_MAX_PAIRS: Maximum number of user/assistant message pairs retained
+        in chat context.
+    TERMINAL_CASE_STATUSES: Frozen set of case status values that indicate a case
+        has reached a terminal state and can be cleaned up.
+    SSE_POLL_INTERVAL_SECONDS: Sleep interval between SSE polling iterations.
+    SSE_INITIAL_IDLE_GRACE_SECONDS: Grace period before an idle SSE stream is
+        terminated.
+    CASE_STATES: In-memory dictionary mapping case IDs to their full state
+        dictionaries. Protected by ``STATE_LOCK``.
+    PARSE_PROGRESS: In-memory dictionary mapping case IDs to parsing progress
+        state (events list, status, error). Protected by ``STATE_LOCK``.
+    ANALYSIS_PROGRESS: In-memory dictionary mapping case IDs to analysis progress
+        state. Protected by ``STATE_LOCK``.
+    CHAT_PROGRESS: In-memory dictionary mapping case IDs to chat progress state.
+        Protected by ``STATE_LOCK``.
+    STATE_LOCK: Reentrant threading lock protecting all in-memory state dictionaries.
+    routes_bp: Flask ``Blueprint`` instance containing all route registrations.
+"""
 
 from __future__ import annotations
 
@@ -127,6 +202,15 @@ _REQUEST_CASE_LOG_TOKEN = "_aift_case_log_token"
 
 @routes_bp.before_app_request
 def _bind_case_log_context_for_request() -> None:
+    """Bind case-specific logging context before each incoming request.
+
+    Extracts the ``case_id`` from the request's URL path parameters (if
+    present) and pushes a case-scoped logging context so that all log
+    messages emitted during the request are tagged with the case ID.
+
+    The resulting context token is stored on Flask's ``g`` object for
+    cleanup in the corresponding teardown handler.
+    """
     case_id: str | None = None
     if request.blueprint == routes_bp.name:
         case_id = str((request.view_args or {}).get("case_id", "")).strip() or None
@@ -135,6 +219,16 @@ def _bind_case_log_context_for_request() -> None:
 
 @routes_bp.teardown_app_request
 def _clear_case_log_context_for_request(_error: BaseException | None) -> None:
+    """Pop the case-scoped logging context after each request completes.
+
+    This teardown handler restores the logging context to its pre-request
+    state, ensuring that case-specific log tagging does not leak across
+    requests.
+
+    Args:
+        _error: Optional exception that occurred during request handling.
+            Ignored; context cleanup happens unconditionally.
+    """
     token = getattr(g, _REQUEST_CASE_LOG_TOKEN, None)
     if token is not None:
         pop_case_log_context(token)
@@ -142,19 +236,60 @@ def _clear_case_log_context_for_request(_error: BaseException | None) -> None:
 
 
 def _now_iso() -> str:
+    """Return the current UTC timestamp as an ISO 8601 string with a ``Z`` suffix.
+
+    Returns:
+        A string like ``"2025-01-15T08:30:00Z"`` representing the current
+        UTC time, truncated to whole seconds.
+    """
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _error(message: str, status: int) -> tuple[Response, int]:
+    """Create a JSON error response tuple for Flask route handlers.
+
+    Args:
+        message: Human-readable error description to include in the response body.
+        status: HTTP status code for the response (e.g., 400, 404, 500).
+
+    Returns:
+        A tuple of ``(Response, int)`` containing a JSON body with an ``"error"``
+        key and the corresponding HTTP status code.
+    """
     return jsonify({"error": message}), status
 
 
 def _safe_name(value: str, fallback: str = "item") -> str:
+    """Sanitize a string for use as a safe filesystem or identifier name.
+
+    Replaces any characters that are not alphanumeric, dots, hyphens, or
+    underscores with underscores, then strips leading/trailing underscores.
+
+    Args:
+        value: The raw string to sanitize.
+        fallback: Value to return if sanitization produces an empty string.
+            Defaults to ``"item"``.
+
+    Returns:
+        A sanitized string safe for use in file paths and identifiers, or
+        the fallback if the result would be empty.
+    """
     cleaned = SAFE_NAME_RE.sub("_", value).strip("_")
     return cleaned or fallback
 
 
 def _resolve_logo_filename() -> str:
+    """Resolve the filename of the application logo image from the images directory.
+
+    Searches ``IMAGES_ROOT`` for a logo file matching the configured candidate
+    filenames (from ``LOGO_FILE_CANDIDATES``). If no candidate matches, falls
+    back to the first image file found in the directory by alphabetical order.
+
+    Returns:
+        The filename (not full path) of the resolved logo image, or an empty
+        string if no suitable image file is found or the images directory does
+        not exist.
+    """
     if IMAGES_ROOT.is_dir():
         for filename in LOGO_FILE_CANDIDATES:
             if (IMAGES_ROOT / filename).is_file():
@@ -172,6 +307,16 @@ def _resolve_logo_filename() -> str:
 
 
 def _new_progress(status: str = "idle") -> dict[str, Any]:
+    """Create a fresh progress-tracking dictionary for SSE event stores.
+
+    Args:
+        status: Initial status string. Defaults to ``"idle"``. Typical values
+            are ``"idle"``, ``"running"``, ``"completed"``, and ``"failed"``.
+
+    Returns:
+        A dictionary with keys ``"status"`` (str), ``"events"`` (empty list),
+        and ``"error"`` (None).
+    """
     return {"status": status, "events": [], "error": None}
 
 
@@ -181,6 +326,18 @@ def _set_progress_status(
     status: str,
     error: str | None = None,
 ) -> None:
+    """Update the status (and optionally the error message) in a progress store.
+
+    Thread-safe: acquires ``STATE_LOCK`` before modifying the store.
+
+    Args:
+        store: One of ``PARSE_PROGRESS``, ``ANALYSIS_PROGRESS``, or
+            ``CHAT_PROGRESS``.
+        case_id: UUID of the case whose progress is being updated.
+        status: New status string (e.g., ``"running"``, ``"completed"``,
+            ``"failed"``).
+        error: Optional human-readable error message. Defaults to ``None``.
+    """
     with STATE_LOCK:
         state = store.setdefault(case_id, _new_progress())
         state["status"] = status
@@ -192,6 +349,20 @@ def _emit_progress(
     case_id: str,
     payload: dict[str, Any],
 ) -> None:
+    """Append a progress event to a case's SSE event store.
+
+    Each event is automatically assigned a monotonically increasing
+    ``sequence`` number and a ``timestamp`` (if not already present in
+    the payload). Thread-safe: acquires ``STATE_LOCK`` before modifying
+    the store.
+
+    Args:
+        store: One of ``PARSE_PROGRESS``, ``ANALYSIS_PROGRESS``, or
+            ``CHAT_PROGRESS``.
+        case_id: UUID of the case to emit the event for.
+        payload: Dictionary describing the event. Must include a ``"type"``
+            key (e.g., ``"artifact_started"``, ``"token"``, ``"error"``).
+    """
     event = dict(payload)
     event.setdefault("timestamp", _now_iso())
     with STATE_LOCK:
@@ -201,10 +372,29 @@ def _emit_progress(
 
 
 def _normalize_case_status(value: Any) -> str:
+    """Normalize a case status value to a lowercase, stripped string.
+
+    Args:
+        value: Raw status value, which may be ``None``, a string, or any
+            other type coercible to string.
+
+    Returns:
+        A lowercase, whitespace-stripped string representation of the status.
+    """
     return str(value or "").strip().lower()
 
 
 def _mark_case_status(case_id: str, status: str) -> None:
+    """Update the in-memory status of a case in ``CASE_STATES``.
+
+    Thread-safe: acquires ``STATE_LOCK`` before modifying state. If the
+    case does not exist in the store, this is a no-op.
+
+    Args:
+        case_id: UUID of the case to update.
+        status: New status string (e.g., ``"active"``, ``"parsed"``,
+            ``"completed"``, ``"failed"``, ``"error"``).
+    """
     normalized_status = _normalize_case_status(status)
     with STATE_LOCK:
         case = CASE_STATES.get(case_id)
@@ -213,6 +403,15 @@ def _mark_case_status(case_id: str, status: str) -> None:
 
 
 def _cleanup_case_entries(case_id: str) -> None:
+    """Remove all in-memory state entries for a specific case.
+
+    Clears the case from ``CASE_STATES``, ``PARSE_PROGRESS``,
+    ``ANALYSIS_PROGRESS``, and ``CHAT_PROGRESS``, and unregisters the
+    case-specific log handler.
+
+    Args:
+        case_id: UUID of the case whose entries should be removed.
+    """
     with STATE_LOCK:
         CASE_STATES.pop(case_id, None)
         PARSE_PROGRESS.pop(case_id, None)
@@ -222,6 +421,17 @@ def _cleanup_case_entries(case_id: str) -> None:
 
 
 def _cleanup_terminal_cases(exclude_case_id: str | None = None) -> None:
+    """Remove in-memory state for all cases that have reached a terminal status.
+
+    Terminal statuses are defined in ``TERMINAL_CASE_STATUSES`` (completed,
+    failed, error). This prevents unbounded memory growth from accumulated
+    finished cases.
+
+    Args:
+        exclude_case_id: Optional case ID to exempt from cleanup, even if it
+            is in a terminal status. Useful when a new case is being created
+            immediately after another completes.
+    """
     with STATE_LOCK:
         terminal_case_ids = [
             case_id
@@ -239,6 +449,20 @@ def _cleanup_terminal_cases(exclude_case_id: str | None = None) -> None:
 
 
 def _mask_sensitive(data: Any) -> Any:
+    """Recursively mask sensitive values in a data structure before API output.
+
+    Any dictionary key whose lowercase name is in ``SENSITIVE_KEYS`` will
+    have its value replaced with the ``MASKED`` placeholder string. Nested
+    dicts and lists are traversed recursively.
+
+    Args:
+        data: Input data structure (dict, list, or scalar) to mask.
+
+    Returns:
+        A new data structure with identical shape, but sensitive values
+        replaced by ``MASKED``. Non-dict, non-list values are returned
+        unchanged.
+    """
     if isinstance(data, dict):
         masked: dict[str, Any] = {}
         for key, value in data.items():
@@ -253,6 +477,22 @@ def _mask_sensitive(data: Any) -> Any:
 
 
 def _deep_merge(current: dict[str, Any], updates: dict[str, Any], prefix: str = "") -> list[str]:
+    """Recursively merge ``updates`` into ``current``, tracking changed keys.
+
+    Nested dictionaries are merged recursively. Sensitive keys whose value
+    equals ``MASKED`` are skipped to prevent overwriting real secrets with
+    the placeholder. Values are deep-copied before assignment.
+
+    Args:
+        current: The target dictionary to be mutated in place.
+        updates: The source dictionary containing new or updated values.
+        prefix: Dot-separated key prefix used for recursive tracking of
+            nested key paths. Callers should not set this.
+
+    Returns:
+        A list of dot-separated key paths that were actually changed
+        (e.g., ``["analysis.ai_max_tokens", "provider.api_key"]``).
+    """
     changed: list[str] = []
     for key, value in updates.items():
         if not isinstance(key, str):
@@ -270,10 +510,30 @@ def _deep_merge(current: dict[str, Any], updates: dict[str, Any], prefix: str = 
 
 
 def _is_sensitive_path(path: str) -> bool:
+    """Check whether a dot-separated configuration key path contains a sensitive segment.
+
+    Args:
+        path: Dot-separated key path (e.g., ``"provider.api_key"``).
+
+    Returns:
+        ``True`` if any segment of the path matches a key in ``SENSITIVE_KEYS``.
+    """
     return any(segment.strip().lower() in SENSITIVE_KEYS for segment in path.split("."))
 
 
 def _sanitize_changed_keys(changed_keys: list[str]) -> list[str]:
+    """Sanitize a list of changed configuration key paths for audit logging.
+
+    Deduplicates keys, strips whitespace, and appends ``"(redacted)"`` to
+    any key path that contains a sensitive segment.
+
+    Args:
+        changed_keys: Raw list of dot-separated key paths from ``_deep_merge``.
+
+    Returns:
+        A deduplicated, sanitized list of key path strings safe for inclusion
+        in audit log entries.
+    """
     sanitized: list[str] = []
     for key in changed_keys:
         if not isinstance(key, str):
@@ -289,6 +549,15 @@ def _sanitize_changed_keys(changed_keys: list[str]) -> list[str]:
 
 
 def _audit_config_change(changed_keys: list[str]) -> None:
+    """Write a ``config_changed`` audit log entry to all active cases.
+
+    This ensures that configuration changes (e.g., switching AI provider)
+    are recorded in the forensic audit trail of every currently-active case.
+
+    Args:
+        changed_keys: List of dot-separated configuration key paths that
+            were modified. Sensitive keys are redacted before logging.
+    """
     sanitized_keys = _sanitize_changed_keys(changed_keys)
     if not sanitized_keys:
         return
@@ -312,6 +581,18 @@ def _audit_config_change(changed_keys: list[str]) -> None:
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
+    """Safely convert a value to an integer, returning a default on failure.
+
+    Args:
+        value: Value to convert. May be ``None``, a string, a number, or
+            any other type.
+        default: Fallback integer to return when conversion fails.
+            Defaults to ``0``.
+
+    Returns:
+        The integer representation of ``value``, or ``default`` if conversion
+        raises ``TypeError`` or ``ValueError``.
+    """
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -319,6 +600,16 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def _close_forensic_parser(parser: Any) -> None:
+    """Safely close a ``ForensicParser`` instance, suppressing any errors.
+
+    Checks for a callable ``close`` method on the parser and invokes it.
+    Any exceptions raised during closing are logged but not propagated,
+    ensuring cleanup always completes.
+
+    Args:
+        parser: A ``ForensicParser`` instance (or any object with an
+            optional ``close()`` method).
+    """
     close_method = getattr(parser, "close", None)
     if not callable(close_method):
         return
@@ -332,6 +623,25 @@ def _close_forensic_parser(parser: Any) -> None:
 def _validate_analysis_date_range(
     payload: Any,
 ) -> dict[str, str] | None:
+    """Validate and normalize an optional analysis date range from request payload.
+
+    Ensures both ``start_date`` and ``end_date`` are present and in
+    ``YYYY-MM-DD`` format, and that the start date does not exceed the end
+    date.
+
+    Args:
+        payload: Raw value from the request JSON under the
+            ``"analysis_date_range"`` key. Expected to be ``None`` or a dict
+            with ``"start_date"`` and ``"end_date"`` string values.
+
+    Returns:
+        A dictionary with ISO-formatted ``"start_date"`` and ``"end_date"``
+        strings, or ``None`` if no date range was provided.
+
+    Raises:
+        ValueError: If the payload is not a dict, dates are not in the correct
+            format, only one boundary is provided, or start exceeds end.
+    """
     if payload is None:
         return None
 
@@ -367,6 +677,20 @@ def _validate_analysis_date_range(
 
 
 def _extract_parse_progress(fallback_artifact: str, args: tuple[Any, ...]) -> tuple[str, int]:
+    """Extract artifact key and record count from a parser progress callback's arguments.
+
+    The parser progress callback may be invoked with varying signatures:
+    a single dict, two positional arguments, or a single integer count.
+    This function normalizes all variants.
+
+    Args:
+        fallback_artifact: Artifact key to use if one cannot be extracted
+            from the callback arguments.
+        args: Positional arguments received by the progress callback.
+
+    Returns:
+        A tuple of ``(artifact_key, record_count)``.
+    """
     if not args:
         return fallback_artifact, 0
     first = args[0]
@@ -378,6 +702,18 @@ def _extract_parse_progress(fallback_artifact: str, args: tuple[Any, ...]) -> tu
 
 
 def _sanitize_prompt(prompt: str, max_chars: int = 2000) -> str:
+    """Normalize and truncate a user-provided prompt for safe audit logging.
+
+    Collapses all whitespace runs to single spaces and truncates the result
+    to ``max_chars``, appending a ``"... [truncated]"`` indicator if needed.
+
+    Args:
+        prompt: Raw user prompt text.
+        max_chars: Maximum character length before truncation. Defaults to 2000.
+
+    Returns:
+        The normalized (and possibly truncated) prompt string.
+    """
     normalized = " ".join(prompt.split())
     if len(normalized) <= max_chars:
         return normalized
@@ -385,6 +721,17 @@ def _sanitize_prompt(prompt: str, max_chars: int = 2000) -> str:
 
 
 def _normalize_artifact_mode(value: Any, default_mode: str = MODE_PARSE_AND_AI) -> str:
+    """Normalize an artifact processing mode string to one of the two valid constants.
+
+    Args:
+        value: Raw mode value from the request payload. May be ``None``, a
+            string, or any other type coercible to string.
+        default_mode: Mode to return when ``value`` does not match either
+            valid mode. Defaults to ``MODE_PARSE_AND_AI``.
+
+    Returns:
+        Either ``MODE_PARSE_AND_AI`` or ``MODE_PARSE_ONLY``.
+    """
     mode = str(value or "").strip().lower()
     if mode == MODE_PARSE_ONLY:
         return MODE_PARSE_ONLY
@@ -394,6 +741,17 @@ def _normalize_artifact_mode(value: Any, default_mode: str = MODE_PARSE_AND_AI) 
 
 
 def _normalize_string_list(values: Any) -> list[str]:
+    """Deduplicate and normalize a list of values into a list of non-empty strings.
+
+    Each element is converted to a stripped string. Empty strings and
+    duplicates are removed while preserving insertion order.
+
+    Args:
+        values: Input list (or non-list value, which returns an empty list).
+
+    Returns:
+        A deduplicated list of non-empty, stripped strings.
+    """
     if not isinstance(values, list):
         return []
     normalized: list[str] = []
@@ -408,6 +766,26 @@ def _normalize_string_list(values: Any) -> list[str]:
 
 
 def _normalize_artifact_options(payload: Any) -> list[dict[str, str]]:
+    """Normalize a raw artifact options payload into a canonical list of option dicts.
+
+    Accepts multiple input formats for backwards compatibility:
+
+    * A list of strings (artifact keys, all default to ``MODE_PARSE_AND_AI``).
+    * A list of dicts with ``"artifact_key"``/``"key"``, and optionally ``"mode"``,
+      ``"ai_enabled"``, or ``"parse_mode"`` fields.
+
+    Deduplicates by artifact key, preserving first occurrence.
+
+    Args:
+        payload: Raw ``"artifact_options"`` value from the request JSON.
+
+    Returns:
+        A list of dicts, each with ``"artifact_key"`` (str) and ``"mode"``
+        (str, one of ``MODE_PARSE_AND_AI`` or ``MODE_PARSE_ONLY``).
+
+    Raises:
+        ValueError: If ``payload`` is not a list.
+    """
     if not isinstance(payload, list):
         raise ValueError("`artifact_options` must be a JSON array.")
 
@@ -439,6 +817,18 @@ def _normalize_artifact_options(payload: Any) -> list[dict[str, str]]:
 
 
 def _artifact_options_to_lists(artifact_options: list[dict[str, str]]) -> tuple[list[str], list[str]]:
+    """Split normalized artifact options into separate parse and analysis lists.
+
+    Args:
+        artifact_options: Canonical list of artifact option dicts as produced
+            by ``_normalize_artifact_options``.
+
+    Returns:
+        A tuple of ``(parse_artifacts, analysis_artifacts)`` where
+        ``parse_artifacts`` contains all artifact keys and
+        ``analysis_artifacts`` contains only those with mode
+        ``MODE_PARSE_AND_AI``.
+    """
     parse_artifacts: list[str] = []
     analysis_artifacts: list[str] = []
     for option in artifact_options:
@@ -455,6 +845,20 @@ def _build_artifact_options_from_lists(
     parse_artifacts: list[str],
     analysis_artifacts: list[str],
 ) -> list[dict[str, str]]:
+    """Construct canonical artifact options from separate parse and analysis lists.
+
+    This is the inverse of ``_artifact_options_to_lists``, used when the
+    request payload provides the legacy ``"artifacts"`` / ``"ai_artifacts"``
+    format instead of the unified ``"artifact_options"`` format.
+
+    Args:
+        parse_artifacts: List of all artifact keys to be parsed.
+        analysis_artifacts: Subset of artifact keys that should also be
+            included in AI analysis.
+
+    Returns:
+        A list of dicts with ``"artifact_key"`` and ``"mode"`` fields.
+    """
     analysis_set = set(analysis_artifacts)
     return [
         {
@@ -466,6 +870,26 @@ def _build_artifact_options_from_lists(
 
 
 def _extract_parse_selection_payload(payload: dict[str, Any]) -> tuple[list[dict[str, str]], list[str], list[str]]:
+    """Extract and normalize artifact selection from a parse request payload.
+
+    Supports two payload formats:
+
+    * **New format**: ``"artifact_options"`` -- a list of dicts with per-artifact
+      mode settings.
+    * **Legacy format**: ``"artifacts"`` (list of keys) and optional
+      ``"ai_artifacts"`` (subset for AI analysis).
+
+    Args:
+        payload: Parsed JSON body from the parse start request.
+
+    Returns:
+        A tuple of ``(artifact_options, parse_artifacts, analysis_artifacts)``
+        where ``artifact_options`` is the canonical form used internally.
+
+    Raises:
+        ValueError: If the payload contains invalid or non-list artifact
+            fields.
+    """
     if "artifact_options" in payload:
         artifact_options = _normalize_artifact_options(payload.get("artifact_options"))
         parse_artifacts, analysis_artifacts = _artifact_options_to_lists(artifact_options)
@@ -493,6 +917,16 @@ def _extract_parse_selection_payload(payload: dict[str, Any]) -> tuple[list[dict
 
 
 def _recommended_artifact_options() -> list[dict[str, str]]:
+    """Build the artifact options list for the built-in 'recommended' profile.
+
+    Includes all artifacts from ``ARTIFACT_REGISTRY`` except those listed in
+    ``RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS`` (large-output artifacts like
+    MFT, USN Journal, and full EVTX). All included artifacts are set to
+    ``MODE_PARSE_AND_AI``.
+
+    Returns:
+        A list of artifact option dicts for the recommended profile.
+    """
     profile: list[dict[str, str]] = []
     for artifact_key in ARTIFACT_REGISTRY:
         normalized_key = str(artifact_key).strip().lower()
@@ -503,11 +937,28 @@ def _recommended_artifact_options() -> list[dict[str, str]]:
 
 
 def _resolve_profiles_root(config_path: str | Path) -> Path:
+    """Resolve the filesystem directory where artifact profiles are stored.
+
+    Profiles are stored in a subdirectory named ``PROFILE_DIRNAME`` alongside
+    the application configuration file.
+
+    Args:
+        config_path: Path to the AIFT configuration file (e.g., ``config.yaml``).
+
+    Returns:
+        Absolute ``Path`` to the profiles directory.
+    """
     path = Path(config_path)
     return path.parent / PROFILE_DIRNAME
 
 
 def _recommended_profile_payload() -> dict[str, Any]:
+    """Build the full JSON-serializable payload for the built-in recommended profile.
+
+    Returns:
+        A dictionary with ``"name"``, ``"builtin"`` (True), and
+        ``"artifact_options"`` keys, ready for writing to disk.
+    """
     return {
         "name": BUILTIN_RECOMMENDED_PROFILE,
         "builtin": True,
@@ -516,12 +967,35 @@ def _recommended_profile_payload() -> dict[str, Any]:
 
 
 def _write_profile_file(path: Path, payload: dict[str, Any]) -> None:
+    """Write an artifact profile payload to a JSON file on disk.
+
+    Creates parent directories as needed. The file is written with a trailing
+    newline for POSIX compatibility.
+
+    Args:
+        path: Destination file path for the profile JSON.
+        payload: Profile data to serialize (must be JSON-serializable).
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     content = json.dumps(payload, indent=2, ensure_ascii=True)
     path.write_text(f"{content}\n", encoding="utf-8")
 
 
 def _load_profile_file(path: Path) -> dict[str, Any] | None:
+    """Load and validate a single artifact profile from a JSON file.
+
+    Performs validation of the profile name (against ``PROFILE_NAME_RE``),
+    normalizes artifact options, and handles the special ``recommended``
+    built-in profile. Invalid or unreadable profiles are logged and skipped.
+
+    Args:
+        path: Path to the profile JSON file.
+
+    Returns:
+        A validated profile dict with ``"name"``, ``"builtin"``,
+        ``"artifact_options"``, and ``"path"`` keys, or ``None`` if the
+        file is invalid or unreadable.
+    """
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -565,11 +1039,32 @@ def _load_profile_file(path: Path) -> dict[str, Any] | None:
 
 
 def _ensure_recommended_profile(profiles_root: Path) -> None:
+    """Ensure the built-in recommended profile file exists on disk.
+
+    Overwrites any existing file at the recommended profile path to keep
+    it synchronized with the current ``ARTIFACT_REGISTRY``.
+
+    Args:
+        profiles_root: Directory where profile JSON files are stored.
+    """
     recommended_path = profiles_root / f"{BUILTIN_RECOMMENDED_PROFILE}{PROFILE_FILE_SUFFIX}"
     _write_profile_file(recommended_path, _recommended_profile_payload())
 
 
 def _load_profiles_from_directory(profiles_root: Path) -> list[dict[str, Any]]:
+    """Load all valid artifact profiles from the profiles directory.
+
+    Creates the directory if it does not exist, ensures the recommended
+    built-in profile is present, then loads and validates all ``*.json``
+    files. Profiles are deduplicated by name (case-insensitive) and sorted
+    with the recommended profile first, followed by alphabetical order.
+
+    Args:
+        profiles_root: Directory containing profile JSON files.
+
+    Returns:
+        A sorted list of validated profile dictionaries.
+    """
     profiles_root.mkdir(parents=True, exist_ok=True)
     _ensure_recommended_profile(profiles_root)
 
@@ -595,6 +1090,18 @@ def _load_profiles_from_directory(profiles_root: Path) -> list[dict[str, Any]]:
 
 
 def _profile_path_for_new_name(profiles_root: Path, profile_name: str) -> Path:
+    """Compute a unique file path for a new artifact profile.
+
+    Derives a filesystem-safe stem from the profile name and appends a
+    numeric suffix if the candidate path already exists.
+
+    Args:
+        profiles_root: Directory where profile JSON files are stored.
+        profile_name: Human-readable name of the new profile.
+
+    Returns:
+        A ``Path`` to a non-existent file suitable for writing the profile.
+    """
     stem = _safe_name(profile_name.lower(), fallback="profile")
     candidate = profiles_root / f"{stem}{PROFILE_FILE_SUFFIX}"
     if not candidate.exists():
@@ -609,6 +1116,21 @@ def _profile_path_for_new_name(profiles_root: Path, profile_name: str) -> Path:
 
 
 def _normalize_profile_name(value: Any) -> str:
+    """Validate and normalize a profile name from user input.
+
+    Strips whitespace, rejects the reserved ``recommended`` name, and
+    validates against ``PROFILE_NAME_RE``.
+
+    Args:
+        value: Raw profile name from the request payload.
+
+    Returns:
+        The stripped, validated profile name string.
+
+    Raises:
+        ValueError: If the name is empty, matches the reserved built-in
+            profile name, or fails regex validation.
+    """
     name = str(value or "").strip()
     if not name:
         raise ValueError("Profile name is required.")
@@ -622,6 +1144,18 @@ def _normalize_profile_name(value: Any) -> str:
 
 
 def _compose_profile_response(profiles_root: Path) -> list[dict[str, Any]]:
+    """Build the API response payload for all artifact profiles.
+
+    Loads profiles from disk, strips internal fields (like ``path``), and
+    returns a list of JSON-serializable profile dictionaries.
+
+    Args:
+        profiles_root: Directory containing profile JSON files.
+
+    Returns:
+        A list of dicts, each with ``"name"``, ``"builtin"``, and
+        ``"artifact_options"`` keys.
+    """
     return [
         {
             "name": str(profile.get("name", "")).strip(),
@@ -633,6 +1167,19 @@ def _compose_profile_response(profiles_root: Path) -> list[dict[str, Any]]:
 
 
 def _build_csv_map(parse_results: list[dict[str, Any]]) -> dict[str, str]:
+    """Build a mapping of artifact keys to their parsed CSV file paths.
+
+    Iterates over parse results and extracts the first available CSV path
+    for each successfully parsed artifact.
+
+    Args:
+        parse_results: List of per-artifact parse result dicts, each
+            containing ``"artifact_key"``, ``"success"``, and either
+            ``"csv_path"`` or ``"csv_paths"``.
+
+    Returns:
+        A dictionary mapping artifact key strings to CSV file path strings.
+    """
     mapping: dict[str, str] = {}
     for result in parse_results:
         artifact = str(result.get("artifact_key", "")).strip()
@@ -649,8 +1196,23 @@ def _build_csv_map(parse_results: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def _stream_sse(store: dict[str, dict[str, Any]], case_id: str) -> Response:
+    """Create an SSE streaming ``Response`` that polls a progress event store.
+
+    Yields ``data:`` frames containing JSON-serialized events from the
+    specified store. The stream terminates when the store's status reaches
+    a terminal state (completed, failed, error) or an idle timeout expires.
+
+    Args:
+        store: One of ``PARSE_PROGRESS``, ``ANALYSIS_PROGRESS``, or
+            ``CHAT_PROGRESS``.
+        case_id: UUID of the case whose events to stream.
+
+    Returns:
+        A Flask ``Response`` with ``text/event-stream`` MIME type.
+    """
     @stream_with_context
     def stream() -> Any:
+        """Generate SSE data frames by polling the progress event store."""
         last = 0
         initial_idle_deadline = time.monotonic() + SSE_INITIAL_IDLE_GRACE_SECONDS
         while True:
@@ -697,6 +1259,16 @@ def _stream_sse(store: dict[str, dict[str, Any]], case_id: str) -> Response:
 
 
 def _get_case(case_id: str) -> dict[str, Any] | None:
+    """Retrieve the in-memory state dictionary for a case.
+
+    Thread-safe: acquires ``STATE_LOCK`` before reading.
+
+    Args:
+        case_id: UUID of the case to look up.
+
+    Returns:
+        The case state dictionary, or ``None`` if the case does not exist.
+    """
     with STATE_LOCK:
         return CASE_STATES.get(case_id)
 
@@ -711,6 +1283,36 @@ def _extract_archive_members(
     extract_member: Callable[[Any, Path], None] | None = None,
     extract_all_members: Callable[[list[tuple[Any, Path]]], None] | None = None,
 ) -> Path:
+    """Extract archive members safely and return the best Dissect target path.
+
+    Validates that no extracted member escapes the destination directory
+    (path traversal protection), extracts all members using the provided
+    callback, then locates the best evidence file or directory for Dissect.
+
+    Exactly one of ``extract_member`` or ``extract_all_members`` must be
+    provided.
+
+    Args:
+        destination: Root directory to extract archive contents into.
+        members: List of ``(member_name, member_object)`` tuples for each
+            file in the archive.
+        empty_message: Error message when the archive has no members.
+        unsafe_paths_message: Error message when a member path escapes the
+            destination directory.
+        no_files_message: Error message when extraction produces no files.
+        extract_member: Callback to extract a single member. Receives
+            ``(member_object, target_path)``.
+        extract_all_members: Callback to extract all members at once.
+            Receives a list of ``(member_object, target_path)`` tuples.
+
+    Returns:
+        Path to the best evidence file (preferring E01) or the extraction
+        directory if no recognized evidence file is found.
+
+    Raises:
+        ValueError: If the archive is empty, contains unsafe paths, produces
+            no files, or both/neither extraction callbacks are provided.
+    """
     if (extract_member is None) == (extract_all_members is None):
         raise ValueError("Exactly one extraction callback must be provided.")
 
@@ -767,11 +1369,24 @@ def _extract_archive_members(
 
 
 def _extract_zip(zip_path: Path, destination: Path) -> Path:
+    """Extract a ZIP archive and return the best Dissect target path.
+
+    Args:
+        zip_path: Path to the ZIP evidence file.
+        destination: Directory to extract archive contents into.
+
+    Returns:
+        Path to the best evidence file or extraction directory for Dissect.
+
+    Raises:
+        ValueError: If the ZIP is invalid, empty, or contains unsafe paths.
+    """
     try:
         with ZipFile(zip_path, "r") as archive:
             members = [(member.filename, member) for member in archive.infolist() if not member.is_dir()]
 
             def _extract_member(member: Any, target: Path) -> None:
+                """Extract a single ZIP member to the target path."""
                 with archive.open(member, "r") as src, target.open("wb") as dst:
                     shutil.copyfileobj(src, dst)
             return _extract_archive_members(
@@ -787,12 +1402,24 @@ def _extract_zip(zip_path: Path, destination: Path) -> Path:
 
 
 def _extract_tar(tar_path: Path, destination: Path) -> Path:
-    """Extract a tar (or tar.gz/tgz) archive and return the best Dissect target path."""
+    """Extract a tar (or tar.gz/tgz) archive and return the best Dissect target path.
+
+    Args:
+        tar_path: Path to the tar evidence file.
+        destination: Directory to extract archive contents into.
+
+    Returns:
+        Path to the best evidence file or extraction directory for Dissect.
+
+    Raises:
+        ValueError: If the tar is invalid, empty, or contains unsafe paths.
+    """
     try:
         with tarfile.open(tar_path, "r:*") as archive:
             members = [(member.name, member) for member in archive.getmembers() if member.isfile()]
 
             def _extract_member(member: Any, target: Path) -> None:
+                """Extract a single tar member to the target path."""
                 src = archive.extractfile(member)
                 if src is None:
                     return
@@ -811,12 +1438,24 @@ def _extract_tar(tar_path: Path, destination: Path) -> Path:
 
 
 def _extract_7z(archive_path: Path, destination: Path) -> Path:
-    """Extract a 7z archive and return the best Dissect target path."""
+    """Extract a 7z archive and return the best Dissect target path.
+
+    Args:
+        archive_path: Path to the 7z evidence file.
+        destination: Directory to extract archive contents into.
+
+    Returns:
+        Path to the best evidence file or extraction directory for Dissect.
+
+    Raises:
+        ValueError: If the 7z archive is invalid, empty, or contains unsafe paths.
+    """
     try:
         with py7zr.SevenZipFile(archive_path, mode="r") as archive:
             members = [(name, name) for name in archive.getnames() if not name.endswith("/")]
 
             def _extract_members(_members: list[tuple[Any, Path]]) -> None:
+                """Extract all 7z members to the destination directory."""
                 archive.extractall(path=destination)
 
             return _extract_archive_members(
@@ -832,6 +1471,14 @@ def _extract_7z(archive_path: Path, destination: Path) -> Path:
 
 
 def _collect_uploaded_files() -> list[Any]:
+    """Collect all uploaded file storage objects from the current Flask request.
+
+    Iterates over all keys in ``request.files`` and gathers every
+    ``FileStorage`` object that has a non-empty filename.
+
+    Returns:
+        A list of ``werkzeug.datastructures.FileStorage`` objects.
+    """
     uploaded: list[Any] = []
     for key in request.files:
         for file_storage in request.files.getlist(key):
@@ -841,6 +1488,18 @@ def _collect_uploaded_files() -> list[Any]:
 
 
 def _unique_destination(path: Path) -> Path:
+    """Generate a unique file path by appending a numeric suffix if needed.
+
+    If ``path`` does not already exist, it is returned as-is. Otherwise,
+    a ``_1``, ``_2``, etc. suffix is appended to the stem until a
+    non-existing candidate is found.
+
+    Args:
+        path: Desired file path that may already exist.
+
+    Returns:
+        A ``Path`` guaranteed not to exist on disk.
+    """
     if not path.exists():
         return path
 
@@ -853,6 +1512,22 @@ def _unique_destination(path: Path) -> Path:
 
 
 def _resolve_uploaded_dissect_path(uploaded_paths: list[Path]) -> Path:
+    """Determine the primary Dissect target path from a list of uploaded files.
+
+    Handles single files, split EWF/raw segment sets, and rejects mixed
+    archive-plus-segment uploads. For segment sets, returns the lowest-
+    numbered segment (E01 for EWF, .000 for split raw).
+
+    Args:
+        uploaded_paths: List of paths to uploaded evidence files.
+
+    Returns:
+        The ``Path`` to pass to Dissect's ``Target.open()``.
+
+    Raises:
+        ValueError: If no files were uploaded or the upload contains both
+            archive and segment files.
+    """
     if not uploaded_paths:
         raise ValueError("No uploaded evidence files were provided.")
 
@@ -891,6 +1566,17 @@ def _resolve_uploaded_dissect_path(uploaded_paths: list[Path]) -> Path:
 
 
 def _normalize_user_path(value: str) -> str:
+    """Strip surrounding quotes and whitespace from a user-supplied file path.
+
+    Removes straight double quotes and Unicode left/right double quotes
+    that users may inadvertently include when pasting paths.
+
+    Args:
+        value: Raw path string from user input.
+
+    Returns:
+        The cleaned path string.
+    """
     return (
         str(value)
         .replace('"', "")
@@ -901,6 +1587,25 @@ def _normalize_user_path(value: str) -> str:
 
 
 def _resolve_evidence_payload(case_dir: Path) -> dict[str, Any]:
+    """Resolve the evidence source from the current request and prepare it for Dissect.
+
+    Handles two intake modes: multipart file upload and JSON path reference.
+    For archive formats (ZIP, tar, 7z), the archive is extracted into the
+    case's evidence directory and the best Dissect target path is located.
+
+    Args:
+        case_dir: Path to the case's root directory (contains ``evidence/``).
+
+    Returns:
+        A dictionary with keys ``"mode"`` (``"upload"`` or ``"path"``),
+        ``"filename"``, ``"source_path"``, ``"stored_path"``,
+        ``"dissect_path"``, and ``"uploaded_files"``.
+
+    Raises:
+        ValueError: If no evidence is provided, the path is invalid, or
+            archive extraction fails.
+        FileNotFoundError: If the referenced evidence path does not exist.
+    """
     evidence_dir = case_dir / "evidence"
     evidence_dir.mkdir(parents=True, exist_ok=True)
 
@@ -959,6 +1664,17 @@ def _resolve_evidence_payload(case_dir: Path) -> dict[str, Any]:
 
 
 def _read_audit_entries(case_dir: Path) -> list[dict[str, Any]]:
+    """Read all audit log entries from a case's ``audit.jsonl`` file.
+
+    Parses each line as JSON, skipping blank lines and malformed entries.
+
+    Args:
+        case_dir: Path to the case's root directory.
+
+    Returns:
+        A list of parsed audit entry dictionaries in file order, or an
+        empty list if the audit file does not exist.
+    """
     audit_path = case_dir / "audit.jsonl"
     if not audit_path.exists():
         return []
@@ -978,6 +1694,14 @@ def _read_audit_entries(case_dir: Path) -> list[dict[str, Any]]:
 
 
 def _load_forensic_system_prompt() -> str:
+    """Load the forensic AI system prompt from the ``prompts/`` directory.
+
+    Falls back to ``DEFAULT_FORENSIC_SYSTEM_PROMPT`` if the file is
+    missing, unreadable, or empty.
+
+    Returns:
+        The system prompt string for forensic analysis AI calls.
+    """
     prompt_path = PROJECT_ROOT / "prompts" / "system_prompt.md"
     try:
         prompt_text = prompt_path.read_text(encoding="utf-8").strip()
@@ -988,6 +1712,18 @@ def _load_forensic_system_prompt() -> str:
 
 
 def _load_case_analysis_results(case: dict[str, Any]) -> dict[str, Any] | None:
+    """Load analysis results for a case from memory or disk.
+
+    First checks the in-memory ``analysis_results`` field. If empty or
+    absent, attempts to read from ``analysis_results.json`` on disk.
+
+    Args:
+        case: The in-memory case state dictionary.
+
+    Returns:
+        A dictionary of analysis results, or ``None`` if no results are
+        available from either source.
+    """
     in_memory = case.get("analysis_results")
     if isinstance(in_memory, dict) and in_memory:
         return dict(in_memory)
@@ -1008,6 +1744,18 @@ def _load_case_analysis_results(case: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _resolve_case_investigation_context(case: dict[str, Any]) -> str:
+    """Resolve the investigation context prompt for a case.
+
+    Checks the in-memory ``investigation_context`` field first. If empty,
+    falls back to reading ``prompt.txt`` from the case directory.
+
+    Args:
+        case: The in-memory case state dictionary.
+
+    Returns:
+        The investigation context string, or an empty string if none is
+        available.
+    """
     context = str(case.get("investigation_context", "")).strip()
     if context:
         return context
@@ -1024,6 +1772,17 @@ def _resolve_case_investigation_context(case: dict[str, Any]) -> str:
 
 
 def _resolve_case_parsed_dir(case: dict[str, Any]) -> Path:
+    """Resolve the directory containing parsed CSV files for a case.
+
+    Checks the in-memory ``csv_output_dir`` field, then infers from
+    existing CSV paths, and finally falls back to ``<case_dir>/parsed``.
+
+    Args:
+        case: The in-memory case state dictionary.
+
+    Returns:
+        Path to the directory containing the case's parsed CSV files.
+    """
     csv_output_dir = str(case.get("csv_output_dir", "")).strip()
     if csv_output_dir:
         return Path(csv_output_dir)
@@ -1036,6 +1795,20 @@ def _resolve_case_parsed_dir(case: dict[str, Any]) -> Path:
 
 
 def _render_chat_messages_for_provider(messages: list[dict[str, str]]) -> str:
+    """Render a list of chat messages into a single prompt string for the AI provider.
+
+    Formats the first user message as a ``Context Block``, the last user
+    message as ``New User Question``, and intermediate messages with their
+    role labels. System messages are skipped.
+
+    Args:
+        messages: Ordered list of message dicts, each with ``"role"`` and
+            ``"content"`` keys.
+
+    Returns:
+        A formatted multi-section string suitable for sending to the AI
+        provider as a single prompt.
+    """
     rendered_sections: list[str] = []
     first_user_rendered = False
     last_user_index = -1
@@ -1074,6 +1847,14 @@ _COMPRESS_FINDINGS_FALLBACK_PROMPT = (
 
 
 def _load_compress_findings_prompt() -> str:
+    """Load the prompt used to compress per-artifact findings with AI.
+
+    Falls back to ``_COMPRESS_FINDINGS_FALLBACK_PROMPT`` if the prompt
+    file is missing, unreadable, or empty.
+
+    Returns:
+        The system prompt string for the findings compression AI call.
+    """
     prompt_path = PROJECT_ROOT / "prompts" / "compress_findings.md"
     try:
         prompt_text = prompt_path.read_text(encoding="utf-8").strip()
@@ -1090,8 +1871,20 @@ def _compress_findings_with_ai(
 ) -> str | None:
     """Use the AI provider to compress per-artifact findings.
 
-    Returns compressed text, or ``None`` when the call fails so the
-    caller can fall back to the uncompressed context.
+    Sends the full findings text to the AI with a compression prompt,
+    targeting roughly 25% of the configured max tokens. Falls back
+    gracefully on failure so the caller can use the uncompressed context.
+
+    Args:
+        provider: An initialized AI provider instance with an ``analyze``
+            method.
+        findings_text: The full per-artifact findings text to compress.
+        max_tokens: The configured maximum token budget, used to calculate
+            the compression target.
+
+    Returns:
+        The compressed findings text, or ``None`` if compression fails or
+        the input is empty.
     """
     if not findings_text or not findings_text.strip():
         return None
@@ -1120,6 +1913,21 @@ def _compress_findings_with_ai(
 
 
 def _resolve_chat_max_tokens(config: dict[str, Any]) -> int:
+    """Resolve the maximum token count for chat from the application config.
+
+    Reads ``analysis.ai_max_tokens`` from the config and validates it is
+    a positive integer.
+
+    Args:
+        config: The full application configuration dictionary.
+
+    Returns:
+        The resolved positive integer token limit.
+
+    Raises:
+        ValueError: If the token setting is missing, non-numeric, or not
+            a positive integer.
+    """
     analysis_config = config.get("analysis", {})
     if not isinstance(analysis_config, dict):
         raise ValueError(
@@ -1146,6 +1954,17 @@ def _resolve_chat_max_tokens(config: dict[str, Any]) -> int:
 
 
 def _resolve_hash_verification_path(case: dict[str, Any]) -> Path | None:
+    """Resolve the file path to use for evidence hash verification.
+
+    Checks ``source_path`` first, then falls back to ``evidence_path``.
+
+    Args:
+        case: The in-memory case state dictionary.
+
+    Returns:
+        A ``Path`` to the evidence file for hash verification, or ``None``
+        if neither source is available.
+    """
     source_path = str(case.get("source_path", "")).strip()
     if source_path:
         return Path(source_path)
@@ -1158,6 +1977,19 @@ def _resolve_hash_verification_path(case: dict[str, Any]) -> Path | None:
 
 
 def _resolve_case_csv_output_dir(case: dict[str, Any], config_snapshot: dict[str, Any]) -> Path:
+    """Resolve the output directory for parsed CSV files.
+
+    Uses the ``evidence.csv_output_dir`` config setting if present,
+    appending the case ID as a subdirectory. Falls back to
+    ``<case_dir>/parsed``.
+
+    Args:
+        case: The in-memory case state dictionary.
+        config_snapshot: A snapshot of the application configuration.
+
+    Returns:
+        Absolute ``Path`` to the CSV output directory for this case.
+    """
     config = config_snapshot if isinstance(config_snapshot, dict) else {}
     evidence_config = config.get("evidence", {}) if isinstance(config, dict) else {}
     configured = str(evidence_config.get("csv_output_dir", "")).strip() if isinstance(evidence_config, dict) else ""
@@ -1176,10 +2008,23 @@ def _resolve_case_csv_output_dir(case: dict[str, Any], config_snapshot: dict[str
 
 
 def _collect_case_csv_paths(case: dict[str, Any]) -> list[Path]:
+    """Collect all parsed CSV file paths for a case.
+
+    Gathers paths from ``artifact_csv_paths``, ``parse_results``, and
+    falls back to globbing ``<case_dir>/parsed/*.csv``. Results are
+    deduplicated and sorted by filename.
+
+    Args:
+        case: The in-memory case state dictionary.
+
+    Returns:
+        A sorted list of existing CSV file ``Path`` objects.
+    """
     collected: list[Path] = []
     seen: set[str] = set()
 
     def _add_path(candidate: Any) -> None:
+        """Add a CSV path to the collection if it exists and is not a duplicate."""
         path_text = str(candidate or "").strip()
         if not path_text:
             return
@@ -1223,6 +2068,23 @@ def _run_parse(
     artifact_options: list[dict[str, str]],
     config_snapshot: dict[str, Any],
 ) -> None:
+    """Execute background parsing of selected forensic artifacts.
+
+    Opens a ``ForensicParser`` for the case's evidence, iterates over
+    each artifact, emits SSE progress events, and stores results in the
+    case's in-memory state. On failure, marks the case as errored and
+    emits a failure event.
+
+    Args:
+        case_id: UUID of the case to parse.
+        parse_artifacts: List of artifact keys to parse.
+        analysis_artifacts: Subset of artifact keys to include in AI
+            analysis.
+        artifact_options: Canonical artifact option dicts with per-artifact
+            mode settings.
+        config_snapshot: Deep copy of the application config at the time
+            parsing was initiated.
+    """
     case = _get_case(case_id)
     if case is None:
         _set_progress_status(PARSE_PROGRESS, case_id, "failed", "Case not found.")
@@ -1260,6 +2122,7 @@ def _run_parse(
             )
 
             def _progress_callback(*args: Any, **_kwargs: Any) -> None:
+                """Emit per-artifact parse progress events to the SSE store."""
                 artifact_key, record_count = _extract_parse_progress(artifact, args)
                 _emit_progress(
                     PARSE_PROGRESS,
@@ -1322,6 +2185,19 @@ def _run_parse(
 
 
 def _run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> None:
+    """Execute background AI-powered forensic analysis of parsed artifacts.
+
+    Creates a ``ForensicAnalyzer``, runs the full analysis pipeline,
+    persists results to disk and in-memory state, and emits SSE progress
+    events. On failure, marks the case as errored.
+
+    Args:
+        case_id: UUID of the case to analyze.
+        prompt: Investigation context / user prompt describing what to
+            look for in the evidence.
+        config_snapshot: Deep copy of the application config at the time
+            analysis was initiated.
+    """
     case = _get_case(case_id)
     if case is None:
         _set_progress_status(ANALYSIS_PROGRESS, case_id, "failed", "Case not found.")
@@ -1373,6 +2249,7 @@ def _run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) ->
             }
 
         def _analysis_progress(*args: Any) -> None:
+            """Emit per-artifact analysis progress events to the SSE store."""
             artifact_key = ""
             status = ""
             result: dict[str, Any] = {}
@@ -1474,6 +2351,19 @@ def _run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) ->
 
 
 def _run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> None:
+    """Execute a background chat interaction with the AI about analysis results.
+
+    Builds the conversation context from analysis results and chat history,
+    optionally compresses findings if they exceed the token budget, streams
+    AI response tokens as SSE events, and persists the exchange to chat
+    history.
+
+    Args:
+        case_id: UUID of the case for the chat session.
+        message: The user's chat message / question.
+        config_snapshot: Deep copy of the application config at the time
+            the chat was initiated.
+    """
     case = _get_case(case_id)
     if case is None:
         _set_progress_status(CHAT_PROGRESS, case_id, "failed", "Case not found.")
@@ -1678,6 +2568,18 @@ def _run_parse_with_case_log_context(
     artifact_options: list[dict[str, str]],
     config_snapshot: dict[str, Any],
 ) -> None:
+    """Wrapper that runs ``_run_parse`` within case-scoped logging context.
+
+    Ensures all log messages emitted during background parsing are tagged
+    with the case ID.
+
+    Args:
+        case_id: UUID of the case to parse.
+        parse_artifacts: List of artifact keys to parse.
+        analysis_artifacts: Subset of artifact keys for AI analysis.
+        artifact_options: Canonical artifact option dicts.
+        config_snapshot: Deep copy of the application config.
+    """
     with case_log_context(case_id):
         _run_parse(
             case_id=case_id,
@@ -1689,17 +2591,37 @@ def _run_parse_with_case_log_context(
 
 
 def _run_analysis_with_case_log_context(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> None:
+    """Wrapper that runs ``_run_analysis`` within case-scoped logging context.
+
+    Args:
+        case_id: UUID of the case to analyze.
+        prompt: Investigation context / user prompt.
+        config_snapshot: Deep copy of the application config.
+    """
     with case_log_context(case_id):
         _run_analysis(case_id=case_id, prompt=prompt, config_snapshot=config_snapshot)
 
 
 def _run_chat_with_case_log_context(case_id: str, message: str, config_snapshot: dict[str, Any]) -> None:
+    """Wrapper that runs ``_run_chat`` within case-scoped logging context.
+
+    Args:
+        case_id: UUID of the case for the chat session.
+        message: The user's chat message.
+        config_snapshot: Deep copy of the application config.
+    """
     with case_log_context(case_id):
         _run_chat(case_id=case_id, message=message, config_snapshot=config_snapshot)
 
 
 @routes_bp.get("/")
 def index() -> str:
+    """Serve the main single-page application HTML.
+
+    Returns:
+        Rendered ``index.html`` template with logo filename and tool version
+        injected as template variables.
+    """
     return render_template(
         "index.html",
         logo_filename=_resolve_logo_filename(),
@@ -1709,6 +2631,12 @@ def index() -> str:
 
 @routes_bp.get("/favicon.ico")
 def favicon() -> Response | tuple[Response, int]:
+    """Serve the application favicon using the resolved logo image.
+
+    Returns:
+        The logo image file as a response, or a 404 JSON error if no
+        logo image is found.
+    """
     logo_filename = _resolve_logo_filename()
     if not logo_filename:
         return _error("Icon not found.", 404)
@@ -1717,6 +2645,19 @@ def favicon() -> Response | tuple[Response, int]:
 
 @routes_bp.get("/images/<path:filename>")
 def image_asset(filename: str) -> Response | tuple[Response, int]:
+    """Serve a static image asset from the images directory.
+
+    Validates the filename to prevent path traversal and serves the
+    file if it exists.
+
+    Args:
+        filename: Name of the image file to serve (no directory components
+            allowed).
+
+    Returns:
+        The image file as a response, or a JSON error with appropriate
+        status code (400 for invalid filename, 404 for missing file).
+    """
     if not IMAGES_ROOT.is_dir():
         return _error("Image directory not found.", 404)
 
@@ -1735,6 +2676,16 @@ def image_asset(filename: str) -> Response | tuple[Response, int]:
 
 @routes_bp.post("/api/cases")
 def create_case() -> tuple[Response, int]:
+    """Create a new forensic analysis case.
+
+    Initializes case directories (evidence, parsed, reports), sets up
+    audit logging, and registers the case in the in-memory state store.
+    Cleans up terminal cases to prevent unbounded memory growth.
+
+    Returns:
+        A tuple of ``(Response, 201)`` with the new ``case_id`` and
+        ``case_name``, or ``(Response, 500)`` on filesystem errors.
+    """
     _cleanup_terminal_cases()
 
     payload = request.get_json(silent=True) or {}
@@ -1802,6 +2753,20 @@ def create_case() -> tuple[Response, int]:
 
 @routes_bp.post("/api/cases/<case_id>/evidence")
 def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
+    """Ingest evidence for an existing case.
+
+    Accepts evidence via multipart file upload or JSON path reference.
+    Computes integrity hashes, opens the evidence with Dissect to extract
+    metadata and available artifacts, and records the intake in the audit
+    log.
+
+    Args:
+        case_id: UUID of the case to attach evidence to.
+
+    Returns:
+        JSON response with evidence metadata, hashes, and available
+        artifacts, or a JSON error with appropriate status code.
+    """
     case = _get_case(case_id)
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
@@ -1891,6 +2856,19 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
 
 @routes_bp.post("/api/cases/<case_id>/parse")
 def start_parse(case_id: str) -> tuple[Response, int]:
+    """Start background parsing of selected forensic artifacts.
+
+    Validates the artifact selection, initializes parsing progress, and
+    launches a background thread to run the parser. Progress is streamed
+    via the ``/parse/progress`` SSE endpoint.
+
+    Args:
+        case_id: UUID of the case to parse.
+
+    Returns:
+        A tuple of ``(Response, 202)`` confirming parsing has started,
+        or a JSON error with status 400/404/409.
+    """
     case = _get_case(case_id)
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
@@ -1958,6 +2936,15 @@ def start_parse(case_id: str) -> tuple[Response, int]:
 
 @routes_bp.get("/api/cases/<case_id>/parse/progress")
 def stream_parse_progress(case_id: str) -> Response | tuple[Response, int]:
+    """Stream parsing progress events via Server-Sent Events.
+
+    Args:
+        case_id: UUID of the case whose parse progress to stream.
+
+    Returns:
+        An SSE ``Response`` stream, or a 404 JSON error if the case is
+        not found.
+    """
     if _get_case(case_id) is None:
         return _error(f"Case not found: {case_id}", 404)
     return _stream_sse(PARSE_PROGRESS, case_id)
@@ -1965,6 +2952,19 @@ def stream_parse_progress(case_id: str) -> Response | tuple[Response, int]:
 
 @routes_bp.post("/api/cases/<case_id>/analyze")
 def start_analysis(case_id: str) -> tuple[Response, int]:
+    """Start background AI-powered analysis of parsed artifacts.
+
+    Validates that parsed artifacts exist, saves the investigation prompt,
+    and launches a background thread to run the analyzer. Progress is
+    streamed via the ``/analyze/progress`` SSE endpoint.
+
+    Args:
+        case_id: UUID of the case to analyze.
+
+    Returns:
+        A tuple of ``(Response, 202)`` confirming analysis has started,
+        or a JSON error with status 400/404/409.
+    """
     case = _get_case(case_id)
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
@@ -2035,6 +3035,15 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
 
 @routes_bp.get("/api/cases/<case_id>/analyze/progress")
 def stream_analysis_progress(case_id: str) -> Response | tuple[Response, int]:
+    """Stream analysis progress events via Server-Sent Events.
+
+    Args:
+        case_id: UUID of the case whose analysis progress to stream.
+
+    Returns:
+        An SSE ``Response`` stream, or a 404 JSON error if the case is
+        not found.
+    """
     if _get_case(case_id) is None:
         return _error(f"Case not found: {case_id}", 404)
     return _stream_sse(ANALYSIS_PROGRESS, case_id)
@@ -2042,6 +3051,19 @@ def stream_analysis_progress(case_id: str) -> Response | tuple[Response, int]:
 
 @routes_bp.post("/api/cases/<case_id>/chat")
 def chat_with_case(case_id: str) -> Response | tuple[Response, int]:
+    """Initiate a chat interaction with the AI about completed analysis results.
+
+    Validates the request payload, checks that analysis results exist,
+    and launches a background thread for the AI chat exchange. Response
+    tokens are streamed via the ``/chat/stream`` SSE endpoint.
+
+    Args:
+        case_id: UUID of the case to chat about.
+
+    Returns:
+        A tuple of ``(Response, 202)`` confirming chat processing has
+        started, or a JSON error with status 400/404/409/500.
+    """
     case = _get_case(case_id)
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
@@ -2078,6 +3100,15 @@ def chat_with_case(case_id: str) -> Response | tuple[Response, int]:
 
 @routes_bp.get("/api/cases/<case_id>/chat/stream")
 def stream_chat_progress(case_id: str) -> Response | tuple[Response, int]:
+    """Stream chat response tokens via Server-Sent Events.
+
+    Args:
+        case_id: UUID of the case whose chat progress to stream.
+
+    Returns:
+        An SSE ``Response`` stream, or a 404 JSON error if the case is
+        not found.
+    """
     if _get_case(case_id) is None:
         return _error(f"Case not found: {case_id}", 404)
     return _stream_sse(CHAT_PROGRESS, case_id)
@@ -2085,6 +3116,15 @@ def stream_chat_progress(case_id: str) -> Response | tuple[Response, int]:
 
 @routes_bp.get("/api/cases/<case_id>/chat/history")
 def get_case_chat_history(case_id: str) -> Response | tuple[Response, int]:
+    """Retrieve the full chat message history for a case.
+
+    Args:
+        case_id: UUID of the case whose chat history to retrieve.
+
+    Returns:
+        JSON response containing the list of chat messages, or a 404
+        JSON error if the case is not found.
+    """
     case = _get_case(case_id)
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
@@ -2094,6 +3134,17 @@ def get_case_chat_history(case_id: str) -> Response | tuple[Response, int]:
 
 @routes_bp.delete("/api/cases/<case_id>/chat/history")
 def clear_case_chat_history(case_id: str) -> Response | tuple[Response, int]:
+    """Clear the chat message history for a case.
+
+    Deletes all stored chat messages and logs the action to the audit trail.
+
+    Args:
+        case_id: UUID of the case whose chat history to clear.
+
+    Returns:
+        JSON response confirming the history was cleared, or a 404 JSON
+        error if the case is not found.
+    """
     case = _get_case(case_id)
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
@@ -2105,6 +3156,19 @@ def clear_case_chat_history(case_id: str) -> Response | tuple[Response, int]:
 
 @routes_bp.get("/api/cases/<case_id>/report")
 def download_report(case_id: str) -> Response | tuple[Response, int]:
+    """Generate and download the HTML forensic analysis report.
+
+    Verifies evidence integrity by re-computing hashes, generates the
+    report using ``ReportGenerator``, logs the generation to the audit
+    trail, and marks the case as completed.
+
+    Args:
+        case_id: UUID of the case to generate the report for.
+
+    Returns:
+        The HTML report file as an attachment download, or a JSON error
+        with status 400/404.
+    """
     case = _get_case(case_id)
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
@@ -2178,6 +3242,18 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
 
 @routes_bp.get("/api/cases/<case_id>/csvs")
 def download_csv_bundle(case_id: str) -> Response | tuple[Response, int]:
+    """Download all parsed CSV files as a ZIP archive.
+
+    Collects all CSV files for the case, bundles them into a ZIP archive
+    with deduplication of filenames, and returns it as a download.
+
+    Args:
+        case_id: UUID of the case whose CSV files to download.
+
+    Returns:
+        The ZIP archive as an attachment download, or a JSON error with
+        status 404 if the case or CSV files are not found.
+    """
     case = _get_case(case_id)
     if case is None:
         return _error(f"Case not found: {case_id}", 404)
@@ -2214,6 +3290,12 @@ def download_csv_bundle(case_id: str) -> Response | tuple[Response, int]:
 
 @routes_bp.get("/api/artifact-profiles")
 def list_artifact_profiles() -> Response:
+    """List all available artifact profiles.
+
+    Returns:
+        JSON response containing a ``"profiles"`` list with each profile's
+        name, builtin flag, and artifact options.
+    """
     config_path = Path(str(current_app.config.get("AIFT_CONFIG_PATH", "config.yaml")))
     profiles_root = _resolve_profiles_root(config_path)
     return jsonify({"profiles": _compose_profile_response(profiles_root)})
@@ -2221,6 +3303,15 @@ def list_artifact_profiles() -> Response:
 
 @routes_bp.post("/api/artifact-profiles")
 def save_artifact_profile() -> Response | tuple[Response, int]:
+    """Create or update a user-defined artifact profile.
+
+    Validates the profile name and artifact options, prevents overwriting
+    the built-in recommended profile, and persists the profile to disk.
+
+    Returns:
+        JSON response with the saved profile and updated profiles list,
+        or a JSON error with status 400/500.
+    """
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return _error("Profile payload must be a JSON object.", 400)
@@ -2284,6 +3375,12 @@ def save_artifact_profile() -> Response | tuple[Response, int]:
 
 @routes_bp.get("/api/settings")
 def get_settings() -> Response:
+    """Retrieve the current application settings with sensitive values masked.
+
+    Returns:
+        JSON response containing the full configuration dictionary with
+        API keys, tokens, and passwords replaced by ``MASKED``.
+    """
     config = current_app.config.get("AIFT_CONFIG", {})
     if not isinstance(config, dict):
         config = {}
@@ -2292,6 +3389,16 @@ def get_settings() -> Response:
 
 @routes_bp.post("/api/settings")
 def update_settings() -> Response | tuple[Response, int]:
+    """Update application settings by deep-merging the request payload.
+
+    Merges the submitted configuration into the current settings, saves
+    to disk, refreshes the in-memory config, and audits any changes to
+    active cases.
+
+    Returns:
+        JSON response with the updated (masked) configuration, or a 400
+        JSON error if the payload is invalid.
+    """
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return _error("Settings payload must be a JSON object.", 400)
@@ -2312,6 +3419,17 @@ def update_settings() -> Response | tuple[Response, int]:
 
 @routes_bp.post("/api/settings/test-connection")
 def test_settings_connection() -> Response | tuple[Response, int]:
+    """Test the configured AI provider connection.
+
+    Creates a provider instance from the current settings and sends a
+    short connectivity test prompt. Reports the model info and a preview
+    of the response.
+
+    Returns:
+        JSON response with ``"status": "ok"``, model info, and response
+        preview on success, or a JSON error with status 400/500/502 on
+        failure.
+    """
     config = current_app.config.get("AIFT_CONFIG", {})
     if not isinstance(config, dict):
         return _error("Invalid in-memory configuration state.", 500)
@@ -2354,7 +3472,14 @@ def test_settings_connection() -> Response | tuple[Response, int]:
 
 
 def register_routes(app: Flask) -> None:
-    """Register all routes for AIFT."""
+    """Register all HTTP route handlers with the Flask application.
+
+    Attaches the ``routes_bp`` blueprint containing all AIFT endpoint
+    definitions to the given Flask app instance.
+
+    Args:
+        app: The Flask application instance to register routes on.
+    """
     app.register_blueprint(routes_bp)
 
 

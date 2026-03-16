@@ -1,4 +1,28 @@
-"""Chat history storage for post-analysis Q&A."""
+"""Chat history storage and context management for post-analysis Q&A.
+
+Provides the :class:`ChatManager` class that persists per-case chat
+conversations as JSONL files and builds context blocks for AI follow-up
+questions after an analysis is complete.
+
+Key responsibilities:
+
+* **Message persistence** -- Append-only JSONL storage of user/assistant
+  message pairs with UTC timestamps, analogous to the audit trail but
+  scoped to interactive chat.
+* **Context assembly** -- Combines investigation context, system metadata,
+  executive summary, and per-artifact findings into a single text block
+  suitable for injection into an AI system prompt.
+* **Token budgeting** -- Estimates token counts and trims conversation
+  history to fit within a configurable context window, dropping the oldest
+  pairs first.
+* **CSV data retrieval** -- Heuristically matches user questions to parsed
+  artifact CSV files and injects relevant rows into the prompt so the AI
+  can answer data-specific queries (e.g. "show me the prefetch entries").
+
+Attributes:
+    VALID_ROLES: Frozenset of accepted message role strings
+        (``"user"`` and ``"assistant"``).
+"""
 
 from __future__ import annotations
 
@@ -17,7 +41,19 @@ VALID_ROLES = frozenset({"user", "assistant"})
 
 
 class ChatManager:
-    """Persist and retrieve case-scoped chat history records."""
+    """Persist and retrieve case-scoped chat history records.
+
+    Each instance is bound to a single case directory and manages a
+    ``chat_history.jsonl`` file containing timestamped user/assistant
+    message pairs.  The manager also assembles context blocks for AI
+    prompts by combining analysis results, investigation context, and
+    system metadata.
+
+    Attributes:
+        MAX_CONTEXT_TOKENS: Maximum token budget for chat context assembly.
+        case_dir: Resolved path to the case directory.
+        chat_file: Path to the ``chat_history.jsonl`` file.
+    """
 
     MAX_CONTEXT_TOKENS = 100000
     _CSV_RETRIEVAL_KEYWORDS = (
@@ -32,6 +68,15 @@ class ChatManager:
     _CSV_ROW_LIMIT = 500
 
     def __init__(self, case_dir: str | Path, max_context_tokens: int | None = None) -> None:
+        """Initialise the chat manager for a case directory.
+
+        Args:
+            case_dir: Path to the case directory.  Created if it does
+                not exist when messages are first written.
+            max_context_tokens: Optional override for the maximum token
+                budget.  Falls back to :attr:`MAX_CONTEXT_TOKENS` when
+                *None* or invalid.
+        """
         self.case_dir = Path(case_dir)
         self.chat_file = self.case_dir / "chat_history.jsonl"
         self.MAX_CONTEXT_TOKENS = self._resolve_max_context_tokens(max_context_tokens)
@@ -42,7 +87,23 @@ class ChatManager:
         content: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Append one message entry to the case chat JSONL history."""
+        """Append one message entry to the case chat JSONL history.
+
+        The message is written as a single JSON line with a UTC ISO 8601
+        timestamp.  The file is opened, written, and flushed for each call
+        to minimise data loss on unexpected termination.
+
+        Args:
+            role: Message role -- must be ``"user"`` or ``"assistant"``.
+            content: The message text.
+            metadata: Optional dictionary of extra metadata to attach to
+                the record (e.g. token counts, retrieval info).
+
+        Raises:
+            ValueError: If *role* is not in :data:`VALID_ROLES`.
+            TypeError: If *content* is not a string or *metadata* is not a
+                dict when provided.
+        """
         normalized_role = str(role).strip().lower()
         if normalized_role not in VALID_ROLES:
             allowed = ", ".join(sorted(VALID_ROLES))
@@ -67,7 +128,15 @@ class ChatManager:
             chat_stream.flush()
 
     def get_history(self) -> list[dict[str, Any]]:
-        """Load the full chat history in insertion order."""
+        """Load the full chat history in insertion order.
+
+        Reads every line from ``chat_history.jsonl``, skipping blank lines
+        and malformed JSON entries (which are logged as warnings).
+
+        Returns:
+            A list of message dictionaries, each containing at least
+            ``timestamp``, ``role``, and ``content`` keys.
+        """
         if not self.chat_file.exists():
             return []
 
@@ -87,7 +156,19 @@ class ChatManager:
         return history
 
     def get_recent_history(self, max_pairs: int = 20) -> list[dict[str, Any]]:
-        """Return the most recent complete user/assistant message pairs."""
+        """Return the most recent complete user/assistant message pairs.
+
+        Messages are paired in order: a ``user`` message followed by the
+        next ``assistant`` message forms a pair.  Only the last
+        *max_pairs* complete pairs are returned.
+
+        Args:
+            max_pairs: Maximum number of user/assistant pairs to return.
+
+        Returns:
+            A flat list of message dictionaries alternating
+            ``[user, assistant, user, assistant, ...]``.
+        """
         if max_pairs <= 0:
             return []
 
@@ -112,7 +193,11 @@ class ChatManager:
         return recent_history
 
     def clear(self) -> None:
-        """Delete the chat history file when present."""
+        """Delete the chat history file when present.
+
+        This is a destructive operation -- all chat messages for this
+        case are permanently removed.
+        """
         if self.chat_file.exists():
             self.chat_file.unlink()
 
@@ -122,7 +207,24 @@ class ChatManager:
         investigation_context: str,
         metadata: Mapping[str, Any] | None,
     ) -> str:
-        """Build a compact, complete context block for chat prompts."""
+        """Build a compact, complete context block for chat prompts.
+
+        Assembles investigation context, system metadata (hostname, OS,
+        domain), executive summary, and per-artifact findings into a
+        single multi-section text string suitable for injection into an
+        AI system prompt.
+
+        Args:
+            analysis_results: The full analysis results mapping (may
+                contain ``summary`` and ``per_artifact`` keys).
+            investigation_context: Free-text investigation context
+                provided by the analyst.
+            metadata: Evidence metadata mapping (hostname, os_version,
+                domain, etc.).
+
+        Returns:
+            A formatted multi-section context string.
+        """
         analysis = analysis_results if isinstance(analysis_results, Mapping) else {}
         metadata_map = metadata if isinstance(metadata, Mapping) else {}
 
@@ -150,7 +252,16 @@ class ChatManager:
         return "\n\n".join(sections)
 
     def context_needs_compression(self, context_block: str, token_budget: int) -> bool:
-        """Return True when the context block exceeds 80% of the token budget."""
+        """Return *True* when the context block exceeds 80 % of the token budget.
+
+        Args:
+            context_block: The assembled context text to measure.
+            token_budget: Maximum token allowance for the context window.
+
+        Returns:
+            *True* if the estimated token count of *context_block* exceeds
+            80 % of *token_budget*, *False* otherwise.
+        """
         if token_budget <= 0:
             return False
         return self.estimate_token_count(context_block) > int(token_budget * 0.8)
@@ -162,7 +273,24 @@ class ChatManager:
         metadata: Mapping[str, Any] | None,
         compressed_findings: str,
     ) -> str:
-        """Rebuild the context block using pre-compressed per-artifact findings."""
+        """Rebuild the context block using pre-compressed per-artifact findings.
+
+        Identical to :meth:`build_chat_context` except that the
+        per-artifact section is replaced with an externally compressed
+        version of the findings, used when the full context exceeds the
+        token budget.
+
+        Args:
+            analysis_results: The full analysis results mapping.
+            investigation_context: Free-text investigation context.
+            metadata: Evidence metadata mapping.
+            compressed_findings: Pre-compressed per-artifact findings
+                text to substitute into the context block.
+
+        Returns:
+            A formatted multi-section context string with compressed
+            findings.
+        """
         analysis = analysis_results if isinstance(analysis_results, Mapping) else {}
         metadata_map = metadata if isinstance(metadata, Mapping) else {}
 
@@ -189,7 +317,23 @@ class ChatManager:
         return "\n\n".join(sections)
 
     def retrieve_csv_data(self, question: str, parsed_dir: str | Path) -> dict[str, Any]:
-        """Best-effort retrieval of raw CSV rows for data-centric chat questions."""
+        """Best-effort retrieval of raw CSV rows for data-centric chat questions.
+
+        Heuristically matches the user's *question* against parsed artifact
+        CSV filenames and column headers.  When a match is found, up to
+        :attr:`_CSV_ROW_LIMIT` rows are read and formatted as a structured
+        text block for injection into the AI prompt.
+
+        Args:
+            question: The user's chat question text.
+            parsed_dir: Path to the directory containing parsed artifact
+                CSV files.
+
+        Returns:
+            A dictionary with a ``retrieved`` boolean.  When *True*, also
+            includes ``artifacts`` (list of matched CSV filenames) and
+            ``data`` (formatted row text).
+        """
         question_text = self._stringify(question)
         if not question_text:
             return {"retrieved": False}
@@ -280,7 +424,14 @@ class ChatManager:
         }
 
     def estimate_token_count(self, text: str) -> int:
-        """Estimate token count using a rough 4-characters-per-token ratio."""
+        """Estimate token count using a rough 4-characters-per-token ratio.
+
+        Args:
+            text: The string to estimate tokens for.
+
+        Returns:
+            Approximate token count (integer).
+        """
         if not text:
             return 0
         return int(len(text) / 4)
@@ -292,8 +443,17 @@ class ChatManager:
     ) -> list[dict[str, Any]]:
         """Trim conversation history to fit within *max_tokens*.
 
-        Drops the oldest complete user/assistant pairs first.  Returns a
-        (possibly shorter) list that fits within the budget.
+        Pairs up user/assistant messages and drops the oldest complete
+        pairs first until the estimated total token count fits within
+        the budget.
+
+        Args:
+            history: Flat list of message dictionaries to trim.
+            max_tokens: Maximum token budget for the returned history.
+
+        Returns:
+            A (possibly shorter) flat list of message dictionaries that
+            fits within *max_tokens*.
         """
         if max_tokens <= 0:
             return []
@@ -330,6 +490,17 @@ class ChatManager:
 
     @classmethod
     def _resolve_max_context_tokens(cls, value: Any) -> int:
+        """Coerce *value* to a positive integer token limit.
+
+        Falls back to :attr:`MAX_CONTEXT_TOKENS` when *value* is *None*
+        or cannot be converted to an integer.
+
+        Args:
+            value: Candidate token limit value.
+
+        Returns:
+            A positive integer (minimum 1).
+        """
         try:
             resolved = int(value) if value is not None else int(cls.MAX_CONTEXT_TOKENS)
         except (TypeError, ValueError):
@@ -338,10 +509,32 @@ class ChatManager:
 
     @staticmethod
     def _stringify(value: Any, default: str = "") -> str:
+        """Convert *value* to a stripped string, returning *default* when empty.
+
+        Args:
+            value: Arbitrary value to stringify.
+            default: Fallback string when *value* is *None* or blank.
+
+        Returns:
+            The stripped string representation or *default*.
+        """
         text = str(value).strip() if value is not None else ""
         return text or default
 
     def _format_per_artifact_findings(self, analysis_results: Mapping[str, Any]) -> str:
+        """Format per-artifact findings as a bulleted text block.
+
+        Handles multiple input shapes (dict keyed by artifact name, list
+        of finding dicts, or list of raw strings) and normalises them
+        into ``- artifact_name: analysis_text`` lines.
+
+        Args:
+            analysis_results: The full analysis results mapping.
+
+        Returns:
+            A newline-joined string of bullet-pointed findings, or a
+            placeholder message when no findings are available.
+        """
         raw_findings = analysis_results.get("per_artifact")
         if raw_findings is None:
             raw_findings = analysis_results.get("per_artifact_findings")
@@ -387,6 +580,18 @@ class ChatManager:
 
     @staticmethod
     def _build_csv_aliases(csv_path: Path) -> set[str]:
+        """Build a set of lowercase name aliases for a CSV file.
+
+        Aliases include the full filename, stem, space-separated stem,
+        base name (without ``_partN`` suffixes), and leading segments
+        before the first underscore.
+
+        Args:
+            csv_path: Path to the CSV file.
+
+        Returns:
+            A set of non-empty lowercase alias strings.
+        """
         stem = csv_path.stem.lower()
         base = re.sub(r"_part\d+$", "", stem)
         aliases = {
@@ -404,6 +609,20 @@ class ChatManager:
 
     @staticmethod
     def _contains_heuristic_term(question_lower: str, term: str) -> bool:
+        """Check whether *term* appears as a distinct token in *question_lower*.
+
+        Uses a word-boundary regex so that short substrings do not
+        produce false positives.  Terms shorter than 3 characters are
+        always rejected.
+
+        Args:
+            question_lower: Lowercased question text to search.
+            term: Candidate term to look for.
+
+        Returns:
+            *True* when *term* (>= 3 chars) appears on a word boundary
+            in *question_lower*.
+        """
         normalized = term.strip().lower()
         if len(normalized) < 3:
             return False
@@ -411,6 +630,15 @@ class ChatManager:
         return re.search(pattern, question_lower) is not None
 
     def _read_csv_headers(self, csv_path: Path) -> list[str]:
+        """Read and return the header row from a CSV file.
+
+        Args:
+            csv_path: Path to the CSV file.
+
+        Returns:
+            A list of non-empty, stripped header strings.  Returns an
+            empty list on read failure.
+        """
         try:
             with csv_path.open("r", encoding="utf-8-sig", newline="", errors="replace") as csv_stream:
                 header_row = next(csv.reader(csv_stream), [])
@@ -426,6 +654,21 @@ class ChatManager:
         return headers
 
     def _read_csv_rows(self, csv_path: Path, limit: int) -> tuple[list[str], list[dict[str, str]]]:
+        """Read up to *limit* data rows from a CSV file.
+
+        Values are whitespace-collapsed and truncated to 240 characters
+        to keep the resulting text compact for AI prompt injection.
+
+        Args:
+            csv_path: Path to the CSV file.
+            limit: Maximum number of data rows to read.
+
+        Returns:
+            A tuple of ``(headers, rows)`` where *headers* is a list of
+            column name strings and *rows* is a list of ordered
+            dictionaries mapping column names to string values.  Returns
+            ``([], [])`` on read failure or when *limit* is non-positive.
+        """
         if limit <= 0:
             return [], []
 

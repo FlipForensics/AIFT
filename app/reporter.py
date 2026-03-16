@@ -1,4 +1,29 @@
-"""HTML report generation utilities."""
+"""HTML report generation for forensic analysis results.
+
+Renders AI analysis findings, evidence metadata, hash verification status,
+and the audit trail into a self-contained HTML file using Jinja2 templates.
+The generated report includes all CSS inlined so it can be opened as a
+standalone file without a web server.
+
+Key capabilities:
+
+* **Markdown rendering** -- AI-produced Markdown (headings, lists, bold,
+  italic, code spans, tables, code fences) is converted to HTML for
+  display in the report.
+* **Confidence highlighting** -- Severity tokens (``CRITICAL``, ``HIGH``,
+  ``MEDIUM``, ``LOW``) are wrapped in coloured ``<span>`` elements.
+* **Flexible input normalisation** -- Per-artifact findings can be
+  supplied as a list, a dict keyed by artifact name, or a single finding
+  mapping; the generator coerces all shapes into a uniform list.
+* **Logo embedding** -- The project logo is base64-encoded and embedded as
+  a ``data:`` URI so the report is fully self-contained.
+
+Attributes:
+    DEFAULT_CASE_NAME: Fallback case name when none is provided.
+    DEFAULT_TOOL_VERSION: AIFT version from :mod:`app.version`.
+    DEFAULT_AI_PROVIDER: Placeholder string when the provider is unknown.
+    CONFIDENCE_CLASS_MAP: Maps severity label strings to CSS class names.
+"""
 
 from __future__ import annotations
 
@@ -40,7 +65,19 @@ CONFIDENCE_CLASS_MAP = {
 
 
 class ReportGenerator:
-    """Render investigation results into a standalone HTML report."""
+    """Render investigation results into a standalone HTML report.
+
+    Sets up a Jinja2 :class:`~jinja2.Environment` with custom filters for
+    Markdown-to-HTML conversion and confidence token highlighting.  The
+    :meth:`generate` method assembles all case data into a template context
+    and writes the rendered HTML to the case's ``reports/`` directory.
+
+    Attributes:
+        templates_dir: Directory containing Jinja2 HTML templates.
+        cases_root: Parent directory where case subdirectories live.
+        environment: Configured Jinja2 rendering environment.
+        template: The loaded report template object.
+    """
 
     def __init__(
         self,
@@ -48,6 +85,15 @@ class ReportGenerator:
         cases_root: str | Path | None = None,
         template_name: str = "report_template.html",
     ) -> None:
+        """Initialise the report generator.
+
+        Args:
+            templates_dir: Path to the Jinja2 templates directory.  Defaults
+                to ``<project_root>/templates/``.
+            cases_root: Parent directory for case output.  Defaults to
+                ``<project_root>/cases/``.
+            template_name: Filename of the Jinja2 report template.
+        """
         project_root = Path(__file__).resolve().parents[1]
         self.templates_dir = Path(templates_dir) if templates_dir is not None else project_root / "templates"
         self.cases_root = Path(cases_root) if cases_root is not None else project_root / "cases"
@@ -70,7 +116,29 @@ class ReportGenerator:
         investigation_context: str,
         audit_log_entries: list[dict[str, Any]],
     ) -> Path:
-        """Generate a standalone HTML report and return the created file path."""
+        """Generate a standalone HTML report and write it to disk.
+
+        Assembles evidence metadata, AI analysis, hash verification, and
+        the audit trail into a Jinja2 template context, renders the HTML,
+        and writes the output to ``cases/<case_id>/reports/``.
+
+        Args:
+            analysis_results: Dictionary containing per-artifact findings,
+                executive summary, model info, and case identifiers.
+            image_metadata: System metadata from the disk image (hostname,
+                OS version, domain, IPs, etc.).
+            evidence_hashes: Hash digests and verification status from
+                evidence intake.
+            investigation_context: Free-text description of the
+                investigation scope and timeline.
+            audit_log_entries: List of audit trail JSONL records.
+
+        Returns:
+            :class:`~pathlib.Path` to the generated HTML report file.
+
+        Raises:
+            ValueError: If a case identifier cannot be determined.
+        """
         analysis = dict(analysis_results or {})
         metadata = dict(image_metadata or {})
         hashes = dict(evidence_hashes or {})
@@ -113,6 +181,11 @@ class ReportGenerator:
         return report_path
 
     def _resolve_logo_data_uri(self) -> str:
+        """Locate the project logo and return it as a base64 ``data:`` URI.
+
+        Returns:
+            A ``data:image/...;base64,...`` string, or ``""`` if no logo found.
+        """
         project_root = Path(__file__).resolve().parents[1]
         images_dir = project_root / "images"
         if not images_dir.is_dir():
@@ -135,6 +208,14 @@ class ReportGenerator:
 
     @staticmethod
     def _file_to_data_uri(path: Path) -> str:
+        """Read a file and encode it as a base64 data URI string.
+
+        Args:
+            path: Path to the image file.
+
+        Returns:
+            A ``data:<mime>;base64,...`` URI string.
+        """
         mime_types = {
             ".png": "image/png",
             ".jpg": "image/jpeg",
@@ -152,6 +233,11 @@ class ReportGenerator:
         metadata: Mapping[str, Any],
         hashes: Mapping[str, Any],
     ) -> str:
+        """Extract and sanitise a case ID from the available data sources.
+
+        Raises:
+            ValueError: If no case identifier can be determined.
+        """
         candidates = [
             analysis.get("case_id"),
             analysis.get("id"),
@@ -173,6 +259,7 @@ class ReportGenerator:
         raise ValueError("Unable to determine case identifier for report generation.")
 
     def _resolve_case_name(self, analysis: Mapping[str, Any]) -> str:
+        """Determine a human-readable case name, falling back to a default."""
         nested_case = analysis.get("case")
         if isinstance(nested_case, Mapping):
             nested_name = self._stringify(nested_case.get("name"), default="")
@@ -186,6 +273,7 @@ class ReportGenerator:
         analysis: Mapping[str, Any],
         audit_entries: list[dict[str, str]],
     ) -> str:
+        """Determine the tool version from analysis data or audit entries."""
         explicit_version = self._stringify(analysis.get("tool_version"), default="")
         if explicit_version:
             return explicit_version
@@ -198,6 +286,7 @@ class ReportGenerator:
         return DEFAULT_TOOL_VERSION
 
     def _resolve_ai_provider(self, analysis: Mapping[str, Any]) -> str:
+        """Determine the AI provider label for the report header."""
         explicit = self._stringify(analysis.get("ai_provider"), default="")
         if explicit:
             return explicit
@@ -217,6 +306,12 @@ class ReportGenerator:
         metadata: Mapping[str, Any],
         hashes: Mapping[str, Any],
     ) -> dict[str, str]:
+        """Assemble evidence summary fields for the report template.
+
+        Returns:
+            Dictionary with ``filename``, ``sha256``, ``md5``, ``file_size``,
+            ``hostname``, ``os_version``, ``domain``, and ``ips``.
+        """
         hostname = self._stringify(metadata.get("hostname"), default="Unknown")
         os_value = self._stringify(metadata.get("os_version") or metadata.get("os"), default="Unknown")
         domain = self._stringify(metadata.get("domain"), default="Unknown")
@@ -241,6 +336,12 @@ class ReportGenerator:
         }
 
     def _resolve_hash_verification(self, hashes: Mapping[str, Any]) -> dict[str, str | bool]:
+        """Determine hash verification PASS/FAIL status for the report.
+
+        Returns:
+            Dictionary with ``passed`` (bool), ``label`` (``"PASS"`` or
+            ``"FAIL"``), and ``detail`` (human-readable explanation).
+        """
         explicit = hashes.get("hash_verified")
         if explicit is None:
             explicit = hashes.get("verification_passed")
@@ -287,6 +388,17 @@ class ReportGenerator:
         }
 
     def _normalize_per_artifact_findings(self, analysis: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """Normalise per-artifact findings into a uniform list of dicts.
+
+        Accepts lists, dicts keyed by artifact name, or single-finding
+        mappings and coerces them into a list with consistent keys.
+
+        Returns:
+            List of dicts with ``artifact_name``, ``artifact_key``,
+            ``analysis``, ``record_count``, ``time_range_start``,
+            ``time_range_end``, ``key_data_points``, ``confidence_label``,
+            and ``confidence_class``.
+        """
         raw_findings = analysis.get("per_artifact")
         if raw_findings is None:
             raw_findings = analysis.get("per_artifact_findings")
@@ -342,6 +454,7 @@ class ReportGenerator:
         return findings
 
     def _coerce_per_artifact_iterable(self, raw_findings: Any) -> Sequence[Any]:
+        """Coerce various per-artifact finding shapes into a sequence."""
         if isinstance(raw_findings, Sequence) and not isinstance(raw_findings, (str, bytes, bytearray)):
             return raw_findings
 
@@ -376,6 +489,7 @@ class ReportGenerator:
 
     @staticmethod
     def _looks_like_single_finding(value: Mapping[str, Any]) -> bool:
+        """Return *True* if *value* appears to be a single finding mapping."""
         finding_keys = {
             "artifact_name",
             "name",
@@ -395,6 +509,7 @@ class ReportGenerator:
         return any(key in value for key in finding_keys)
 
     def _normalize_key_data_points(self, raw_points: Any) -> list[dict[str, str]]:
+        """Normalise key data points into a list of ``{timestamp, value}`` dicts."""
         if isinstance(raw_points, Sequence) and not isinstance(raw_points, (str, bytes, bytearray)):
             points: list[dict[str, str]] = []
             for point in raw_points:
@@ -428,6 +543,7 @@ class ReportGenerator:
         return []
 
     def _normalize_audit_entries(self, entries: Sequence[Any] | None) -> list[dict[str, str]]:
+        """Normalise raw audit log entries into template-ready dicts."""
         if entries is None:
             return []
 
@@ -458,6 +574,11 @@ class ReportGenerator:
 
     @staticmethod
     def _resolve_confidence(explicit_value: str, analysis_text: str) -> tuple[str, str]:
+        """Determine confidence label and CSS class from explicit value or text.
+
+        Returns:
+            Tuple of ``(label, css_class)`` -- e.g. ``("HIGH", "confidence-high")``.
+        """
         if explicit_value:
             label = explicit_value.strip().upper()
             if label in CONFIDENCE_CLASS_MAP:
@@ -472,6 +593,7 @@ class ReportGenerator:
 
     @staticmethod
     def _nested_lookup(mapping: Mapping[str, Any], path: tuple[str, str]) -> Any:
+        """Traverse a nested mapping using a two-element key path."""
         current: Any = mapping
         for key in path:
             if not isinstance(current, Mapping):
@@ -481,6 +603,7 @@ class ReportGenerator:
 
     @staticmethod
     def _coerce_mapping(value: Any) -> dict[str, Any] | None:
+        """Attempt to coerce *value* into a plain dict, or return *None*."""
         if isinstance(value, Mapping):
             return dict(value)
         if isinstance(value, str):
@@ -497,6 +620,7 @@ class ReportGenerator:
 
     @staticmethod
     def _format_file_size(size_value: Any) -> str:
+        """Format a byte count as a human-readable size string (e.g. ``1.50 GB``)."""
         if size_value is None:
             return "N/A"
 
@@ -520,6 +644,7 @@ class ReportGenerator:
 
     @staticmethod
     def _stringify_ips(value: Any) -> str:
+        """Format IP addresses as a comma-separated string."""
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
             cleaned = [str(item).strip() for item in value if str(item).strip()]
             return ", ".join(cleaned) if cleaned else "Unknown"
@@ -529,6 +654,7 @@ class ReportGenerator:
 
     @staticmethod
     def _mapping_to_kv_text(value: Mapping[str, Any]) -> str:
+        """Convert a mapping to a ``key=value; ...`` text representation."""
         parts = [
             f"{str(key)}={str(item)}"
             for key, item in value.items()
@@ -538,6 +664,7 @@ class ReportGenerator:
 
     @staticmethod
     def _stringify(value: Any, default: str = "") -> str:
+        """Convert *value* to a stripped string, returning *default* if empty."""
         if value is None:
             return default
         text = str(value).strip()
@@ -545,6 +672,18 @@ class ReportGenerator:
 
     @staticmethod
     def _format_block(value: Any) -> Markup:
+        """Escape plain text and convert it to safe HTML with line breaks.
+
+        Applies confidence-token highlighting (CRITICAL, HIGH, etc.)
+        and replaces newline characters with ``<br>`` tags.
+
+        Args:
+            value: Raw text to format.
+
+        Returns:
+            A :class:`~markupsafe.Markup` string safe for Jinja2
+            rendering, or an N/A placeholder when *value* is empty.
+        """
         text = ReportGenerator._stringify(value, default="")
         if not text:
             return Markup('<span class="empty-value">N/A</span>')
@@ -556,6 +695,15 @@ class ReportGenerator:
 
     @staticmethod
     def _format_markdown_block(value: Any) -> Markup:
+        """Convert Markdown text to HTML via :meth:`_markdown_to_html`.
+
+        Args:
+            value: Raw Markdown text to render.
+
+        Returns:
+            A :class:`~markupsafe.Markup` string of rendered HTML, or
+            an N/A placeholder when *value* is empty.
+        """
         text = ReportGenerator._stringify(value, default="")
         if not text:
             return Markup('<span class="empty-value">N/A</span>')
@@ -563,6 +711,18 @@ class ReportGenerator:
 
     @staticmethod
     def _highlight_confidence_tokens(text: str) -> str:
+        """Wrap severity tokens in coloured ``<span>`` elements.
+
+        Matches ``CRITICAL``, ``HIGH``, ``MEDIUM``, and ``LOW``
+        (case-insensitive) and wraps each in a ``<span>`` with the
+        corresponding CSS class from :data:`CONFIDENCE_CLASS_MAP`.
+
+        Args:
+            text: Pre-escaped HTML string to scan for severity tokens.
+
+        Returns:
+            The input string with severity tokens wrapped in spans.
+        """
         def _replace_confidence(match: re.Match[str]) -> str:
             token = match.group(1).upper()
             css_class = CONFIDENCE_CLASS_MAP.get(token, "confidence-unknown")
@@ -572,6 +732,18 @@ class ReportGenerator:
 
     @staticmethod
     def _render_inline_markdown(value: str) -> str:
+        """Render inline Markdown formatting to HTML.
+
+        Handles backtick code spans, bold (``**`` and ``__``), italic
+        (``*`` and ``_``), and confidence-token highlighting.  Code spans
+        are preserved verbatim; all other text is HTML-escaped first.
+
+        Args:
+            value: Raw inline Markdown text.
+
+        Returns:
+            An HTML string with inline formatting applied.
+        """
         source = str(value or "")
         if not source:
             return ""
@@ -596,6 +768,18 @@ class ReportGenerator:
 
     @staticmethod
     def _split_markdown_table_row(value: str) -> list[str]:
+        """Split a Markdown table row into cell strings.
+
+        Strips leading and trailing pipe characters before splitting on
+        the remaining pipes.  Returns an empty list when *value* does
+        not contain a pipe.
+
+        Args:
+            value: A single Markdown table row line.
+
+        Returns:
+            A list of stripped cell strings, or an empty list.
+        """
         row_text = str(value or "")
         if "|" not in row_text:
             return []
@@ -613,12 +797,35 @@ class ReportGenerator:
 
     @staticmethod
     def _is_markdown_table_separator_row(cells: Sequence[str]) -> bool:
+        """Determine whether *cells* represent a Markdown table separator row.
+
+        A separator row consists entirely of cells matching the pattern
+        ``:?-+:?`` (e.g. ``---``, ``:---:``, ``---:``).
+
+        Args:
+            cells: List of cell strings from a split table row.
+
+        Returns:
+            *True* when every cell matches the separator pattern.
+        """
         if not cells:
             return False
         return all(MARKDOWN_TABLE_SEPARATOR_CELL_PATTERN.match(str(cell).strip()) for cell in cells)
 
     @staticmethod
     def _normalize_table_row_cells(cells: Sequence[str], expected_count: int) -> list[str]:
+        """Pad or truncate *cells* to exactly *expected_count* entries.
+
+        Cells beyond *expected_count* are discarded; missing cells are
+        filled with empty strings.
+
+        Args:
+            cells: Raw cell values from a split table row.
+            expected_count: The desired number of columns.
+
+        Returns:
+            A list of exactly *expected_count* stripped cell strings.
+        """
         normalized = [str(cell).strip() for cell in cells[:expected_count]]
         if len(normalized) < expected_count:
             normalized.extend([""] * (expected_count - len(normalized)))
@@ -626,6 +833,19 @@ class ReportGenerator:
 
     @staticmethod
     def _render_markdown_table_html(header_cells: Sequence[str], body_rows: Sequence[Sequence[str]]) -> str:
+        """Render a parsed Markdown table as an HTML ``<table>`` element.
+
+        Each cell value is processed through :meth:`_render_inline_markdown`
+        so that inline formatting (bold, italic, code spans) is preserved.
+
+        Args:
+            header_cells: List of header cell strings.
+            body_rows: List of body row lists, each containing cell
+                strings matching the header column count.
+
+        Returns:
+            An HTML string containing the complete ``<table>`` element.
+        """
         header_html = "".join(f"<th>{ReportGenerator._render_inline_markdown(cell)}</th>" for cell in header_cells)
         table_html = [f"<table><thead><tr>{header_html}</tr></thead>"]
 
@@ -641,6 +861,21 @@ class ReportGenerator:
 
     @staticmethod
     def _markdown_to_html(value: str) -> str:
+        """Convert a complete Markdown text block to HTML.
+
+        Supports headings (``#`` through ``######``), ordered and
+        unordered lists, fenced code blocks (triple backticks), tables,
+        inline formatting (bold, italic, code spans), and
+        confidence-token highlighting.  Paragraphs are wrapped in
+        ``<p>`` tags with ``<br>`` line breaks.
+
+        Args:
+            value: Raw Markdown text (may contain multiple blocks).
+
+        Returns:
+            An HTML string with all recognised Markdown constructs
+            converted to their HTML equivalents.
+        """
         lines = str(value).replace("\r\n", "\n").replace("\r", "\n").split("\n")
         blocks: list[str] = []
         paragraph_lines: list[str] = []

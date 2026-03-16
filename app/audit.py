@@ -1,4 +1,25 @@
-"""Audit trail logging utilities."""
+"""Append-only forensic audit trail logging.
+
+Every significant action during an AIFT session (evidence intake, parsing,
+AI analysis, report generation, etc.) is recorded as a single-line JSON
+object in ``audit.jsonl`` inside the case directory.  This module provides
+the :class:`AuditLogger` that writes those entries and enforces a
+closed set of allowed action types via :data:`ACTION_TYPES`.
+
+The audit log is designed for forensic defensibility:
+
+* Entries are append-only and never overwritten.
+* Timestamps use UTC ISO 8601 with millisecond precision.
+* Each session receives a unique UUID so concurrent sessions are
+  distinguishable.
+* Tool and Dissect versions are embedded in every record.
+
+Attributes:
+    ACTION_TYPES: Closed set of valid action strings accepted by
+        :meth:`AuditLogger.log`.
+    DEFAULT_TOOL_VERSION: Version string embedded in audit records when
+        none is explicitly provided.
+"""
 
 from __future__ import annotations
 
@@ -68,7 +89,20 @@ def _json_default(value: Any) -> str:
 
 
 class AuditLogger:
-    """Append-only forensic audit logger writing JSONL entries per action."""
+    """Append-only forensic audit logger writing JSONL entries per action.
+
+    Each instance is bound to a single case directory and creates (or
+    appends to) ``audit.jsonl`` in that directory.  A unique session ID
+    is generated on construction and embedded in every record, allowing
+    multiple runs against the same case to be differentiated.
+
+    Attributes:
+        case_directory: Resolved path to the case directory.
+        audit_file: Path to the ``audit.jsonl`` file.
+        session_id: UUID string identifying this logger session.
+        tool_version: AIFT version recorded in every audit entry.
+        dissect_version: Dissect framework version string.
+    """
 
     def __init__(
         self,
@@ -76,6 +110,15 @@ class AuditLogger:
         tool_version: str = DEFAULT_TOOL_VERSION,
         dissect_version: str | None = None,
     ) -> None:
+        """Initialise the audit logger for a case directory.
+
+        Args:
+            case_directory: Path to the case directory.  Created if it
+                does not exist.
+            tool_version: AIFT version string to embed in records.
+            dissect_version: Explicit Dissect version.  Auto-detected
+                from installed packages when *None*.
+        """
         self.case_directory = Path(case_directory)
         self.case_directory.mkdir(parents=True, exist_ok=True)
 
@@ -89,7 +132,21 @@ class AuditLogger:
             audit_stream.flush()
 
     def log(self, action: str, details: dict[str, Any]) -> None:
-        """Append one audit line for the provided action."""
+        """Append one JSON-line audit record for *action*.
+
+        The record includes a UTC timestamp, session ID, tool and Dissect
+        versions, and the caller-supplied *details* dictionary.  The file
+        is opened, written, and flushed for each call to minimise data
+        loss on unexpected termination.
+
+        Args:
+            action: One of the strings in :data:`ACTION_TYPES`.
+            details: Arbitrary dictionary of action-specific metadata.
+
+        Raises:
+            ValueError: If *action* is not in :data:`ACTION_TYPES`.
+            TypeError: If *details* is not a dictionary.
+        """
         if action not in ACTION_TYPES:
             allowed = ", ".join(sorted(ACTION_TYPES))
             raise ValueError(f"Unsupported action '{action}'. Allowed values: {allowed}.")

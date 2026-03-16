@@ -1,4 +1,33 @@
-"""Dissect integration layer for artifact parsing."""
+"""Dissect integration layer for forensic artifact parsing.
+
+Wraps the Dissect framework's ``Target`` API to extract Windows forensic
+artifacts from disk images (E01, VMDK, VHD, raw, etc.) and stream them
+into CSV files for downstream AI analysis.
+
+Key responsibilities:
+
+* **Artifact registry** -- :data:`ARTIFACT_REGISTRY` catalogues every
+  supported artifact with its Dissect function name, forensic category,
+  human-readable description, and analysis guidance.
+* **Evidence opening** -- :class:`ForensicParser` opens a Dissect
+  ``Target`` in read-only mode from any supported container format.
+* **CSV streaming** -- Records are streamed to CSV one row at a time,
+  never materialised in memory, allowing safe handling of high-volume
+  artifacts such as EVTX and MFT (millions of records).
+* **EVTX splitting** -- Event log records are automatically partitioned
+  by channel/provider into separate CSV files, with additional part files
+  created when a single channel exceeds :data:`EVTX_MAX_RECORDS_PER_FILE`.
+* **Schema evolution** -- When a Dissect plugin yields records with
+  varying schemas, CSV headers are expanded dynamically and the file is
+  rewritten once to ensure a consistent header row.
+
+Attributes:
+    ARTIFACT_REGISTRY: Mapping of artifact key to metadata dict (name,
+        category, Dissect function, description, analysis hints).
+    UNKNOWN_VALUE: Sentinel string used when a target attribute cannot be read.
+    EVTX_MAX_RECORDS_PER_FILE: Maximum rows per EVTX CSV part file.
+    MAX_RECORDS_PER_ARTIFACT: Hard cap on rows written for any single artifact.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +48,17 @@ _ARTIFACT_PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts" / "artif
 
 
 def _artifact_prompt_name_candidates(artifact_key: str) -> list[str]:
+    """Generate candidate file stems for loading an artifact guidance prompt.
+
+    Produces variants with dots replaced by underscores and vice-versa so
+    that ``browser.history`` matches ``browser_history.md``.
+
+    Args:
+        artifact_key: Artifact identifier (e.g. ``"browser.history"``).
+
+    Returns:
+        List of lowercased candidate stems, deduplicated.
+    """
     base = str(artifact_key).strip().lower()
     if not base:
         return []
@@ -33,6 +73,14 @@ def _artifact_prompt_name_candidates(artifact_key: str) -> list[str]:
 
 
 def _load_artifact_guidance_prompt(artifact_key: str) -> str:
+    """Load a Markdown guidance prompt for an artifact from the prompts directory.
+
+    Args:
+        artifact_key: Artifact identifier to look up.
+
+    Returns:
+        The prompt text, or an empty string if no matching file is found.
+    """
     for prompt_stem in _artifact_prompt_name_candidates(artifact_key):
         prompt_path = _ARTIFACT_PROMPTS_DIR / f"{prompt_stem}.md"
         try:
@@ -46,6 +94,15 @@ def _load_artifact_guidance_prompt(artifact_key: str) -> str:
 
 
 def _apply_artifact_guidance_from_prompts(registry: dict[str, dict[str, str]]) -> None:
+    """Populate ``artifact_guidance`` on each registry entry from prompt files.
+
+    For every artifact, attempts to load a matching Markdown prompt from
+    ``prompts/artifact_instructions/``.  Falls back to the inline
+    ``analysis_instructions`` or ``analysis_hint`` when no file exists.
+
+    Args:
+        registry: The mutable :data:`ARTIFACT_REGISTRY` dictionary.
+    """
     for artifact_key, artifact_details in registry.items():
         prompt_guidance = _load_artifact_guidance_prompt(artifact_key)
         if prompt_guidance:
@@ -398,7 +455,20 @@ MAX_RECORDS_PER_ARTIFACT = 1_000_000
 
 
 class ForensicParser:
-    """Parse supported forensic artifacts from a Dissect target into CSV files."""
+    """Parse supported forensic artifacts from a Dissect target into CSV files.
+
+    Opens a disk image via Dissect's ``Target.open()``, queries available
+    artifacts, and streams their records to CSV files in the case's parsed
+    directory.  Implements the context manager protocol for deterministic
+    resource cleanup.
+
+    Attributes:
+        evidence_path: Path to the source evidence file.
+        case_dir: Root directory for this forensic case.
+        audit_logger: :class:`~app.audit.AuditLogger` for recording actions.
+        parsed_dir: Directory where output CSV files are written.
+        target: The open Dissect ``Target`` handle.
+    """
 
     def __init__(
         self,
@@ -407,6 +477,15 @@ class ForensicParser:
         audit_logger: Any,
         parsed_dir: str | Path | None = None,
     ) -> None:
+        """Initialise the parser and open the Dissect target.
+
+        Args:
+            evidence_path: Path to the disk image or evidence container.
+            case_dir: Case-specific directory for output and audit data.
+            audit_logger: Logger instance for writing audit trail entries.
+            parsed_dir: Optional override for the CSV output directory.
+                Defaults to ``<case_dir>/parsed/``.
+        """
         self.evidence_path = Path(evidence_path)
         self.case_dir = Path(case_dir)
         self.audit_logger = audit_logger
@@ -429,6 +508,7 @@ class ForensicParser:
         self._closed = True
 
     def __enter__(self) -> ForensicParser:
+        """Enter the runtime context and return the parser instance."""
         return self
 
     def __exit__(
@@ -437,12 +517,22 @@ class ForensicParser:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> bool:
+        """Exit the runtime context, closing the Dissect target."""
         del exc_type, exc_val, exc_tb
         self.close()
         return False
 
     def get_image_metadata(self) -> dict[str, str]:
-        """Return key metadata fields from the Dissect Target object."""
+        """Extract key system metadata from the Dissect target.
+
+        Attempts multiple attribute name variants for each field (e.g.
+        ``hostname``, ``computer_name``, ``name``) to accommodate
+        different OS profiles.
+
+        Returns:
+            Dictionary with keys ``hostname``, ``os_version``, ``domain``,
+            ``ips``, ``timezone``, and ``install_date``.
+        """
         hostname = str(self._safe_read_target_attribute(("hostname", "computer_name", "name")))
         os_version = str(self._safe_read_target_attribute(("os_version", "version")))
         domain = str(self._safe_read_target_attribute(("domain", "dns_domain", "workgroup")))
@@ -467,7 +557,15 @@ class ForensicParser:
         }
 
     def get_available_artifacts(self) -> list[dict[str, Any]]:
-        """Return the artifact registry annotated with availability for this target."""
+        """Return the artifact registry annotated with availability flags.
+
+        Probes the Dissect target for each registered artifact and sets
+        an ``available`` boolean on the returned metadata dictionaries.
+
+        Returns:
+            List of artifact metadata dicts, each augmented with ``key``
+            and ``available`` fields.
+        """
         available_artifacts: list[dict[str, Any]] = []
         for artifact_key, artifact_details in ARTIFACT_REGISTRY.items():
             function_name = str(artifact_details.get("function", artifact_key))
@@ -505,7 +603,23 @@ class ForensicParser:
         artifact_key: str,
         progress_callback: Callable[..., None] | None = None,
     ) -> dict[str, Any]:
-        """Parse one artifact and write its records to CSV."""
+        """Parse a single artifact and stream its records to one or more CSV files.
+
+        Logs ``parsing_started``, ``parsing_completed`` (or ``parsing_failed``)
+        to the audit trail.  EVTX artifacts are split by channel/provider
+        into separate CSV files.
+
+        Args:
+            artifact_key: Key from :data:`ARTIFACT_REGISTRY` identifying
+                the artifact to parse.
+            progress_callback: Optional callback invoked every 1 000 records
+                with progress information.
+
+        Returns:
+            Result dictionary with keys ``csv_path``, ``record_count``,
+            ``duration_seconds``, ``success``, and ``error``.  EVTX
+            results also include a ``csv_paths`` list.
+        """
         artifact = ARTIFACT_REGISTRY.get(artifact_key)
         if artifact is None:
             return {
@@ -602,7 +716,14 @@ class ForensicParser:
             }
 
     def _safe_read_target_attribute(self, attribute_names: tuple[str, ...]) -> Any:
-        """Read a target attribute by trying multiple names and handling missing values."""
+        """Read a target attribute by trying multiple candidate names.
+
+        Args:
+            attribute_names: Ordered tuple of attribute names to try.
+
+        Returns:
+            The first non-empty value found, or :data:`UNKNOWN_VALUE`.
+        """
         for attribute_name in attribute_names:
             try:
                 value = getattr(self.target, attribute_name)
@@ -629,6 +750,21 @@ class ForensicParser:
         progress_callback: Callable[..., None] | None,
         artifact_key: str,
     ) -> int:
+        """Stream Dissect records to a CSV file, handling dynamic schemas.
+
+        If the record schema expands mid-stream (new columns appear), the
+        file is rewritten at the end with the complete header row via
+        :meth:`_rewrite_csv_with_expanded_headers`.
+
+        Args:
+            records: Iterable of Dissect record objects.
+            csv_output_path: Destination CSV file path.
+            progress_callback: Optional progress callback.
+            artifact_key: Artifact key for audit/progress reporting.
+
+        Returns:
+            Total number of records written.
+        """
         record_count = 0
         fieldnames: list[str] = []
         fieldnames_set: set[str] = set()
@@ -709,6 +845,20 @@ class ForensicParser:
         records: Any,
         progress_callback: Callable[..., None] | None,
     ) -> tuple[list[Path], int]:
+        """Stream EVTX records into per-channel CSV files with automatic splitting.
+
+        Records are grouped by their channel or provider name.  When a
+        single group exceeds :data:`EVTX_MAX_RECORDS_PER_FILE`, a new
+        part file is created.
+
+        Args:
+            artifact_key: Artifact key for filename construction.
+            records: Iterable of Dissect EVTX record objects.
+            progress_callback: Optional progress callback.
+
+        Returns:
+            Tuple of ``(csv_paths, total_record_count)``.
+        """
         writers: dict[str, dict[str, Any]] = {}
         csv_paths: list[Path] = []
         record_count = 0
@@ -765,6 +915,17 @@ class ForensicParser:
         return csv_paths, record_count
 
     def _open_evtx_writer(self, artifact_key: str, group_name: str, part: int) -> dict[str, Any]:
+        """Open a new CSV file for an EVTX channel group and return writer state.
+
+        Args:
+            artifact_key: Parent artifact key for filename construction.
+            group_name: EVTX channel or provider name.
+            part: 1-based part number for multi-file splits.
+
+        Returns:
+            Dictionary containing ``path``, ``handle``, ``writer``,
+            ``fieldnames``, ``records_in_file``, and ``part``.
+        """
         artifact_stub = self._sanitize_filename(artifact_key)
         group_stub = self._sanitize_filename(group_name)
         filename = f"{artifact_stub}_{group_stub}.csv" if part == 1 else f"{artifact_stub}_{group_stub}_part{part}.csv"
@@ -781,6 +942,17 @@ class ForensicParser:
         }
 
     def _extract_evtx_group_name(self, record_dict: dict[str, Any]) -> str:
+        """Determine the channel/provider group name for an EVTX record.
+
+        Checks multiple candidate keys (``channel``, ``Channel``,
+        ``provider``, etc.) and returns the first non-empty value.
+
+        Args:
+            record_dict: Dictionary representation of the EVTX record.
+
+        Returns:
+            Channel or provider name, or ``"unknown"`` if none found.
+        """
         channel = self._find_record_value(
             record_dict,
             (
@@ -812,6 +984,20 @@ class ForensicParser:
 
     @staticmethod
     def _record_to_dict(record: Any) -> dict[str, Any]:
+        """Convert a Dissect record to a plain dictionary.
+
+        Handles Dissect ``Record`` objects (via ``_asdict()``), plain
+        dicts, and objects with a ``__dict__``.
+
+        Args:
+            record: A Dissect record or dict-like object.
+
+        Returns:
+            A plain dictionary of field names to values.
+
+        Raises:
+            TypeError: If the record cannot be converted.
+        """
         if hasattr(record, "_asdict"):
             as_dict = record._asdict()
             if isinstance(as_dict, dict):
@@ -827,6 +1013,17 @@ class ForensicParser:
 
     @staticmethod
     def _stringify_csv_value(value: Any) -> str:
+        """Convert a record field value to a CSV-safe string.
+
+        Handles ``datetime``, ``bytes``, ``None``, and other types that
+        Dissect records may yield.
+
+        Args:
+            value: The raw field value from a Dissect record.
+
+        Returns:
+            String representation suitable for CSV output.
+        """
         if value is None:
             return ""
         if isinstance(value, (datetime, date, time)):
@@ -837,6 +1034,15 @@ class ForensicParser:
 
     @staticmethod
     def _find_record_value(record_dict: dict[str, Any], candidate_keys: tuple[str, ...]) -> str:
+        """Return the first non-empty value from *candidate_keys* in *record_dict*.
+
+        Args:
+            record_dict: Dictionary to search.
+            candidate_keys: Ordered tuple of keys to try.
+
+        Returns:
+            The first non-empty string value, or ``""`` if none found.
+        """
         for key in candidate_keys:
             if key in record_dict and record_dict[key] not in (None, ""):
                 return str(record_dict[key])
@@ -844,11 +1050,20 @@ class ForensicParser:
 
     @staticmethod
     def _sanitize_filename(value: str) -> str:
+        """Replace non-alphanumeric characters with underscores for safe filenames.
+
+        Args:
+            value: Raw string to sanitise.
+
+        Returns:
+            Filesystem-safe string, or ``"artifact"`` if empty after cleaning.
+        """
         cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("_")
         return cleaned or "artifact"
 
     @staticmethod
     def _is_evtx_artifact(function_name: str) -> bool:
+        """Return *True* if *function_name* indicates an EVTX artifact."""
         return function_name == "evtx" or function_name.endswith(".evtx")
 
     @staticmethod
@@ -857,6 +1072,16 @@ class ForensicParser:
         artifact_key: str,
         record_count: int,
     ) -> None:
+        """Invoke the progress callback, tolerating varying signatures.
+
+        Tries ``callback(dict)``, then ``callback(key, count)``, then
+        ``callback(count)`` to accommodate different caller conventions.
+
+        Args:
+            progress_callback: Callable to invoke.
+            artifact_key: Current artifact being parsed.
+            record_count: Number of records processed so far.
+        """
         payload = {"artifact_key": artifact_key, "record_count": record_count}
         try:
             progress_callback(payload)

@@ -1,4 +1,12 @@
-"""Centralized application version metadata."""
+"""Centralized application version metadata.
 
-# Single source of truth for app/report/audit tool version.
+This module is the single source of truth for the AIFT version string.
+It is referenced by the audit logger, HTML report generator, and the
+settings/about UI so that version numbers stay consistent across all
+outputs.
+
+Attributes:
+    TOOL_VERSION: Semantic version string for the current AIFT release.
+"""
+
 TOOL_VERSION = "1.2.1"

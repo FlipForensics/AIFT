@@ -1,4 +1,51 @@
-"""AI provider abstractions for Claude, OpenAI, Kimi, and local models."""
+"""Multi-provider AI abstraction layer for AIFT forensic analysis.
+
+This module provides a unified interface for interacting with multiple AI
+providers used in AI Forensic Triage (AIFT) analysis workflows. It abstracts
+away provider-specific SDK differences behind a common ``AIProvider`` base
+class, enabling the rest of the application to perform AI-powered forensic
+analysis without coupling to any single vendor.
+
+Supported providers:
+
+* **Claude (Anthropic)** -- via the ``anthropic`` Python SDK.
+* **OpenAI** -- via the ``openai`` Python SDK (Chat Completions and
+  Responses APIs).
+* **Moonshot Kimi** -- via the ``openai`` Python SDK pointed at the
+  Moonshot API base URL.
+* **OpenAI-compatible local endpoints** -- Ollama, LM Studio, vLLM, or
+  any server exposing an OpenAI-compatible ``/v1/chat/completions``
+  endpoint.
+
+Key design decisions:
+
+* Each provider implementation handles its own error mapping, converting
+  SDK-specific exceptions into a single ``AIProviderError`` that callers
+  can catch uniformly.
+* Rate-limit retries with exponential back-off (and ``Retry-After``
+  header support) are handled transparently inside each provider.
+* CSV artifact files can optionally be uploaded as file attachments
+  (where the provider API supports it) or inlined into the prompt text
+  as a fallback.
+* Streaming (SSE) generation is supported for real-time progress
+  reporting during long-running forensic analyses.
+* Provider construction is driven by the application ``config.yaml``
+  through the ``create_provider`` factory function.
+
+Module-level constants:
+
+    DEFAULT_MAX_TOKENS: Default maximum completion tokens across all providers.
+    RATE_LIMIT_MAX_RETRIES: Number of retries on rate-limit (HTTP 429) errors.
+    DEFAULT_LOCAL_BASE_URL: Default Ollama-style local endpoint URL.
+    DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS: Default HTTP timeout for local
+        endpoints (1 hour, to accommodate large model inference).
+    DEFAULT_KIMI_BASE_URL: Default Moonshot Kimi API base URL.
+    DEFAULT_CLAUDE_MODEL: Default Anthropic Claude model identifier.
+    DEFAULT_OPENAI_MODEL: Default OpenAI model identifier.
+    DEFAULT_KIMI_MODEL: Default Moonshot Kimi model identifier.
+    DEFAULT_KIMI_FILE_UPLOAD_PURPOSE: File upload purpose string for Kimi.
+    DEFAULT_LOCAL_MODEL: Default model identifier for local providers.
+"""
 
 from __future__ import annotations
 
@@ -68,11 +115,41 @@ _MAX_TOKENS_UPPER_BOUND_RE = re.compile(
 
 
 class AIProviderError(RuntimeError):
-    """Raised when an AI provider request fails with a user-facing message."""
+    """Raised when an AI provider request fails with a user-facing message.
+
+    All provider implementations translate SDK-specific exceptions (connection
+    errors, authentication failures, context-length overflows, rate limits,
+    etc.) into this single exception type so that callers only need one
+    ``except`` clause for AI-related failures.
+
+    The message carried by this exception is intended to be safe for display
+    in the web UI and API responses without exposing raw tracebacks.
+    """
 
 
 class AIProvider(ABC):
-    """Abstract interface implemented by all configured AI providers."""
+    """Abstract base class defining the interface for all AI providers.
+
+    Every concrete provider (Claude, OpenAI, Kimi, Local) implements this
+    interface so that the forensic analysis engine can call any provider
+    interchangeably. The interface exposes both synchronous and streaming
+    analysis methods, optional file-attachment support, and model metadata
+    retrieval.
+
+    Subclasses must implement:
+        * ``analyze`` -- single-shot prompt-to-text generation.
+        * ``analyze_stream`` -- incremental (streaming) text generation.
+        * ``get_model_info`` -- provider/model metadata dictionary.
+
+    Subclasses may override:
+        * ``analyze_with_attachments`` -- analysis with CSV file attachments
+          uploaded to the provider.
+
+    Attributes:
+        attach_csv_as_file (bool): Whether to attempt uploading CSV artifacts
+            as file attachments rather than inlining them into the prompt.
+            Set per-provider via configuration.
+    """
 
     @abstractmethod
     def analyze(
@@ -81,7 +158,23 @@ class AIProvider(ABC):
         user_prompt: str,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
-        """Send a prompt to the provider and return the generated text."""
+        """Send a prompt to the provider and return the complete generated text.
+
+        Args:
+            system_prompt: The system-level instruction text that sets the
+                AI's role and behavioral constraints.
+            user_prompt: The user-facing prompt containing investigation
+                context and artifact data.
+            max_tokens: Maximum number of tokens the model may generate in
+                its response.
+
+        Returns:
+            The generated text response as a string.
+
+        Raises:
+            AIProviderError: If the request fails for any reason (network,
+                authentication, context overflow, empty response, etc.).
+        """
 
     @abstractmethod
     def analyze_stream(
@@ -90,11 +183,33 @@ class AIProvider(ABC):
         user_prompt: str,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> Iterator[str]:
-        """Stream generated text chunks for the provided prompt."""
+        """Stream generated text chunks for the provided prompt.
+
+        Returns an iterator that yields incremental text deltas as the
+        model generates them. This is used to provide real-time progress
+        feedback through Server-Sent Events (SSE) during analysis.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            max_tokens: Maximum number of tokens the model may generate.
+
+        Yields:
+            Individual text chunks (deltas) as they are generated.
+
+        Raises:
+            AIProviderError: If the streaming request fails or produces
+                no output.
+        """
 
     @abstractmethod
     def get_model_info(self) -> dict[str, str]:
-        """Return provider and model metadata for reporting."""
+        """Return provider and model metadata for audit logging and reports.
+
+        Returns:
+            A dictionary with at least ``"provider"`` and ``"model"`` keys
+            identifying the AI backend used for analysis.
+        """
 
     def analyze_with_attachments(
         self,
@@ -103,7 +218,27 @@ class AIProvider(ABC):
         attachments: list[Mapping[str, str]] | None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
-        """Analyze with optional attachments (default behavior ignores attachments)."""
+        """Analyze with optional file attachments.
+
+        Providers that support file uploads (e.g., via the OpenAI Responses
+        API or Anthropic document blocks) override this method to upload
+        CSV artifact files directly. The default implementation ignores
+        attachments and delegates to ``analyze``.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            attachments: Optional list of attachment descriptors, each a
+                mapping with ``"path"``, ``"name"``, and ``"mime_type"``
+                keys. May be ``None`` if no attachments are available.
+            max_tokens: Maximum number of tokens the model may generate.
+
+        Returns:
+            The generated text response as a string.
+
+        Raises:
+            AIProviderError: If the request fails.
+        """
         return self.analyze(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -116,7 +251,24 @@ class AIProvider(ABC):
         *,
         supports_file_attachments: bool = True,
     ) -> list[dict[str, str]] | None:
-        """Apply shared CSV-attachment preflight checks and normalization."""
+        """Apply shared CSV-attachment preflight checks and normalization.
+
+        Validates that file-attachment mode is enabled, that attachments
+        are provided, and that the provider has not already determined
+        that file attachments are unsupported. Returns normalized
+        attachment descriptors or ``None`` if attachment mode should be
+        skipped.
+
+        Args:
+            attachments: Raw attachment descriptors from the caller.
+            supports_file_attachments: Whether the provider's SDK client
+                exposes the necessary file-upload APIs.
+
+        Returns:
+            A list of normalized attachment dicts with validated ``"path"``,
+            ``"name"``, and ``"mime_type"`` keys, or ``None`` if attachment
+            mode should not be used.
+        """
         if not bool(getattr(self, "attach_csv_as_file", False)):
             return None
         if not attachments:
@@ -135,14 +287,36 @@ class AIProvider(ABC):
 
 
 def _normalize_api_key_value(value: Any) -> str:
-    """Normalize API key-like values from config/env sources."""
+    """Normalize API key-like values from config/env sources.
+
+    Converts the input to a stripped string, treating ``None`` as empty.
+
+    Args:
+        value: Raw API key value from config.yaml or an environment variable.
+            May be ``None``, an empty string, or a string with whitespace.
+
+    Returns:
+        The stripped string representation of the value, or an empty string
+        if the input is ``None``.
+    """
     if value is None:
         return ""
     return str(value).strip()
 
 
 def _resolve_api_key(config_key: Any, env_var: str) -> str:
-    """Return the API key from config, falling back to an environment variable."""
+    """Return the API key from config, falling back to an environment variable.
+
+    Args:
+        config_key: The API key value from ``config.yaml``. May be ``None``
+            or empty if not configured.
+        env_var: The name of the environment variable to check as a fallback
+            (e.g., ``"ANTHROPIC_API_KEY"``).
+
+    Returns:
+        The resolved API key string, or an empty string if neither the
+        config value nor the environment variable is set.
+    """
     normalized_config_key = _normalize_api_key_value(config_key)
     if normalized_config_key:
         return normalized_config_key
@@ -150,7 +324,22 @@ def _resolve_api_key(config_key: Any, env_var: str) -> str:
 
 
 def _resolve_api_key_candidates(config_key: Any, env_vars: tuple[str, ...]) -> str:
-    """Return API key from config, falling back across multiple environment variables."""
+    """Return API key from config, falling back across multiple environment variables.
+
+    Unlike ``_resolve_api_key``, this function accepts multiple environment
+    variable names and checks them in order, returning the first non-empty
+    match. This is used for providers like Kimi that accept keys from
+    either ``MOONSHOT_API_KEY`` or ``KIMI_API_KEY``.
+
+    Args:
+        config_key: The API key value from ``config.yaml``.
+        env_vars: Tuple of environment variable names to check in priority
+            order.
+
+    Returns:
+        The resolved API key string, or an empty string if no source
+        provides a key.
+    """
     normalized_config_key = _normalize_api_key_value(config_key)
     if normalized_config_key:
         return normalized_config_key
@@ -163,7 +352,20 @@ def _resolve_api_key_candidates(config_key: Any, env_vars: tuple[str, ...]) -> s
 
 
 def _resolve_timeout_seconds(value: Any, default_seconds: float) -> float:
-    """Normalize timeout values from config/env inputs."""
+    """Normalize timeout values from config/env inputs.
+
+    Converts the raw value to a positive float, falling back to the default
+    when the value is missing, non-numeric, or non-positive.
+
+    Args:
+        value: Raw timeout value from configuration. May be a number, a
+            numeric string, ``None``, or an invalid type.
+        default_seconds: Fallback timeout in seconds when the value cannot
+            be used.
+
+    Returns:
+        A positive float representing the timeout in seconds.
+    """
     try:
         timeout_seconds = float(value)
     except (TypeError, ValueError):
@@ -175,7 +377,18 @@ def _resolve_timeout_seconds(value: Any, default_seconds: float) -> float:
 
 
 def _extract_retry_after_seconds(error: Exception) -> float | None:
-    """Read Retry-After hints from API error responses when present."""
+    """Read ``Retry-After`` hints from API error responses when present.
+
+    Inspects the exception for an attached HTTP response or headers object
+    and extracts the ``Retry-After`` header value.
+
+    Args:
+        error: The rate-limit or API exception that may carry HTTP headers.
+
+    Returns:
+        The retry delay in seconds as a non-negative float, or ``None`` if
+        no ``Retry-After`` header is present or parseable.
+    """
     response = getattr(error, "response", None)
     headers = getattr(response, "headers", None)
     if headers is None:
@@ -196,7 +409,17 @@ def _extract_retry_after_seconds(error: Exception) -> float | None:
 
 
 def _is_context_length_error(error: Exception) -> bool:
-    """Best-effort detection for context/token-length failures."""
+    """Best-effort detection for context/token-length failures.
+
+    Checks the exception message, error code, and body against known
+    patterns that indicate the prompt exceeded the model's context window.
+
+    Args:
+        error: The API exception to inspect.
+
+    Returns:
+        ``True`` if the error appears to be a context-length overflow.
+    """
     message = str(error).lower()
     if any(pattern in message for pattern in _CONTEXT_LENGTH_PATTERNS):
         return True
@@ -218,8 +441,17 @@ def _normalize_openai_compatible_base_url(base_url: str, default_base_url: str) 
     """Normalize OpenAI-compatible base URLs.
 
     OpenAI-compatible SDK clients expect the versioned API prefix (commonly
-    `/v1`). Ollama users often provide `http://localhost:11434/`; in that
-    case we normalize to `http://localhost:11434/v1`.
+    ``/v1``). Ollama users often provide ``http://localhost:11434/``; in that
+    case we normalize to ``http://localhost:11434/v1``.
+
+    Args:
+        base_url: Raw base URL string from configuration. May be empty,
+            missing a path prefix, or already correctly formatted.
+        default_base_url: Fallback URL to use when ``base_url`` is empty
+            or not provided.
+
+    Returns:
+        The normalized base URL string with a versioned path prefix.
     """
     raw = str(base_url or "").strip()
     if not raw:
@@ -237,7 +469,19 @@ def _normalize_openai_compatible_base_url(base_url: str, default_base_url: str) 
 
 
 def _normalize_kimi_model_name(model: str) -> str:
-    """Normalize Kimi model names and map deprecated aliases."""
+    """Normalize Kimi model names and map deprecated aliases.
+
+    Applies alias mapping for deprecated model identifiers (e.g.,
+    ``"kimi-v2.5"`` maps to the current default) and logs a warning
+    when a deprecated alias is used.
+
+    Args:
+        model: Raw model name string from configuration. May be empty or
+            contain a deprecated alias.
+
+    Returns:
+        The canonical Kimi model identifier string.
+    """
     raw = str(model or "").strip()
     if not raw:
         return DEFAULT_KIMI_MODEL
@@ -250,7 +494,15 @@ def _normalize_kimi_model_name(model: str) -> str:
 
 
 def _is_kimi_model_not_available_error(error: Exception) -> bool:
-    """Detect model-not-found or model-permission failures from Kimi responses."""
+    """Detect model-not-found or model-permission failures from Kimi responses.
+
+    Args:
+        error: The API exception to inspect.
+
+    Returns:
+        ``True`` if the error indicates the requested model is unavailable
+        or not permitted on the Moonshot account.
+    """
     message = str(error).lower()
     if "model" in message and any(pattern in message for pattern in _KIMI_MODEL_NOT_AVAILABLE_PATTERNS):
         return True
@@ -265,6 +517,20 @@ def _is_kimi_model_not_available_error(error: Exception) -> bool:
 
 
 def _extract_anthropic_text(response: Any) -> str:
+    """Extract the concatenated text from an Anthropic Messages API response.
+
+    Iterates over content blocks in the response, collecting text from
+    both object-style blocks (with a ``.text`` attribute) and dict-style
+    blocks (with a ``"text"`` key).
+
+    Args:
+        response: The Anthropic ``Message`` response object (or a
+            dict-like equivalent).
+
+    Returns:
+        The joined text content, stripped of leading/trailing whitespace.
+        Returns an empty string if no text blocks are found.
+    """
     content = getattr(response, "content", None)
     if not isinstance(content, list):
         return ""
@@ -285,7 +551,20 @@ def _extract_anthropic_text(response: Any) -> str:
 
 
 def _extract_anthropic_stream_text(event: Any) -> str:
-    """Extract text deltas from Anthropic streamed events."""
+    """Extract text deltas from Anthropic streamed events.
+
+    Handles ``content_block_delta``, ``content_block_start``, and generic
+    delta events from the Anthropic streaming API, supporting both
+    object-style and dict-style event payloads.
+
+    Args:
+        event: A single streamed event from the Anthropic Messages API.
+            May be an SDK event object or a raw dict.
+
+    Returns:
+        The text delta string from this event, or an empty string if the
+        event contains no text content.
+    """
     if event is None:
         return ""
 
@@ -327,6 +606,22 @@ def _extract_anthropic_stream_text(event: Any) -> str:
 
 
 def _extract_openai_text(response: Any) -> str:
+    """Extract the generated text from an OpenAI Chat Completions API response.
+
+    Handles multiple response shapes including plain string content,
+    structured content arrays, and reasoning-model fallback fields
+    (``reasoning_content``, ``reasoning``, ``refusal``). Supports both
+    object-style and dict-style response payloads for compatibility with
+    various OpenAI-compatible endpoints.
+
+    Args:
+        response: The OpenAI ``ChatCompletion`` response object or a
+            dict-like equivalent.
+
+    Returns:
+        The extracted text content, stripped of whitespace. Returns an
+        empty string if no usable text is found.
+    """
     choices = getattr(response, "choices", None)
     if not choices:
         return ""
@@ -400,7 +695,21 @@ def _extract_openai_text(response: Any) -> str:
 
 
 def _extract_openai_delta_text(delta: Any, field_names: tuple[str, ...]) -> str:
-    """Extract streaming delta text for one of the requested fields."""
+    """Extract streaming delta text for one of the requested fields.
+
+    Checks the delta object for the first non-empty text value across the
+    given field names. This supports OpenAI-compatible streaming where
+    different model types may use ``content``, ``reasoning_content``,
+    ``reasoning``, or ``thinking`` fields.
+
+    Args:
+        delta: The streaming chunk delta object or dict from a choice.
+        field_names: Tuple of field names to check in priority order
+            (e.g., ``("content", "reasoning_content")``).
+
+    Returns:
+        The first non-empty text value found, or an empty string.
+    """
     if delta is None:
         return ""
 
@@ -415,7 +724,20 @@ def _extract_openai_delta_text(delta: Any, field_names: tuple[str, ...]) -> str:
 
 
 def _coerce_openai_text(value: Any) -> str:
-    """Normalize OpenAI-compatible response text payloads into plain strings."""
+    """Normalize OpenAI-compatible response text payloads into plain strings.
+
+    Handles string values, lists of text items (objects or dicts), and
+    returns an empty string for unsupported types. This accounts for the
+    varied response shapes across different OpenAI-compatible endpoints.
+
+    Args:
+        value: A text value from an OpenAI-compatible response. May be a
+            plain string, a list of text objects/dicts, or ``None``.
+
+    Returns:
+        The concatenated plain text string, or an empty string if the
+        value cannot be coerced.
+    """
     if isinstance(value, str):
         return value
 
@@ -443,7 +765,19 @@ def _coerce_openai_text(value: Any) -> str:
 
 
 def _extract_openai_responses_text(response: Any) -> str:
-    """Extract output text from OpenAI Responses API payloads."""
+    """Extract output text from OpenAI Responses API payloads.
+
+    First attempts the convenience ``output_text`` attribute, then falls
+    back to iterating over structured ``output`` items and their content
+    blocks looking for ``output_text`` or ``text`` type blocks.
+
+    Args:
+        response: The OpenAI Responses API response object or dict.
+
+    Returns:
+        The extracted and stripped text content, or an empty string if
+        no text output is found.
+    """
     output_text = getattr(response, "output_text", None)
     text = _coerce_openai_text(output_text).strip()
     if text:
@@ -481,7 +815,20 @@ def _extract_openai_responses_text(response: Any) -> str:
 
 
 def _strip_leading_reasoning_blocks(text: str) -> str:
-    """Remove leading model-thinking blocks from OpenAI-compatible output."""
+    """Remove leading model-thinking blocks from OpenAI-compatible output.
+
+    Some local reasoning models (e.g., DeepSeek R1) emit ``<think>`` or
+    ``<reasoning>`` XML-style blocks or fenced code blocks at the start
+    of their output. This function strips those blocks so that only the
+    substantive analysis text remains.
+
+    Args:
+        text: Raw model output that may begin with reasoning blocks.
+
+    Returns:
+        The text with any leading reasoning blocks removed, or an empty
+        string if the input is empty.
+    """
     value = str(text or "").strip()
     if not value:
         return ""
@@ -489,7 +836,20 @@ def _strip_leading_reasoning_blocks(text: str) -> str:
 
 
 def _clean_streamed_answer_text(answer_text: str, thinking_text: str) -> str:
-    """Drop duplicated streamed thinking text from the final answer channel."""
+    """Drop duplicated streamed thinking text from the final answer channel.
+
+    Some models emit the thinking/reasoning content as a prefix in both the
+    thinking stream and the answer stream. This function removes that
+    duplication by stripping any leading thinking text from the answer,
+    then removing any remaining reasoning blocks.
+
+    Args:
+        answer_text: The accumulated answer-channel text from streaming.
+        thinking_text: The accumulated thinking-channel text from streaming.
+
+    Returns:
+        The cleaned answer text with duplicated reasoning removed.
+    """
     answer = str(answer_text or "").strip()
     if not answer:
         return ""
@@ -502,7 +862,18 @@ def _clean_streamed_answer_text(answer_text: str, thinking_text: str) -> str:
 
 
 def _is_attachment_unsupported_error(error: Exception) -> bool:
-    """Detect API errors that indicate attachment/file APIs are unsupported."""
+    """Detect API errors that indicate attachment/file APIs are unsupported.
+
+    Checks the error message for markers such as ``"404"``, ``"not found"``,
+    ``"unsupported"``, etc. that suggest the endpoint does not support the
+    ``/files`` or ``/responses`` APIs required for file-attachment mode.
+
+    Args:
+        error: The API exception to inspect.
+
+    Returns:
+        ``True`` if the error indicates file-attachment APIs are unavailable.
+    """
     message = str(error).lower()
     unsupported_markers = (
         "404",
@@ -522,7 +893,19 @@ def _is_attachment_unsupported_error(error: Exception) -> bool:
 
 
 def _is_anthropic_streaming_required_error(error: Exception) -> bool:
-    """Detect Anthropic SDK non-streaming timeout guardrails for long requests."""
+    """Detect Anthropic SDK non-streaming timeout guardrails for long requests.
+
+    The Anthropic SDK raises a ``ValueError`` when a non-streaming request
+    is estimated to exceed 10 minutes, requiring the caller to switch to
+    streaming mode instead.
+
+    Args:
+        error: The exception to inspect (typically a ``ValueError``).
+
+    Returns:
+        ``True`` if the error message indicates streaming is required due
+        to expected long processing time.
+    """
     message = str(error).lower()
     if "streaming is required for operations that may take longer than 10 minutes" in message:
         return True
@@ -530,7 +913,22 @@ def _is_anthropic_streaming_required_error(error: Exception) -> bool:
 
 
 def _is_unsupported_parameter_error(error: Exception, parameter_name: str) -> bool:
-    """Detect API errors that indicate a specific parameter is unsupported."""
+    """Detect API errors that indicate a specific parameter is unsupported.
+
+    Some OpenAI-compatible endpoints do not support newer parameters like
+    ``max_completion_tokens``. This function inspects the error's ``param``
+    field and message body to determine if the rejection is specifically
+    about the named parameter being unrecognized.
+
+    Args:
+        error: The API exception to inspect.
+        parameter_name: The name of the parameter to check for
+            (e.g., ``"max_completion_tokens"``).
+
+    Returns:
+        ``True`` if the error indicates the specified parameter is
+        unsupported by the endpoint.
+    """
     parameter = str(parameter_name or "").strip().lower()
     if not parameter:
         return False
@@ -561,7 +959,20 @@ def _is_unsupported_parameter_error(error: Exception, parameter_name: str) -> bo
 
 
 def _extract_supported_completion_token_limit(error: Exception) -> int | None:
-    """Extract a provider-declared completion token cap from an API error."""
+    """Extract a provider-declared completion token cap from an API error.
+
+    When a request is rejected because ``max_tokens`` exceeds the model's
+    supported limit, the error message often includes the actual cap
+    (e.g., ``"supports at most 8192 completion tokens"``). This function
+    parses that limit so the caller can retry with a lower value.
+
+    Args:
+        error: The API exception whose message may contain the token limit.
+
+    Returns:
+        The provider-declared maximum completion token count as a positive
+        integer, or ``None`` if no limit could be extracted.
+    """
     candidate_messages: list[str] = []
     body = getattr(error, "body", None)
     if isinstance(body, dict):
@@ -595,7 +1006,21 @@ def _resolve_completion_token_retry_limit(
     error: Exception,
     requested_tokens: int,
 ) -> int | None:
-    """Return a reduced token count when the API reports the model maximum."""
+    """Return a reduced token count when the API reports the model maximum.
+
+    Combines ``_extract_supported_completion_token_limit`` with a check
+    that the extracted limit is actually lower than what was requested.
+    If so, returns the limit for use in a retry; otherwise returns ``None``
+    to indicate the error is not recoverable by reducing tokens.
+
+    Args:
+        error: The API exception that triggered the token-limit failure.
+        requested_tokens: The ``max_tokens`` value that was rejected.
+
+    Returns:
+        A reduced token count to use for retry, or ``None`` if the error
+        is not a recoverable token-limit issue.
+    """
     if requested_tokens <= 0:
         return None
     supported_limit = _extract_supported_completion_token_limit(error)
@@ -607,9 +1032,22 @@ def _resolve_completion_token_retry_limit(
 def _prepare_openai_attachment_upload(attachment: Mapping[str, str]) -> tuple[str, str, bool]:
     """Normalize OpenAI attachment upload metadata.
 
-    Some OpenAI Responses API models reject `.csv` file extensions for context
-    stuffing inputs. For those uploads, convert metadata to `.txt` and
-    `text/plain` while keeping the file contents unchanged.
+    Some OpenAI Responses API models reject ``.csv`` file extensions for
+    context stuffing inputs. For those uploads, this function converts
+    the filename extension to ``.txt`` and the MIME type to
+    ``text/plain`` while keeping the file contents unchanged.
+
+    Args:
+        attachment: A normalized attachment descriptor with ``"path"``,
+            ``"name"``, and ``"mime_type"`` keys.
+
+    Returns:
+        A 3-tuple of ``(upload_name, upload_mime_type, was_converted)``:
+
+        * ``upload_name`` -- The filename to use for the upload.
+        * ``upload_mime_type`` -- The MIME type to use for the upload.
+        * ``was_converted`` -- ``True`` if the original CSV metadata was
+          converted to TXT format.
     """
     attachment_path = Path(str(attachment.get("path", "")))
     original_name = str(attachment.get("name", "")).strip() or attachment_path.name or "attachment"
@@ -636,9 +1074,25 @@ def _inline_attachment_data_into_prompt(
 ) -> tuple[str, bool]:
     """Append attachment file contents to the user prompt for text-only fallback.
 
-    All attachment data is inlined without truncation — in DFIR, every row
-    matters.  When the resulting prompt is too large for the model context
-    window, the caller uses chunked analysis to split it.
+    When file-upload APIs are unavailable, this function reads each
+    attachment from disk and inlines its full contents into the user
+    prompt, wrapped in labeled delimiters. All attachment data is inlined
+    without truncation -- in DFIR, every row matters. When the resulting
+    prompt is too large for the model context window, the caller uses
+    chunked analysis to split it.
+
+    Args:
+        user_prompt: The original user prompt text.
+        attachments: Optional list of attachment descriptors with
+            ``"path"``, ``"name"``, and ``"mime_type"`` keys.
+
+    Returns:
+        A 2-tuple of ``(modified_prompt, was_inlined)``:
+
+        * ``modified_prompt`` -- The user prompt with attachment data
+          appended (or the original prompt if nothing was inlined).
+        * ``was_inlined`` -- ``True`` if at least one attachment was
+          successfully inlined into the prompt.
     """
     normalized_attachments = _normalize_attachment_inputs(attachments)
     if not normalized_attachments:
@@ -682,6 +1136,21 @@ def _inline_attachment_data_into_prompt(
 
 
 def _normalize_attachment_input(attachment: Mapping[str, str] | Any) -> dict[str, str] | None:
+    """Validate and normalize a single attachment descriptor.
+
+    Checks that the attachment is a mapping with a non-empty ``"path"``
+    pointing to an existing file, then returns a cleaned dict with
+    ``"path"``, ``"name"``, and ``"mime_type"`` keys.
+
+    Args:
+        attachment: A raw attachment descriptor, expected to be a mapping
+            with at least a ``"path"`` key.
+
+    Returns:
+        A normalized dict with string values for ``"path"``, ``"name"``,
+        and ``"mime_type"``, or ``None`` if the input is invalid or the
+        file does not exist.
+    """
     if not isinstance(attachment, Mapping):
         return None
 
@@ -705,6 +1174,18 @@ def _normalize_attachment_input(attachment: Mapping[str, str] | Any) -> dict[str
 def _normalize_attachment_inputs(
     attachments: list[Mapping[str, str]] | None,
 ) -> list[dict[str, str]]:
+    """Validate and normalize a list of attachment descriptors.
+
+    Filters out invalid entries (non-mapping items, missing paths,
+    nonexistent files) and returns only valid, normalized descriptors.
+
+    Args:
+        attachments: Optional list of raw attachment descriptors.
+
+    Returns:
+        A list of validated attachment dicts. May be empty if all inputs
+        are invalid or the input is ``None``.
+    """
     normalized: list[dict[str, str]] = []
     for attachment in attachments or []:
         candidate = _normalize_attachment_input(attachment)
@@ -718,7 +1199,28 @@ def _run_with_rate_limit_retries(
     rate_limit_error_type: type[Exception],
     provider_name: str,
 ) -> _T:
-    """Retry rate-limited requests with exponential backoff."""
+    """Retry rate-limited requests with exponential backoff.
+
+    Executes the given request callable and retries up to
+    ``RATE_LIMIT_MAX_RETRIES`` times if a rate-limit error is raised.
+    Uses ``Retry-After`` headers when available, otherwise falls back to
+    exponential backoff (1s, 2s, 4s, ...).
+
+    Args:
+        request_fn: A zero-argument callable that performs the API request
+            and returns the result.
+        rate_limit_error_type: The exception class to catch as a rate-limit
+            signal (e.g., ``anthropic.RateLimitError``).
+        provider_name: Human-readable provider name for log messages
+            (e.g., ``"Claude"``, ``"OpenAI"``).
+
+    Returns:
+        The return value of ``request_fn`` on a successful call.
+
+    Raises:
+        AIProviderError: If the rate limit is still exceeded after all
+            retries are exhausted.
+    """
     last_error: Exception | None = None
 
     for retry_count in range(RATE_LIMIT_MAX_RETRIES + 1):
@@ -748,7 +1250,25 @@ def _run_with_rate_limit_retries(
 
 
 class ClaudeProvider(AIProvider):
-    """Anthropic Claude provider implementation."""
+    """Anthropic Claude provider implementation.
+
+    Uses the ``anthropic`` Python SDK to communicate with the Anthropic
+    Messages API. Supports both synchronous and streaming generation,
+    CSV file attachments via content blocks (base64-encoded PDFs or
+    inline text), and automatic token-limit retry when the requested
+    ``max_tokens`` exceeds the model's supported maximum.
+
+    For long-running requests where the Anthropic SDK requires streaming,
+    the provider transparently falls back from ``messages.create`` to
+    ``messages.stream``.
+
+    Attributes:
+        api_key (str): The Anthropic API key.
+        model (str): The Claude model identifier (e.g., ``"claude-opus-4-6"``).
+        attach_csv_as_file (bool): Whether to upload CSV artifacts as
+            content blocks rather than inlining them in the prompt.
+        client: The ``anthropic.Anthropic`` SDK client instance.
+    """
 
     def __init__(
         self,
@@ -756,6 +1276,18 @@ class ClaudeProvider(AIProvider):
         model: str = DEFAULT_CLAUDE_MODEL,
         attach_csv_as_file: bool = True,
     ) -> None:
+        """Initialize the Claude provider.
+
+        Args:
+            api_key: Anthropic API key. Must be non-empty.
+            model: Claude model identifier to use for completions.
+            attach_csv_as_file: If ``True``, attempt to send CSV artifacts
+                as structured content blocks.
+
+        Raises:
+            AIProviderError: If the ``anthropic`` SDK is not installed or
+                the API key is empty.
+        """
         try:
             import anthropic
         except ImportError as error:
@@ -784,6 +1316,21 @@ class ClaudeProvider(AIProvider):
         user_prompt: str,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
+        """Send a prompt to Claude and return the generated text.
+
+        Delegates to ``analyze_with_attachments`` with no attachments.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            max_tokens: Maximum completion tokens.
+
+        Returns:
+            The generated analysis text.
+
+        Raises:
+            AIProviderError: On any API or network failure.
+        """
         return self.analyze_with_attachments(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -797,6 +1344,24 @@ class ClaudeProvider(AIProvider):
         user_prompt: str,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> Iterator[str]:
+        """Stream generated text chunks from Claude.
+
+        Creates a streaming Messages API request and yields text deltas
+        as they arrive. Handles rate-limit retries, token-limit retries,
+        and translates SDK exceptions into ``AIProviderError``.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            max_tokens: Maximum completion tokens.
+
+        Yields:
+            Text chunk strings as they are generated by the model.
+
+        Raises:
+            AIProviderError: On empty response, network failure,
+                authentication error, context overflow, or other API error.
+        """
         def _stream() -> Iterator[str]:
             request_kwargs: dict[str, Any] = {
                 "model": self.model,
@@ -850,6 +1415,24 @@ class ClaudeProvider(AIProvider):
         attachments: list[Mapping[str, str]] | None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
+        """Analyze with optional CSV file attachments via Claude content blocks.
+
+        First attempts to send attachments as structured content blocks
+        (base64-encoded PDFs or inline text). If that fails or attachments
+        are not provided, falls back to a plain text prompt.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            attachments: Optional list of attachment descriptors.
+            max_tokens: Maximum completion tokens.
+
+        Returns:
+            The generated analysis text.
+
+        Raises:
+            AIProviderError: On any API or network failure.
+        """
         def _request() -> str:
             attachment_response = self._request_with_csv_attachments(
                 system_prompt=system_prompt,
@@ -873,6 +1456,22 @@ class ClaudeProvider(AIProvider):
         return self._run_claude_request(_request)
 
     def _run_claude_request(self, request_fn: Callable[[], _T]) -> _T:
+        """Execute a Claude request with rate-limit retries and error mapping.
+
+        Wraps the given callable with rate-limit retry logic and translates
+        all Anthropic SDK exceptions into ``AIProviderError``.
+
+        Args:
+            request_fn: A zero-argument callable that performs the Claude
+                API request and returns the result.
+
+        Returns:
+            The return value of ``request_fn`` on success.
+
+        Raises:
+            AIProviderError: On connection failure, authentication error,
+                context overflow, bad request, or any other API error.
+        """
         try:
             return _run_with_rate_limit_retries(
                 request_fn=request_fn,
@@ -907,6 +1506,27 @@ class ClaudeProvider(AIProvider):
         max_tokens: int,
         attachments: list[Mapping[str, str]] | None,
     ) -> str | None:
+        """Attempt to send a request with CSV files as Claude content blocks.
+
+        Builds structured content blocks from the attachments (base64
+        for PDFs, inline text for other types) and sends them alongside
+        the user prompt. Falls back to ``None`` if attachments are not
+        supported or not provided.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt text.
+            max_tokens: Maximum completion tokens.
+            attachments: Optional list of attachment descriptors.
+
+        Returns:
+            The generated text if attachment mode succeeded, or ``None``
+            if attachments were skipped or unsupported.
+
+        Raises:
+            AIProviderError: If the request fails for a reason other than
+                unsupported attachments.
+        """
         normalized_attachments = self._prepare_csv_attachments(attachments)
         if not normalized_attachments:
             return None
@@ -974,6 +1594,26 @@ class ClaudeProvider(AIProvider):
         messages: list[dict[str, Any]],
         max_tokens: int,
     ) -> Any:
+        """Create a Claude message, falling back to streaming for long requests.
+
+        First attempts a non-streaming ``messages.create`` call. If the
+        Anthropic SDK raises a ``ValueError`` indicating that streaming is
+        required (for requests expected to exceed 10 minutes), retries
+        using ``messages.stream`` instead.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            messages: The conversation messages list for the API call.
+            max_tokens: Maximum completion tokens.
+
+        Returns:
+            The Anthropic ``Message`` response object.
+
+        Raises:
+            ValueError: If the error is not a streaming-required error.
+            anthropic.BadRequestError: If the request is rejected for
+                reasons other than token limits.
+        """
         request_kwargs: dict[str, Any] = {
             "model": self.model,
             "max_tokens": max_tokens,
@@ -991,6 +1631,23 @@ class ClaudeProvider(AIProvider):
             return self._create_stream_with_token_limit_retry(request_kwargs)
 
     def _create_non_stream_with_token_limit_retry(self, request_kwargs: Mapping[str, Any]) -> Any:
+        """Create a non-streaming message with automatic token-limit retry.
+
+        If the initial request is rejected because ``max_tokens`` exceeds
+        the model's supported maximum, retries once with the lower limit
+        extracted from the error message.
+
+        Args:
+            request_kwargs: Keyword arguments to pass to
+                ``client.messages.create``.
+
+        Returns:
+            The Anthropic ``Message`` response object.
+
+        Raises:
+            anthropic.BadRequestError: If the request fails for a reason
+                other than token limits, or if the retry also fails.
+        """
         effective_kwargs: dict[str, Any] = dict(request_kwargs)
         for _ in range(2):
             try:
@@ -1012,6 +1669,23 @@ class ClaudeProvider(AIProvider):
         return self.client.messages.create(**effective_kwargs)
 
     def _create_stream_with_token_limit_retry(self, request_kwargs: Mapping[str, Any]) -> Any:
+        """Create a streamed message with automatic token-limit retry.
+
+        Uses ``messages.stream`` context manager and collects the final
+        message. If rejected due to token limits, retries once with the
+        provider-declared maximum.
+
+        Args:
+            request_kwargs: Keyword arguments to pass to
+                ``client.messages.stream``.
+
+        Returns:
+            The final Anthropic ``Message`` response object.
+
+        Raises:
+            anthropic.BadRequestError: If the request fails for a reason
+                other than token limits, or if the retry also fails.
+        """
         effective_kwargs: dict[str, Any] = dict(request_kwargs)
         for _ in range(2):
             try:
@@ -1035,6 +1709,24 @@ class ClaudeProvider(AIProvider):
             return stream.get_final_message()
 
     def _create_streaming_messages_with_token_limit_retry(self, request_kwargs: Mapping[str, Any]) -> Any:
+        """Create a streaming ``messages.create`` call with token-limit retry.
+
+        Similar to ``_create_non_stream_with_token_limit_retry`` but used
+        for requests where ``stream=True`` is already set in the kwargs.
+        Retries once with a reduced ``max_tokens`` if the provider rejects
+        the original value.
+
+        Args:
+            request_kwargs: Keyword arguments to pass to
+                ``client.messages.create`` (should include ``stream=True``).
+
+        Returns:
+            The streaming response iterator from ``messages.create``.
+
+        Raises:
+            anthropic.BadRequestError: If the request fails for a reason
+                other than token limits, or if the retry also fails.
+        """
         effective_kwargs: dict[str, Any] = dict(request_kwargs)
         for _ in range(2):
             try:
@@ -1056,11 +1748,31 @@ class ClaudeProvider(AIProvider):
         return self.client.messages.create(**effective_kwargs)
 
     def get_model_info(self) -> dict[str, str]:
+        """Return Claude provider and model metadata.
+
+        Returns:
+            A dictionary with ``"provider"`` set to ``"claude"`` and
+            ``"model"`` set to the configured model identifier.
+        """
         return {"provider": "claude", "model": self.model}
 
 
 class OpenAIProvider(AIProvider):
-    """OpenAI API provider implementation."""
+    """OpenAI API provider implementation.
+
+    Uses the ``openai`` Python SDK to communicate with the OpenAI Chat
+    Completions and Responses APIs. Supports synchronous and streaming
+    generation, CSV file attachments via the Responses API file upload,
+    and automatic fallback between ``max_completion_tokens`` and
+    ``max_tokens`` parameters for backward compatibility.
+
+    Attributes:
+        api_key (str): The OpenAI API key.
+        model (str): The OpenAI model identifier (e.g., ``"gpt-5.2"``).
+        attach_csv_as_file (bool): Whether to upload CSV artifacts as
+            file attachments via the Responses API.
+        client: The ``openai.OpenAI`` SDK client instance.
+    """
 
     def __init__(
         self,
@@ -1068,6 +1780,18 @@ class OpenAIProvider(AIProvider):
         model: str = DEFAULT_OPENAI_MODEL,
         attach_csv_as_file: bool = True,
     ) -> None:
+        """Initialize the OpenAI provider.
+
+        Args:
+            api_key: OpenAI API key. Must be non-empty.
+            model: OpenAI model identifier to use for completions.
+            attach_csv_as_file: If ``True``, attempt to send CSV artifacts
+                as file uploads via the Responses API.
+
+        Raises:
+            AIProviderError: If the ``openai`` SDK is not installed or
+                the API key is empty.
+        """
         try:
             import openai
         except ImportError as error:
@@ -1096,6 +1820,21 @@ class OpenAIProvider(AIProvider):
         user_prompt: str,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
+        """Send a prompt to OpenAI and return the generated text.
+
+        Delegates to ``analyze_with_attachments`` with no attachments.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            max_tokens: Maximum completion tokens.
+
+        Returns:
+            The generated analysis text.
+
+        Raises:
+            AIProviderError: On any API or network failure.
+        """
         return self.analyze_with_attachments(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -1109,6 +1848,24 @@ class OpenAIProvider(AIProvider):
         user_prompt: str,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> Iterator[str]:
+        """Stream generated text chunks from OpenAI.
+
+        Creates a streaming Chat Completions API request and yields text
+        deltas as they arrive. Handles rate-limit retries, token-limit
+        fallback, and translates SDK exceptions into ``AIProviderError``.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            max_tokens: Maximum completion tokens.
+
+        Yields:
+            Text chunk strings as they are generated by the model.
+
+        Raises:
+            AIProviderError: On empty response, network failure,
+                authentication error, context overflow, or other API error.
+        """
         def _stream() -> Iterator[str]:
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -1171,6 +1928,24 @@ class OpenAIProvider(AIProvider):
         attachments: list[Mapping[str, str]] | None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
+        """Analyze with optional CSV file attachments via the Responses API.
+
+        Attempts file upload via OpenAI's Responses API first, then falls
+        back to inlining attachment data into the prompt or using plain
+        Chat Completions.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            attachments: Optional list of attachment descriptors.
+            max_tokens: Maximum completion tokens.
+
+        Returns:
+            The generated analysis text.
+
+        Raises:
+            AIProviderError: On any API or network failure.
+        """
         def _request() -> str:
             return self._request_non_stream(
                 system_prompt=system_prompt,
@@ -1182,6 +1957,22 @@ class OpenAIProvider(AIProvider):
         return self._run_openai_request(_request)
 
     def _run_openai_request(self, request_fn: Callable[[], _T]) -> _T:
+        """Execute an OpenAI request with rate-limit retries and error mapping.
+
+        Wraps the given callable with rate-limit retry logic and translates
+        all OpenAI SDK exceptions into ``AIProviderError``.
+
+        Args:
+            request_fn: A zero-argument callable that performs the OpenAI
+                API request and returns the result.
+
+        Returns:
+            The return value of ``request_fn`` on success.
+
+        Raises:
+            AIProviderError: On connection failure, authentication error,
+                context overflow, bad request, or any other API error.
+        """
         try:
             return _run_with_rate_limit_retries(
                 request_fn=request_fn,
@@ -1216,6 +2007,25 @@ class OpenAIProvider(AIProvider):
         max_tokens: int,
         attachments: list[Mapping[str, str]] | None = None,
     ) -> str:
+        """Perform a non-streaming OpenAI request with attachment handling.
+
+        Tries file-attachment mode first, then falls back to inlining
+        attachment data into the prompt, and finally issues a plain
+        Chat Completions request.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt text.
+            max_tokens: Maximum completion tokens.
+            attachments: Optional list of attachment descriptors.
+
+        Returns:
+            The generated analysis text.
+
+        Raises:
+            AIProviderError: If the response is empty or the API rejects
+                the request.
+        """
         attachment_response = self._request_with_csv_attachments(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -1252,6 +2062,24 @@ class OpenAIProvider(AIProvider):
         messages: list[dict[str, str]],
         max_tokens: int,
     ) -> Any:
+        """Create a Chat Completions request with token parameter fallback.
+
+        Tries ``max_completion_tokens`` first (newer API parameter), then
+        falls back to ``max_tokens`` if the endpoint reports the parameter
+        as unsupported. Also retries with a reduced token count when the
+        provider rejects the requested maximum.
+
+        Args:
+            messages: The conversation messages list for the API call.
+            max_tokens: Maximum completion tokens.
+
+        Returns:
+            The OpenAI ``ChatCompletion`` response object.
+
+        Raises:
+            openai.BadRequestError: If the request is rejected for reasons
+                other than unsupported parameters or token limits.
+        """
         def _create_with_token_parameter(token_parameter: str, token_count: int) -> Any:
             request_kwargs: dict[str, Any] = {
                 "model": self.model,
@@ -1295,6 +2123,23 @@ class OpenAIProvider(AIProvider):
         messages: list[dict[str, str]],
         max_tokens: int,
     ) -> Any:
+        """Create a streaming Chat Completions request with token parameter fallback.
+
+        Identical to ``_create_chat_completion`` but with ``stream=True``.
+        Tries ``max_completion_tokens`` first, then falls back to
+        ``max_tokens`` if unsupported.
+
+        Args:
+            messages: The conversation messages list for the API call.
+            max_tokens: Maximum completion tokens.
+
+        Returns:
+            A streaming response iterator from ``chat.completions.create``.
+
+        Raises:
+            openai.BadRequestError: If the request is rejected for reasons
+                other than unsupported parameters or token limits.
+        """
         def _create_with_token_parameter(token_parameter: str, token_count: int) -> Any:
             request_kwargs: dict[str, Any] = {
                 "model": self.model,
@@ -1341,6 +2186,26 @@ class OpenAIProvider(AIProvider):
         max_tokens: int,
         attachments: list[Mapping[str, str]] | None,
     ) -> str | None:
+        """Attempt to send a request with CSV files via the OpenAI Responses API.
+
+        Uploads each attachment as a file, builds a Responses API request
+        with ``input_file`` references, and extracts the output text.
+        Cleans up uploaded files in the ``finally`` block.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt text.
+            max_tokens: Maximum completion tokens.
+            attachments: Optional list of attachment descriptors.
+
+        Returns:
+            The generated text if attachment mode succeeded, or ``None``
+            if attachments were skipped or unsupported.
+
+        Raises:
+            AIProviderError: If the request fails for a reason other than
+                unsupported attachments.
+        """
         normalized_attachments = self._prepare_csv_attachments(
             attachments,
             supports_file_attachments=hasattr(self.client, "files") and hasattr(self.client, "responses"),
@@ -1425,11 +2290,33 @@ class OpenAIProvider(AIProvider):
                     continue
 
     def get_model_info(self) -> dict[str, str]:
+        """Return OpenAI provider and model metadata.
+
+        Returns:
+            A dictionary with ``"provider"`` set to ``"openai"`` and
+            ``"model"`` set to the configured model identifier.
+        """
         return {"provider": "openai", "model": self.model}
 
 
 class KimiProvider(AIProvider):
-    """Moonshot Kimi API provider implementation."""
+    """Moonshot Kimi API provider implementation.
+
+    Uses the ``openai`` Python SDK pointed at the Moonshot Kimi API base
+    URL. Supports synchronous and streaming generation, CSV file
+    attachments via the Responses API, and automatic model-alias mapping
+    for deprecated Kimi model identifiers.
+
+    Attributes:
+        api_key (str): The Moonshot/Kimi API key.
+        model (str): The Kimi model identifier
+            (e.g., ``"kimi-k2-turbo-preview"``).
+        base_url (str): The normalized Kimi API base URL.
+        attach_csv_as_file (bool): Whether to upload CSV artifacts as
+            file attachments via the Responses API.
+        client: The ``openai.OpenAI`` SDK client instance configured for
+            the Kimi endpoint.
+    """
 
     def __init__(
         self,
@@ -1438,6 +2325,21 @@ class KimiProvider(AIProvider):
         base_url: str = DEFAULT_KIMI_BASE_URL,
         attach_csv_as_file: bool = True,
     ) -> None:
+        """Initialize the Kimi provider.
+
+        Args:
+            api_key: Moonshot/Kimi API key. Must be non-empty.
+            model: Kimi model identifier to use for completions. Deprecated
+                aliases are automatically mapped to current identifiers.
+            base_url: Kimi API base URL. Defaults to the Moonshot production
+                endpoint.
+            attach_csv_as_file: If ``True``, attempt to send CSV artifacts
+                as file uploads via the Responses API.
+
+        Raises:
+            AIProviderError: If the ``openai`` SDK is not installed or
+                the API key is empty.
+        """
         try:
             import openai
         except ImportError as error:
@@ -1470,6 +2372,21 @@ class KimiProvider(AIProvider):
         user_prompt: str,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
+        """Send a prompt to Kimi and return the generated text.
+
+        Delegates to ``analyze_with_attachments`` with no attachments.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            max_tokens: Maximum completion tokens.
+
+        Returns:
+            The generated analysis text.
+
+        Raises:
+            AIProviderError: On any API or network failure.
+        """
         return self.analyze_with_attachments(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -1483,6 +2400,26 @@ class KimiProvider(AIProvider):
         user_prompt: str,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> Iterator[str]:
+        """Stream generated text chunks from Kimi.
+
+        Creates a streaming Chat Completions API request via the Moonshot
+        endpoint and yields text deltas as they arrive. Handles rate-limit
+        retries, model-not-available errors, and translates SDK exceptions
+        into ``AIProviderError``.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            max_tokens: Maximum completion tokens.
+
+        Yields:
+            Text chunk strings as they are generated by the model.
+
+        Raises:
+            AIProviderError: On empty response, network failure,
+                authentication error, context overflow, model unavailability,
+                or other API error.
+        """
         def _stream() -> Iterator[str]:
             stream = self._run_kimi_request(
                 lambda: self.client.chat.completions.create(
@@ -1553,6 +2490,23 @@ class KimiProvider(AIProvider):
         attachments: list[Mapping[str, str]] | None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
+        """Analyze with optional CSV file attachments via the Kimi Responses API.
+
+        Attempts file upload first, then falls back to plain Chat
+        Completions if the Kimi endpoint does not support the Responses API.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            attachments: Optional list of attachment descriptors.
+            max_tokens: Maximum completion tokens.
+
+        Returns:
+            The generated analysis text.
+
+        Raises:
+            AIProviderError: On any API or network failure.
+        """
         def _request() -> str:
             return self._request_non_stream(
                 system_prompt=system_prompt,
@@ -1564,6 +2518,23 @@ class KimiProvider(AIProvider):
         return self._run_kimi_request(_request)
 
     def _run_kimi_request(self, request_fn: Callable[[], _T]) -> _T:
+        """Execute a Kimi request with rate-limit retries and error mapping.
+
+        Wraps the given callable with rate-limit retry logic and translates
+        all OpenAI SDK exceptions into ``AIProviderError`` with Kimi-specific
+        error messages, including model-not-available detection.
+
+        Args:
+            request_fn: A zero-argument callable that performs the Kimi
+                API request and returns the result.
+
+        Returns:
+            The return value of ``request_fn`` on success.
+
+        Raises:
+            AIProviderError: On connection failure, authentication error,
+                context overflow, model unavailability, or any other API error.
+        """
         try:
             return _run_with_rate_limit_retries(
                 request_fn=request_fn,
@@ -1605,6 +2576,24 @@ class KimiProvider(AIProvider):
         max_tokens: int,
         attachments: list[Mapping[str, str]] | None = None,
     ) -> str:
+        """Perform a non-streaming Kimi request with attachment handling.
+
+        Tries file-attachment mode first via the Responses API, then falls
+        back to a plain Chat Completions request.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt text.
+            max_tokens: Maximum completion tokens.
+            attachments: Optional list of attachment descriptors.
+
+        Returns:
+            The generated analysis text.
+
+        Raises:
+            AIProviderError: If the response is empty or the API rejects
+                the request.
+        """
         attachment_response = self._request_with_csv_attachments(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -1634,6 +2623,26 @@ class KimiProvider(AIProvider):
         max_tokens: int,
         attachments: list[Mapping[str, str]] | None,
     ) -> str | None:
+        """Attempt to send a request with CSV files via the Kimi Responses API.
+
+        Uploads each attachment using the ``file-extract`` purpose, builds
+        a Responses API request with ``input_file`` references, and extracts
+        the output text. Cleans up uploaded files in the ``finally`` block.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt text.
+            max_tokens: Maximum completion tokens.
+            attachments: Optional list of attachment descriptors.
+
+        Returns:
+            The generated text if attachment mode succeeded, or ``None``
+            if attachments were skipped or unsupported.
+
+        Raises:
+            AIProviderError: If the request fails for a reason other than
+                unsupported attachments.
+        """
         normalized_attachments = self._prepare_csv_attachments(
             attachments,
             supports_file_attachments=hasattr(self.client, "files") and hasattr(self.client, "responses"),
@@ -1693,11 +2702,36 @@ class KimiProvider(AIProvider):
                     continue
 
     def get_model_info(self) -> dict[str, str]:
+        """Return Kimi provider and model metadata.
+
+        Returns:
+            A dictionary with ``"provider"`` set to ``"kimi"`` and
+            ``"model"`` set to the configured model identifier.
+        """
         return {"provider": "kimi", "model": self.model}
 
 
 class LocalProvider(AIProvider):
-    """OpenAI-compatible local provider implementation."""
+    """OpenAI-compatible local provider implementation.
+
+    Uses the ``openai`` Python SDK pointed at a local OpenAI-compatible
+    endpoint (Ollama, LM Studio, vLLM, or similar). Supports synchronous
+    and streaming generation, CSV file attachments via the Responses API
+    when available, automatic reasoning-block stripping for local
+    reasoning models, and configurable request timeouts.
+
+    Attributes:
+        base_url (str): The normalized local endpoint base URL.
+        model (str): The local model identifier (e.g., ``"llama3.1:70b"``).
+        api_key (str): The API key for the local endpoint (often
+            ``"not-needed"``).
+        attach_csv_as_file (bool): Whether to attempt file-attachment
+            mode via the Responses API.
+        request_timeout_seconds (float): HTTP timeout in seconds for
+            requests to the local endpoint.
+        client: The ``openai.OpenAI`` SDK client instance configured for
+            the local endpoint.
+    """
 
     def __init__(
         self,
@@ -1707,6 +2741,22 @@ class LocalProvider(AIProvider):
         attach_csv_as_file: bool = True,
         request_timeout_seconds: float = DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS,
     ) -> None:
+        """Initialize the local provider.
+
+        Args:
+            base_url: Base URL for the local OpenAI-compatible endpoint.
+                Automatically normalized to include ``/v1`` if missing.
+            model: Model identifier to use for completions.
+            api_key: API key for the local endpoint. Defaults to
+                ``"not-needed"`` for endpoints that do not require auth.
+            attach_csv_as_file: If ``True``, attempt to send CSV artifacts
+                as file uploads via the Responses API.
+            request_timeout_seconds: HTTP timeout in seconds. Defaults to
+                3600 (1 hour) to accommodate large model inference.
+
+        Raises:
+            AIProviderError: If the ``openai`` SDK is not installed.
+        """
         try:
             import openai
         except ImportError as error:
@@ -1749,6 +2799,21 @@ class LocalProvider(AIProvider):
         user_prompt: str,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
+        """Send a prompt to the local endpoint and return the generated text.
+
+        Delegates to ``analyze_with_attachments`` with no attachments.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            max_tokens: Maximum completion tokens.
+
+        Returns:
+            The generated analysis text.
+
+        Raises:
+            AIProviderError: On any API or network failure.
+        """
         return self.analyze_with_attachments(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -1762,6 +2827,25 @@ class LocalProvider(AIProvider):
         user_prompt: str,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> Iterator[str]:
+        """Stream generated text chunks from the local endpoint.
+
+        Creates a streaming Chat Completions request and yields text deltas.
+        Falls back to a non-streaming request if the endpoint reports
+        that streaming is unsupported. Handles rate-limit retries, timeout
+        errors, and translates SDK exceptions into ``AIProviderError``.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            max_tokens: Maximum completion tokens.
+
+        Yields:
+            Text chunk strings as they are generated by the model.
+
+        Raises:
+            AIProviderError: On empty response, timeout, connection failure,
+                authentication error, context overflow, or other API error.
+        """
         def _stream() -> Iterator[str]:
             try:
                 prompt_for_completion = self._build_chat_completion_prompt(
@@ -1865,6 +2949,24 @@ class LocalProvider(AIProvider):
         attachments: list[Mapping[str, str]] | None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
+        """Analyze with optional CSV file attachments via the local endpoint.
+
+        Attempts file upload via the Responses API if available, then
+        falls back to inlining attachment data into the prompt for
+        Chat Completions.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            attachments: Optional list of attachment descriptors.
+            max_tokens: Maximum completion tokens.
+
+        Returns:
+            The generated analysis text.
+
+        Raises:
+            AIProviderError: On any API or network failure.
+        """
         def _request() -> str:
             return self._request_non_stream(
                 system_prompt=system_prompt,
@@ -1876,6 +2978,23 @@ class LocalProvider(AIProvider):
         return self._run_local_request(_request)
 
     def _run_local_request(self, request_fn: Callable[[], _T]) -> _T:
+        """Execute a local endpoint request with rate-limit retries and error mapping.
+
+        Wraps the given callable with rate-limit retry logic and translates
+        all OpenAI SDK exceptions into ``AIProviderError`` with local-provider
+        specific error messages, including timeout and 404 detection.
+
+        Args:
+            request_fn: A zero-argument callable that performs the local
+                API request and returns the result.
+
+        Returns:
+            The return value of ``request_fn`` on success.
+
+        Raises:
+            AIProviderError: On timeout, connection failure, authentication
+                error, context overflow, 404 errors, or any other API error.
+        """
         try:
             return _run_with_rate_limit_retries(
                 request_fn=request_fn,
@@ -1927,7 +3046,30 @@ class LocalProvider(AIProvider):
         attachments: list[Mapping[str, str]] | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
-        """Analyze with streamed progress updates when supported by the local endpoint."""
+        """Analyze with streamed progress updates when supported by the local endpoint.
+
+        Streams the response and periodically invokes ``progress_callback``
+        with accumulated thinking and answer text. Separates reasoning
+        output (``reasoning_content``, ``thinking``) from answer output
+        (``content``) and cleans up duplicated reasoning blocks. Falls
+        back to ``analyze_with_attachments`` when no callback is provided.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt with investigation context.
+            progress_callback: Optional callable that receives progress dicts
+                with ``"status"``, ``"thinking_text"``, and ``"partial_text"``
+                keys. May be ``None`` to skip progress reporting.
+            attachments: Optional list of attachment descriptors.
+            max_tokens: Maximum completion tokens.
+
+        Returns:
+            The generated analysis text with reasoning blocks removed.
+
+        Raises:
+            AIProviderError: On empty response, timeout, or any other
+                API error.
+        """
         if progress_callback is None:
             return self.analyze_with_attachments(
                 system_prompt=system_prompt,
@@ -2065,6 +3207,25 @@ class LocalProvider(AIProvider):
         max_tokens: int,
         attachments: list[Mapping[str, str]] | None = None,
     ) -> str:
+        """Perform a non-streaming local request with attachment handling.
+
+        Tries file-attachment mode first, then falls back to inlining
+        attachment data into the prompt for a Chat Completions request.
+        Strips leading reasoning blocks from the response text.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt text.
+            max_tokens: Maximum completion tokens.
+            attachments: Optional list of attachment descriptors.
+
+        Returns:
+            The generated analysis text with reasoning blocks removed.
+
+        Raises:
+            AIProviderError: If the response is empty or the API rejects
+                the request.
+        """
         attachment_response = self._request_with_csv_attachments(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -2115,6 +3276,19 @@ class LocalProvider(AIProvider):
         user_prompt: str,
         attachments: list[Mapping[str, str]] | None,
     ) -> str:
+        """Build the user prompt for Chat Completions, inlining attachments if needed.
+
+        When ``attach_csv_as_file`` is enabled and attachments are provided,
+        inlines the attachment file contents directly into the prompt text
+        as a fallback for endpoints that do not support the Responses API.
+
+        Args:
+            user_prompt: The original user-facing prompt text.
+            attachments: Optional list of attachment descriptors.
+
+        Returns:
+            The prompt string, potentially with attachment data appended.
+        """
         prompt_for_completion = user_prompt
         if attachments and self.attach_csv_as_file:
             prompt_for_completion, inlined_attachment_data = _inline_attachment_data_into_prompt(
@@ -2132,6 +3306,26 @@ class LocalProvider(AIProvider):
         max_tokens: int,
         attachments: list[Mapping[str, str]] | None,
     ) -> str | None:
+        """Attempt to send a request with CSV files via the local Responses API.
+
+        Uploads each attachment as a file, builds a Responses API request
+        with ``input_file`` references, and extracts the output text.
+        Cleans up uploaded files in the ``finally`` block.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt text.
+            max_tokens: Maximum completion tokens.
+            attachments: Optional list of attachment descriptors.
+
+        Returns:
+            The generated text if attachment mode succeeded, or ``None``
+            if attachments were skipped or unsupported.
+
+        Raises:
+            AIProviderError: If the request fails for a reason other than
+                unsupported attachments.
+        """
         normalized_attachments = self._prepare_csv_attachments(
             attachments,
             supports_file_attachments=hasattr(self.client, "files") and hasattr(self.client, "responses"),
@@ -2191,11 +3385,40 @@ class LocalProvider(AIProvider):
                     continue
 
     def get_model_info(self) -> dict[str, str]:
+        """Return local provider and model metadata.
+
+        Returns:
+            A dictionary with ``"provider"`` set to ``"local"`` and
+            ``"model"`` set to the configured model identifier.
+        """
         return {"provider": "local", "model": self.model}
 
 
 def create_provider(config: dict[str, Any]) -> AIProvider:
-    """Factory for creating configured AI providers."""
+    """Create and return an AI provider instance based on application config.
+
+    Reads the ``ai.provider`` key from the configuration dictionary and
+    constructs the corresponding provider class (``ClaudeProvider``,
+    ``OpenAIProvider``, ``KimiProvider``, or ``LocalProvider``) with
+    settings from the provider-specific sub-section. API keys are resolved
+    from config values first, falling back to environment variables.
+
+    Args:
+        config: The application configuration dictionary, expected to
+            contain an ``"ai"`` section with a ``"provider"`` key and
+            provider-specific sub-sections (e.g., ``"ai.claude"``,
+            ``"ai.openai"``).
+
+    Returns:
+        A configured ``AIProvider`` instance ready for use.
+
+    Raises:
+        ValueError: If the ``ai`` section is missing or malformed, or if
+            the provider name is not one of the supported values
+            (``claude``, ``openai``, ``kimi``, ``local``).
+        AIProviderError: If the selected provider cannot be initialized
+            (e.g., missing SDK or empty API key).
+    """
     ai_config = config.get("ai", {})
     if not isinstance(ai_config, dict):
         raise ValueError("Invalid configuration: `ai` section must be a dictionary.")

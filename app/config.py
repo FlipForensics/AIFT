@@ -1,4 +1,24 @@
-"""Configuration loading and persistence for AIFT."""
+"""Configuration loading and persistence for AIFT.
+
+Manages the application's layered configuration system:
+
+1. **Hardcoded defaults** -- ``DEFAULT_CONFIG`` provides sensible values for
+   every setting so the application runs out of the box.
+2. **YAML file** -- User overrides in ``config.yaml`` are deep-merged on top
+   of the defaults.
+3. **Environment variables** -- API keys from ``ANTHROPIC_API_KEY``,
+   ``OPENAI_API_KEY``, and ``MOONSHOT_API_KEY`` / ``KIMI_API_KEY`` take
+   highest precedence.
+
+The :func:`save_config` helper persists the current configuration back to
+YAML so settings changed through the UI are retained across restarts.
+
+Attributes:
+    PROJECT_ROOT: Resolved path to the repository root directory.
+    DEFAULT_CONFIG: Complete default configuration dictionary.
+    LOGO_FILE_CANDIDATES: Ordered tuple of logo filenames to search for in
+        the ``images/`` directory.
+"""
 
 from __future__ import annotations
 
@@ -70,6 +90,18 @@ LOGO_FILE_CANDIDATES = (
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge *override* into *base*, mutating *base* in place.
+
+    Nested dictionaries are merged recursively; all other value types in
+    *override* replace the corresponding entry in *base*.
+
+    Args:
+        base: The target dictionary that will be updated.
+        override: The dictionary whose values take precedence.
+
+    Returns:
+        The mutated *base* dictionary (returned for convenience).
+    """
     for key, value in override.items():
         if key in base and isinstance(base[key], dict) and isinstance(value, dict):
             _deep_merge(base[key], value)
@@ -79,10 +111,23 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 
 def get_default_config() -> dict[str, Any]:
+    """Return a deep copy of :data:`DEFAULT_CONFIG` safe for mutation."""
     return deepcopy(DEFAULT_CONFIG)
 
 
 def apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
+    """Overlay API keys from environment variables onto *config*.
+
+    Checks ``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``, and
+    ``MOONSHOT_API_KEY`` / ``KIMI_API_KEY``.  Non-empty values replace the
+    corresponding ``api_key`` entries in the configuration dictionary.
+
+    Args:
+        config: The configuration dictionary to update in place.
+
+    Returns:
+        The mutated *config* dictionary.
+    """
     anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
     kimi_api_key = os.getenv("MOONSHOT_API_KEY", "").strip() or os.getenv("KIMI_API_KEY", "").strip()
@@ -98,6 +143,24 @@ def apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_config(path: str | Path | None = None, use_env_overrides: bool = True) -> dict[str, Any]:
+    """Load the AIFT configuration from a YAML file with layered defaults.
+
+    If the configuration file does not exist, a new file is created from
+    the defaults. Environment variable overrides are applied last unless
+    *use_env_overrides* is ``False``.
+
+    Args:
+        path: Explicit path to a YAML configuration file.  Defaults to
+            ``<PROJECT_ROOT>/config.yaml``.
+        use_env_overrides: When *True* (default), API keys from environment
+            variables take precedence over file values.
+
+    Returns:
+        The fully merged configuration dictionary.
+
+    Raises:
+        ValueError: If the YAML file contains a non-dictionary root value.
+    """
     config_path = Path(path) if path is not None else PROJECT_ROOT / "config.yaml"
     config = get_default_config()
 
@@ -118,6 +181,15 @@ def load_config(path: str | Path | None = None, use_env_overrides: bool = True) 
 
 
 def save_config(config: dict[str, Any], path: str | Path | None = None) -> None:
+    """Persist the configuration dictionary to a YAML file.
+
+    Parent directories are created automatically when they do not exist.
+
+    Args:
+        config: The configuration dictionary to serialise.
+        path: Destination file path.  Defaults to
+            ``<PROJECT_ROOT>/config.yaml``.
+    """
     config_path = Path(path) if path is not None else PROJECT_ROOT / "config.yaml"
     if config_path.parent != Path("."):
         config_path.parent.mkdir(parents=True, exist_ok=True)
