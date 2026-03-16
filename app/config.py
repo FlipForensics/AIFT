@@ -89,14 +89,16 @@ LOGO_FILE_CANDIDATES = (
 )
 
 
-def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge *override* into *base*, mutating *base* in place.
+def _deep_merge_inplace(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge *override* into *base* in-place. Returns *base*.
 
     Nested dictionaries are merged recursively; all other value types in
-    *override* replace the corresponding entry in *base*.
+    *override* replace the corresponding entry in *base*.  The caller is
+    responsible for passing a copy of *base* if the original must not be
+    mutated.
 
     Args:
-        base: The target dictionary that will be updated.
+        base: The target dictionary that will be updated in-place.
         override: The dictionary whose values take precedence.
 
     Returns:
@@ -104,7 +106,7 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     """
     for key, value in override.items():
         if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-            _deep_merge(base[key], value)
+            _deep_merge_inplace(base[key], value)
         else:
             base[key] = value
     return base
@@ -171,7 +173,7 @@ def load_config(path: str | Path | None = None, use_env_overrides: bool = True) 
         if not isinstance(parsed, dict):
             raise ValueError(f"Invalid configuration format in {config_path}.")
 
-        _deep_merge(config, parsed)
+        _deep_merge_inplace(config, parsed)
     else:
         save_config(config, config_path)
 
