@@ -34,8 +34,10 @@ suitable for large language model analysis.  The pipeline handles:
   the case audit trail.
 
 Module-Level Constants:
-    TOKEN_CHAR_RATIO (int): Approximate characters per token for budget
-        estimation (default 4).
+    TOKEN_CHAR_RATIO (int): Approximate characters per token for ASCII text
+        budget estimation (default 4).  Used as the denominator for the ASCII
+        portion of ``_estimate_tokens`` and for converting token budgets to
+        character budgets (e.g. ``chunk_csv_budget``).
     DATE_BUFFER_DAYS (int): Default number of days to add/subtract from
         context-extracted dates when filtering artifact rows.
     AI_MAX_TOKENS (int): Default AI context window size in tokens.
@@ -76,6 +78,12 @@ from typing import Any, Callable, Iterable, Mapping
 import yaml
 
 from .ai_providers import AIProviderError, create_provider
+
+try:
+    import tiktoken
+    _TIKTOKEN_AVAILABLE = True
+except ImportError:
+    _TIKTOKEN_AVAILABLE = False
 
 LOGGER = logging.getLogger(__name__)
 
@@ -3640,8 +3648,15 @@ class ForensicAnalyzer:
     def _estimate_tokens(self, text: str) -> int:
         """Estimate the token count of a text string.
 
-        Uses a simple character-to-token ratio (``TOKEN_CHAR_RATIO``)
-        for fast approximation without requiring a tokenizer.
+        When the ``tiktoken`` library is installed and the AI provider is
+        OpenAI-compatible, an exact BPE token count is returned.  Otherwise
+        a heuristic is used that accounts for non-ASCII content (CJK, base64,
+        etc.) which the simple ``len / 4`` rule significantly underestimates:
+
+        - ASCII words contribute ~1.3 tokens each (approximated via
+          ``len(ascii_chars) / 4`` for simplicity and consistency).
+        - Each non-ASCII character contributes ~1.5 tokens.
+        - A 10% safety margin is added on top.
 
         Args:
             text: The text to estimate token count for.
@@ -3649,5 +3664,44 @@ class ForensicAnalyzer:
         Returns:
             Estimated number of tokens (minimum 1).
         """
-        ratio = max(1, TOKEN_CHAR_RATIO)
-        return max(1, len(text) // ratio)
+        if not text:
+            return 1
+
+        # Try exact counting via tiktoken for OpenAI-compatible providers.
+        if _TIKTOKEN_AVAILABLE:
+            provider_name = self.model_info.get("provider", "").lower()
+            if provider_name in {"openai", "local", "custom"}:
+                model_name = self.model_info.get("model", "")
+                try:
+                    enc = tiktoken.encoding_for_model(model_name)
+                except KeyError:
+                    # Unknown model — fall back to cl100k_base (GPT-4 family).
+                    try:
+                        enc = tiktoken.get_encoding("cl100k_base")
+                    except Exception:
+                        enc = None
+                if enc is not None:
+                    try:
+                        return max(1, len(enc.encode(text)))
+                    except Exception:
+                        pass  # Fall through to heuristic.
+
+        # Heuristic: split ASCII from non-ASCII characters.
+        ascii_chars: list[str] = []
+        non_ascii_count = 0
+        for ch in text:
+            if ord(ch) < 128:
+                ascii_chars.append(ch)
+            else:
+                non_ascii_count += 1
+
+        # ASCII portion: ~1 token per 4 characters (same as len/4).
+        ascii_tokens = len(ascii_chars) / max(1, TOKEN_CHAR_RATIO)
+        # Non-ASCII portion: ~1.5 tokens per character.
+        non_ascii_tokens = non_ascii_count * 1.5
+
+        raw_estimate = ascii_tokens + non_ascii_tokens
+        # Add 10% safety margin.
+        with_margin = raw_estimate * 1.1
+
+        return max(1, int(with_margin))

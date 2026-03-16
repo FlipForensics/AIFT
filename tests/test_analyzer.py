@@ -1637,5 +1637,54 @@ class TestValidateCitationsColumns(unittest.TestCase):
             self.assertEqual(warnings, [])
 
 
+class TestEstimateTokens(unittest.TestCase):
+    """Tests for ForensicAnalyzer._estimate_tokens heuristic."""
+
+    def _make_analyzer(self) -> ForensicAnalyzer:
+        """Create a minimal analyzer with tiktoken disabled for heuristic tests."""
+        analyzer = ForensicAnalyzer()
+        # Ensure heuristic path even if tiktoken is installed.
+        analyzer.model_info = {"provider": "anthropic", "model": "test"}
+        return analyzer
+
+    def test_empty_string_returns_one(self) -> None:
+        analyzer = self._make_analyzer()
+        self.assertEqual(analyzer._estimate_tokens(""), 1)
+
+    def test_pure_ascii_roughly_len_div_4(self) -> None:
+        analyzer = self._make_analyzer()
+        text = "hello world this is a test"
+        result = analyzer._estimate_tokens(text)
+        naive = len(text) // 4
+        # With 10% margin the result should be slightly above naive.
+        self.assertGreaterEqual(result, naive)
+        # But not wildly different for pure ASCII.
+        self.assertLessEqual(result, naive * 2)
+
+    def test_cjk_text_higher_than_naive(self) -> None:
+        analyzer = self._make_analyzer()
+        cjk_text = "\u4f60\u597d\u4e16\u754c" * 50  # 200 CJK characters
+        naive = len(cjk_text) // 4
+        result = analyzer._estimate_tokens(cjk_text)
+        # Non-ASCII at 1.5 tokens/char + 10% margin should exceed naive len/4.
+        self.assertGreater(result, naive)
+
+    def test_mixed_content(self) -> None:
+        analyzer = self._make_analyzer()
+        mixed = "Hello " + "\u4f60\u597d" * 20 + " world"
+        result = analyzer._estimate_tokens(mixed)
+        # Should be higher than pure ASCII estimate of same length.
+        pure_ascii_estimate = len(mixed) // 4
+        self.assertGreater(result, pure_ascii_estimate)
+
+    def test_safety_margin_applied(self) -> None:
+        analyzer = self._make_analyzer()
+        text = "a" * 400  # Pure ASCII, 400 chars -> 100 raw tokens.
+        result = analyzer._estimate_tokens(text)
+        raw = 400 / 4
+        # 10% margin: expect >= 110.
+        self.assertGreaterEqual(result, int(raw * 1.1))
+
+
 if __name__ == "__main__":
     unittest.main()
