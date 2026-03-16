@@ -1083,7 +1083,8 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual([entry["role"] for entry in history], ["user", "assistant"])
             self.assertEqual(history[0]["content"], user_message)
             self.assertEqual(history[1]["content"], "Chat response from test provider.")
-            self.assertEqual(routes.CHAT_PROGRESS[case_id]["status"], "completed")
+            # After the SSE stream ends, the progress entry is cleaned up.
+            self.assertNotIn(case_id, routes.CHAT_PROGRESS)
 
             clear_history_resp = self.client.delete(f"/api/cases/{case_id}/chat/history")
             self.assertEqual(clear_history_resp.status_code, 200)

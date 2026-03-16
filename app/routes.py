@@ -1407,6 +1407,8 @@ def _extract_archive_members(
     validated_members: list[tuple[Any, Path]] = []
     for member_name, member in members:
         member_path = Path(member_name)
+        if member_path.is_absolute() or ".." in member_path.parts:
+            raise ValueError(unsafe_paths_message)
         target = (root / member_path).resolve()
         if not target.is_relative_to(root):
             raise ValueError(unsafe_paths_message)
@@ -1475,7 +1477,7 @@ def _extract_zip(zip_path: Path, destination: Path) -> Path:
                 destination,
                 members,
                 empty_message="Evidence ZIP is empty.",
-                unsafe_paths_message="Evidence ZIP contains unsafe paths.",
+                unsafe_paths_message="Archive rejected: contains unsafe file paths",
                 no_files_message="Evidence ZIP extraction produced no files.",
                 extract_member=_extract_member,
             )
@@ -1498,7 +1500,13 @@ def _extract_tar(tar_path: Path, destination: Path) -> Path:
     """
     try:
         with tarfile.open(tar_path, "r:*") as archive:
-            members = [(member.name, member) for member in archive.getmembers() if member.isfile()]
+            raw_members = archive.getmembers()
+            for member in raw_members:
+                if member.islnk() or member.issym():
+                    raise ValueError(
+                        "Archive rejected: contains unsafe file paths"
+                    )
+            members = [(member.name, member) for member in raw_members if member.isfile()]
 
             def _extract_member(member: Any, target: Path) -> None:
                 """Extract a single tar member to the target path."""
@@ -1511,7 +1519,7 @@ def _extract_tar(tar_path: Path, destination: Path) -> Path:
                 destination,
                 members,
                 empty_message="Evidence tar archive is empty.",
-                unsafe_paths_message="Evidence tar archive contains unsafe paths.",
+                unsafe_paths_message="Archive rejected: contains unsafe file paths",
                 no_files_message="Evidence tar extraction produced no files.",
                 extract_member=_extract_member,
             )
@@ -1536,15 +1544,33 @@ def _extract_7z(archive_path: Path, destination: Path) -> Path:
         with py7zr.SevenZipFile(archive_path, mode="r") as archive:
             members = [(name, name) for name in archive.getnames() if not name.endswith("/")]
 
-            def _extract_members(_members: list[tuple[Any, Path]]) -> None:
-                """Extract all 7z members to the destination directory."""
-                archive.extractall(path=destination)
+            def _extract_members(validated: list[tuple[Any, Path]]) -> None:
+                """Extract 7z members to validated target paths.
+
+                Extracts the archive into a temporary directory, then moves
+                each file to its validated target path. This avoids using
+                ``extractall`` directly into the destination, which would
+                bypass path traversal validation.
+
+                Args:
+                    validated: List of ``(member_name, validated_target_path)``
+                        tuples.
+                """
+                import tempfile
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    tmp = Path(tmpdir)
+                    archive.extractall(path=tmp)
+                    for member_name, target in validated:
+                        src = tmp / member_name
+                        if src.is_file():
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(src, target)
 
             return _extract_archive_members(
                 destination,
                 members,
                 empty_message="Evidence 7z archive is empty.",
-                unsafe_paths_message="Evidence 7z archive contains unsafe paths.",
+                unsafe_paths_message="Archive rejected: contains unsafe file paths",
                 no_files_message="Evidence 7z extraction produced no files.",
                 extract_all_members=_extract_members,
             )
