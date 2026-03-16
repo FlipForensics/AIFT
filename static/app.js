@@ -1814,7 +1814,8 @@
     if (st.chat.historyLoadedCaseId === caseId) return;
     const history = await apiJson(`/api/cases/${encodeURIComponent(caseId)}/chat/history`, { method: "GET" });
     if (caseId !== activeCaseId()) return;
-    renderChatHistory(Array.isArray(history) ? history : []);
+    const messages = Array.isArray(history) ? history : (Array.isArray(history?.messages) ? history.messages : []);
+    renderChatHistory(messages);
     st.chat.historyLoadedCaseId = caseId;
   }
 

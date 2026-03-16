@@ -1090,7 +1090,9 @@ class RoutesTests(unittest.TestCase):
 
             history_resp = self.client.get(f"/api/cases/{case_id}/chat/history")
             self.assertEqual(history_resp.status_code, 200)
-            history = history_resp.get_json()
+            history_data = history_resp.get_json()
+            self.assertTrue(history_data["success"])
+            history = history_data["messages"]
             self.assertEqual([entry["role"] for entry in history], ["user", "assistant"])
             self.assertEqual(history[0]["content"], user_message)
             self.assertEqual(history[1]["content"], "Chat response from test provider.")
@@ -1099,11 +1101,15 @@ class RoutesTests(unittest.TestCase):
 
             clear_history_resp = self.client.delete(f"/api/cases/{case_id}/chat/history")
             self.assertEqual(clear_history_resp.status_code, 200)
-            self.assertEqual(clear_history_resp.get_json()["status"], "cleared")
+            clear_data = clear_history_resp.get_json()
+            self.assertTrue(clear_data["success"])
+            self.assertEqual(clear_data["status"], "cleared")
 
             history_after_clear_resp = self.client.get(f"/api/cases/{case_id}/chat/history")
             self.assertEqual(history_after_clear_resp.status_code, 200)
-            self.assertEqual(history_after_clear_resp.get_json(), [])
+            after_clear_data = history_after_clear_resp.get_json()
+            self.assertTrue(after_clear_data["success"])
+            self.assertEqual(after_clear_data["messages"], [])
 
             self.assertTrue(fake_provider.calls)
             first_call = fake_provider.calls[0]

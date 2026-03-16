@@ -248,18 +248,39 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _error(message: str, status: int) -> tuple[Response, int]:
-    """Create a JSON error response tuple for Flask route handlers.
+def _error(message: str, status: int = 400) -> tuple[Response, int]:
+    """Create a standardized JSON error response tuple for Flask route handlers.
 
     Args:
         message: Human-readable error description to include in the response body.
         status: HTTP status code for the response (e.g., 400, 404, 500).
+            Defaults to 400.
 
     Returns:
-        A tuple of ``(Response, int)`` containing a JSON body with an ``"error"``
-        key and the corresponding HTTP status code.
+        A tuple of ``(Response, int)`` containing a JSON body with
+        ``"success": false`` and an ``"error"`` key, plus the HTTP status code.
     """
-    return jsonify({"error": message}), status
+    return jsonify({"success": False, "error": message}), status
+
+
+def _success(data: dict[str, Any] | None = None, status: int = 200) -> tuple[Response, int]:
+    """Create a standardized JSON success response tuple for Flask route handlers.
+
+    Args:
+        data: Optional dictionary of response data to merge into the response
+            body alongside ``"success": true``. Defaults to ``None``.
+        status: HTTP status code for the response (e.g., 200, 201, 202).
+            Defaults to 200.
+
+    Returns:
+        A tuple of ``(Response, int)`` containing a JSON body with
+        ``"success": true`` merged with any provided data, plus the HTTP
+        status code.
+    """
+    payload: dict[str, Any] = {"success": True}
+    if data:
+        payload.update(data)
+    return jsonify(payload), status
 
 
 def _safe_name(value: str, fallback: str = "item") -> str:
@@ -2850,7 +2871,7 @@ def create_case() -> tuple[Response, int]:
         ANALYSIS_PROGRESS[case_id] = _new_progress()
         CHAT_PROGRESS[case_id] = _new_progress()
 
-    return jsonify({"case_id": case_id, "case_name": case_name}), 201
+    return _success({"case_id": case_id, "case_name": case_name}, 201)
 
 
 @routes_bp.post("/api/cases/<case_id>/evidence")
@@ -2934,7 +2955,7 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
             case["image_metadata"] = metadata
             case["available_artifacts"] = available_artifacts
 
-        return jsonify(
+        return _success(
             {
                 "case_id": case_id,
                 "source_mode": evidence_payload["mode"],
@@ -3036,6 +3057,7 @@ def start_parse(case_id: str) -> tuple[Response, int]:
     }
     if analysis_date_range is not None:
         response_payload["analysis_date_range"] = analysis_date_range
+    response_payload["success"] = True
     return jsonify(response_payload), 202
 
 
@@ -3136,13 +3158,14 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
         daemon=True,
     ).start()
 
-    return jsonify(
+    return _success(
         {
             "status": "started",
             "case_id": case_id,
             "analysis_artifacts": analysis_artifacts_snapshot,
-        }
-    ), 202
+        },
+        202,
+    )
 
 
 @routes_bp.get("/api/cases/<case_id>/analyze/progress")
@@ -3209,7 +3232,7 @@ def chat_with_case(case_id: str) -> Response | tuple[Response, int]:
         args=(case_id, message, config_snapshot),
         daemon=True,
     ).start()
-    return jsonify({"status": "processing"}), 202
+    return _success({"status": "processing"}, 202)
 
 
 @routes_bp.get("/api/cases/<case_id>/chat/stream")
@@ -3245,7 +3268,7 @@ def get_case_chat_history(case_id: str) -> Response | tuple[Response, int]:
     with STATE_LOCK:
         case_dir = case["case_dir"]
     manager = ChatManager(case_dir)
-    return jsonify(manager.get_history())
+    return _success({"messages": manager.get_history()})
 
 
 @routes_bp.delete("/api/cases/<case_id>/chat/history")
@@ -3270,7 +3293,7 @@ def clear_case_chat_history(case_id: str) -> Response | tuple[Response, int]:
     manager = ChatManager(case_dir)
     manager.clear()
     audit_logger.log("chat_history_cleared", {"case_id": case_id})
-    return jsonify({"status": "cleared", "case_id": case_id})
+    return _success({"status": "cleared", "case_id": case_id})
 
 
 @routes_bp.get("/api/cases/<case_id>/report")
@@ -3425,7 +3448,7 @@ def list_artifact_profiles() -> Response:
     """
     config_path = Path(str(current_app.config.get("AIFT_CONFIG_PATH", "config.yaml")))
     profiles_root = _resolve_profiles_root(config_path)
-    return jsonify({"profiles": _compose_profile_response(profiles_root)})
+    return _success({"profiles": _compose_profile_response(profiles_root)})
 
 
 @routes_bp.post("/api/artifact-profiles")
@@ -3491,7 +3514,7 @@ def save_artifact_profile() -> Response | tuple[Response, int]:
             500,
         )
 
-    return jsonify(
+    return _success(
         {
             "status": "saved",
             "profile": response_profile,
@@ -3511,7 +3534,7 @@ def get_settings() -> Response:
     config = current_app.config.get("AIFT_CONFIG", {})
     if not isinstance(config, dict):
         config = {}
-    return jsonify(_mask_sensitive(config))
+    return _success(_mask_sensitive(config))
 
 
 @routes_bp.post("/api/settings")
@@ -3541,7 +3564,7 @@ def update_settings() -> Response | tuple[Response, int]:
         LOGGER.info("Updated settings: %s", ", ".join(changed_keys))
         _audit_config_change(changed_keys)
 
-    return jsonify(_mask_sensitive(refreshed))
+    return _success(_mask_sensitive(refreshed))
 
 
 @routes_bp.post("/api/settings/test-connection")
@@ -3580,7 +3603,7 @@ def test_settings_connection() -> Response | tuple[Response, int]:
         preview = str(reply).strip()
         if not preview:
             return _error("Provider returned an empty response.", 502)
-        return jsonify(
+        return _success(
             {
                 "status": "ok",
                 "model_info": model_info,
