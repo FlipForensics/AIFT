@@ -22,12 +22,17 @@ Attributes:
 
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 import os
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
+
+KNOWN_AI_PROVIDERS = ("claude", "openai", "kimi", "local")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -147,6 +152,103 @@ def apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+def validate_config(config: dict[str, Any]) -> list[str]:
+    """Validate configuration values and return a list of error descriptions.
+
+    Checks that values in the merged configuration are within acceptable
+    ranges and of the correct types.  An empty returned list means the
+    configuration is fully valid.
+
+    Args:
+        config: The fully merged configuration dictionary to validate.
+
+    Returns:
+        A list of human-readable validation error strings.  Empty when
+        the configuration passes all checks.
+    """
+    errors: list[str] = []
+
+    # --- server section ---
+    server = config.get("server", {})
+    if not isinstance(server, dict):
+        errors.append("server: expected a mapping")
+    else:
+        port = server.get("port")
+        if not isinstance(port, int) or not (1 <= port <= 65535):
+            errors.append(
+                f"server.port: must be an integer between 1 and 65535, got {port!r}"
+            )
+
+        host = server.get("host")
+        if not isinstance(host, str) or not host.strip():
+            errors.append(
+                f"server.host: must be a non-empty string, got {host!r}"
+            )
+
+        max_upload = server.get("max_upload_mb")
+        if not isinstance(max_upload, (int, float)) or max_upload <= 0:
+            errors.append(
+                f"server.max_upload_mb: must be a positive number, got {max_upload!r}"
+            )
+
+    # --- ai section ---
+    ai = config.get("ai", {})
+    if not isinstance(ai, dict):
+        errors.append("ai: expected a mapping")
+    else:
+        provider = ai.get("provider")
+        if provider not in KNOWN_AI_PROVIDERS:
+            errors.append(
+                f"ai.provider: must be one of {KNOWN_AI_PROVIDERS}, got {provider!r}"
+            )
+
+        for name in KNOWN_AI_PROVIDERS:
+            prov_cfg = ai.get(name)
+            if not isinstance(prov_cfg, dict):
+                continue
+
+            model = prov_cfg.get("model")
+            if not isinstance(model, str) or not model.strip():
+                errors.append(
+                    f"ai.{name}.model: must be a non-empty string, got {model!r}"
+                )
+
+            api_key = prov_cfg.get("api_key")
+            if not isinstance(api_key, str):
+                errors.append(
+                    f"ai.{name}.api_key: must be a string, got {type(api_key).__name__}"
+                )
+
+            base_url = prov_cfg.get("base_url")
+            if base_url is not None:
+                if not isinstance(base_url, str) or not (
+                    base_url.startswith("http://") or base_url.startswith("https://")
+                ):
+                    errors.append(
+                        f"ai.{name}.base_url: must start with http:// or https://, got {base_url!r}"
+                    )
+
+    # --- analysis section ---
+    analysis = config.get("analysis", {})
+    if isinstance(analysis, dict):
+        ai_max_tokens = analysis.get("ai_max_tokens")
+        if not isinstance(ai_max_tokens, int) or ai_max_tokens <= 0:
+            errors.append(
+                f"analysis.ai_max_tokens: must be a positive integer, got {ai_max_tokens!r}"
+            )
+
+    # --- evidence section ---
+    evidence = config.get("evidence", {})
+    if isinstance(evidence, dict):
+        threshold = evidence.get("large_file_threshold_mb")
+        if not isinstance(threshold, (int, float)) or threshold <= 0:
+            errors.append(
+                f"evidence.large_file_threshold_mb: must be a positive number, got {threshold!r}"
+            )
+
+    return errors
+
+
 def load_config(path: str | Path | None = None, use_env_overrides: bool = True) -> dict[str, Any]:
     """Load the AIFT configuration from a YAML file with layered defaults.
 
@@ -181,7 +283,12 @@ def load_config(path: str | Path | None = None, use_env_overrides: bool = True) 
         save_config(config, config_path)
 
     if use_env_overrides:
-        return apply_env_overrides(config)
+        apply_env_overrides(config)
+
+    warnings = validate_config(config)
+    for warning in warnings:
+        logger.warning("Config validation: %s", warning)
+
     return config
 
 
