@@ -550,7 +550,7 @@ class AnalyzerTests(unittest.TestCase):
                 random_seed=7,
             )
             aware_timestamp = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
-            with patch.object(analyzer, "_extract_row_datetime", return_value=aware_timestamp):
+            with patch("app.analyzer_data_prep.extract_row_datetime", return_value=aware_timestamp):
                 filled_prompt = analyzer._prepare_artifact_data(
                     artifact_key="runkeys",
                     investigation_context="Focus on activity around January 15, 2026.",
