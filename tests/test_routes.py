@@ -1100,7 +1100,8 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("Context Block:", str(first_call["user_prompt"]))
             self.assertIn("New User Question:", str(first_call["user_prompt"]))
             self.assertIn("Retrieved CSV data for this question", str(first_call["user_prompt"]))
-            self.assertEqual(first_call["max_tokens"], 2222)
+            # 20% of ai_max_tokens (2222) is allocated for the AI response.
+            self.assertEqual(first_call["max_tokens"], int(2222 * 0.2))
 
         audit_entries = routes._read_audit_entries(self.cases_root / case_id)
         audit_actions = {str(entry.get("action", "")) for entry in audit_entries}
