@@ -82,13 +82,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "artifact_profiles": [],
 }
 
+# Ordered list of logo filenames to look for in the images/ directory.
+# The first match wins; the fallback in routes.py picks any image alphabetically.
 LOGO_FILE_CANDIDATES = (
     "AIFT Logo - White Text.png",
     "AIFT Logo - Dark Text.png",
-    "AIFT Logo Wide.png",
-    "AIFT_Logo.png",
-    "AIFt_Logo_Transparent.png",
-    "AIFT_Logo_Transparent.png",
 )
 
 
