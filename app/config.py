@@ -38,17 +38,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "api_key": "",
             "model": "claude-opus-4-6",
             "attach_csv_as_file": True,
+            "request_timeout_seconds": 600,
         },
         "openai": {
             "api_key": "",
             "model": "gpt-5.2",
             "attach_csv_as_file": True,
+            "request_timeout_seconds": 600,
         },
         "kimi": {
             "api_key": "",
             "model": "kimi-k2-turbo-preview",
             "base_url": "https://api.moonshot.ai/v1",
             "attach_csv_as_file": True,
+            "request_timeout_seconds": 600,
         },
         "local": {
             "base_url": "http://localhost:11434/v1",

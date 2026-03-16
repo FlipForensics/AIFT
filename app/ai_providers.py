@@ -37,6 +37,8 @@ Module-level constants:
     DEFAULT_MAX_TOKENS: Default maximum completion tokens across all providers.
     RATE_LIMIT_MAX_RETRIES: Number of retries on rate-limit (HTTP 429) errors.
     DEFAULT_LOCAL_BASE_URL: Default Ollama-style local endpoint URL.
+    DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS: Default HTTP timeout for cloud
+        provider endpoints (10 minutes).
     DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS: Default HTTP timeout for local
         endpoints (1 hour, to accommodate large model inference).
     DEFAULT_KIMI_BASE_URL: Default Moonshot Kimi API base URL.
@@ -65,6 +67,7 @@ _T = TypeVar("_T")
 DEFAULT_MAX_TOKENS = 256000
 RATE_LIMIT_MAX_RETRIES = 3
 DEFAULT_LOCAL_BASE_URL = "http://localhost:11434/v1"
+DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS = 600.0
 DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS = 3600.0
 DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1"
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-6"
@@ -1267,6 +1270,8 @@ class ClaudeProvider(AIProvider):
         model (str): The Claude model identifier (e.g., ``"claude-opus-4-6"``).
         attach_csv_as_file (bool): Whether to upload CSV artifacts as
             content blocks rather than inlining them in the prompt.
+        request_timeout_seconds (float): HTTP timeout in seconds for API
+            requests.
         client: The ``anthropic.Anthropic`` SDK client instance.
     """
 
@@ -1275,6 +1280,7 @@ class ClaudeProvider(AIProvider):
         api_key: str,
         model: str = DEFAULT_CLAUDE_MODEL,
         attach_csv_as_file: bool = True,
+        request_timeout_seconds: float = DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
     ) -> None:
         """Initialize the Claude provider.
 
@@ -1283,6 +1289,8 @@ class ClaudeProvider(AIProvider):
             model: Claude model identifier to use for completions.
             attach_csv_as_file: If ``True``, attempt to send CSV artifacts
                 as structured content blocks.
+            request_timeout_seconds: HTTP timeout in seconds for API
+                requests. Defaults to 600 (10 minutes).
 
         Raises:
             AIProviderError: If the ``anthropic`` SDK is not installed or
@@ -1307,8 +1315,15 @@ class ClaudeProvider(AIProvider):
         self.model = model
         self.attach_csv_as_file = bool(attach_csv_as_file)
         self._csv_attachment_supported: bool | None = None
-        self.client = anthropic.Anthropic(api_key=normalized_api_key)
-        logger.info("Initialized Claude provider with model %s", model)
+        self.request_timeout_seconds = _resolve_timeout_seconds(
+            request_timeout_seconds,
+            DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
+        )
+        self.client = anthropic.Anthropic(
+            api_key=normalized_api_key,
+            timeout=self.request_timeout_seconds,
+        )
+        logger.info("Initialized Claude provider with model %s (timeout %.1fs)", model, self.request_timeout_seconds)
 
     def analyze(
         self,
@@ -1771,6 +1786,8 @@ class OpenAIProvider(AIProvider):
         model (str): The OpenAI model identifier (e.g., ``"gpt-5.2"``).
         attach_csv_as_file (bool): Whether to upload CSV artifacts as
             file attachments via the Responses API.
+        request_timeout_seconds (float): HTTP timeout in seconds for API
+            requests.
         client: The ``openai.OpenAI`` SDK client instance.
     """
 
@@ -1779,6 +1796,7 @@ class OpenAIProvider(AIProvider):
         api_key: str,
         model: str = DEFAULT_OPENAI_MODEL,
         attach_csv_as_file: bool = True,
+        request_timeout_seconds: float = DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
     ) -> None:
         """Initialize the OpenAI provider.
 
@@ -1787,6 +1805,8 @@ class OpenAIProvider(AIProvider):
             model: OpenAI model identifier to use for completions.
             attach_csv_as_file: If ``True``, attempt to send CSV artifacts
                 as file uploads via the Responses API.
+            request_timeout_seconds: HTTP timeout in seconds for API
+                requests. Defaults to 600 (10 minutes).
 
         Raises:
             AIProviderError: If the ``openai`` SDK is not installed or
@@ -1811,8 +1831,15 @@ class OpenAIProvider(AIProvider):
         self.model = model
         self.attach_csv_as_file = bool(attach_csv_as_file)
         self._csv_attachment_supported: bool | None = None
-        self.client = openai.OpenAI(api_key=normalized_api_key)
-        logger.info("Initialized OpenAI provider with model %s", model)
+        self.request_timeout_seconds = _resolve_timeout_seconds(
+            request_timeout_seconds,
+            DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
+        )
+        self.client = openai.OpenAI(
+            api_key=normalized_api_key,
+            timeout=self.request_timeout_seconds,
+        )
+        logger.info("Initialized OpenAI provider with model %s (timeout %.1fs)", model, self.request_timeout_seconds)
 
     def analyze(
         self,
@@ -2314,6 +2341,8 @@ class KimiProvider(AIProvider):
         base_url (str): The normalized Kimi API base URL.
         attach_csv_as_file (bool): Whether to upload CSV artifacts as
             file attachments via the Responses API.
+        request_timeout_seconds (float): HTTP timeout in seconds for API
+            requests.
         client: The ``openai.OpenAI`` SDK client instance configured for
             the Kimi endpoint.
     """
@@ -2324,6 +2353,7 @@ class KimiProvider(AIProvider):
         model: str = DEFAULT_KIMI_MODEL,
         base_url: str = DEFAULT_KIMI_BASE_URL,
         attach_csv_as_file: bool = True,
+        request_timeout_seconds: float = DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
     ) -> None:
         """Initialize the Kimi provider.
 
@@ -2335,6 +2365,8 @@ class KimiProvider(AIProvider):
                 endpoint.
             attach_csv_as_file: If ``True``, attempt to send CSV artifacts
                 as file uploads via the Responses API.
+            request_timeout_seconds: HTTP timeout in seconds for API
+                requests. Defaults to 600 (10 minutes).
 
         Raises:
             AIProviderError: If the ``openai`` SDK is not installed or
@@ -2363,8 +2395,16 @@ class KimiProvider(AIProvider):
         )
         self.attach_csv_as_file = bool(attach_csv_as_file)
         self._csv_attachment_supported: bool | None = None
-        self.client = openai.OpenAI(api_key=normalized_api_key, base_url=self.base_url)
-        logger.info("Initialized Kimi provider at %s with model %s", self.base_url, self.model)
+        self.request_timeout_seconds = _resolve_timeout_seconds(
+            request_timeout_seconds,
+            DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
+        )
+        self.client = openai.OpenAI(
+            api_key=normalized_api_key,
+            base_url=self.base_url,
+            timeout=self.request_timeout_seconds,
+        )
+        logger.info("Initialized Kimi provider at %s with model %s (timeout %.1fs)", self.base_url, self.model, self.request_timeout_seconds)
 
     def analyze(
         self,
@@ -3437,6 +3477,10 @@ def create_provider(config: dict[str, Any]) -> AIProvider:
             api_key=api_key,
             model=str(claude_config.get("model", DEFAULT_CLAUDE_MODEL)),
             attach_csv_as_file=bool(claude_config.get("attach_csv_as_file", True)),
+            request_timeout_seconds=_resolve_timeout_seconds(
+                claude_config.get("request_timeout_seconds", DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS),
+                DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
+            ),
         )
 
     if provider_name == "openai":
@@ -3451,6 +3495,10 @@ def create_provider(config: dict[str, Any]) -> AIProvider:
             api_key=api_key,
             model=str(openai_config.get("model", DEFAULT_OPENAI_MODEL)),
             attach_csv_as_file=bool(openai_config.get("attach_csv_as_file", True)),
+            request_timeout_seconds=_resolve_timeout_seconds(
+                openai_config.get("request_timeout_seconds", DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS),
+                DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
+            ),
         )
 
     if provider_name == "local":
@@ -3481,6 +3529,10 @@ def create_provider(config: dict[str, Any]) -> AIProvider:
             model=str(kimi_config.get("model", DEFAULT_KIMI_MODEL)),
             base_url=str(kimi_config.get("base_url", DEFAULT_KIMI_BASE_URL)),
             attach_csv_as_file=bool(kimi_config.get("attach_csv_as_file", True)),
+            request_timeout_seconds=_resolve_timeout_seconds(
+                kimi_config.get("request_timeout_seconds", DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS),
+                DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
+            ),
         )
 
     raise ValueError(
