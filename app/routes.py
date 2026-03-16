@@ -660,26 +660,6 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _close_forensic_parser(parser: Any) -> None:
-    """Safely close a ``ForensicParser`` instance, suppressing any errors.
-
-    Checks for a callable ``close`` method on the parser and invokes it.
-    Any exceptions raised during closing are logged but not propagated,
-    ensuring cleanup always completes.
-
-    Args:
-        parser: A ``ForensicParser`` instance (or any object with an
-            optional ``close()`` method).
-    """
-    close_method = getattr(parser, "close", None)
-    if not callable(close_method):
-        return
-
-    try:
-        close_method()
-    except Exception:
-        LOGGER.exception("Failed to close forensic parser.")
-
 
 def _validate_analysis_date_range(
     payload: Any,
@@ -2215,74 +2195,73 @@ def _run_parse(
         )
         return
 
-    parser: Any | None = None
     try:
         csv_output_dir = _resolve_case_csv_output_dir(case_snapshot, config_snapshot=config_snapshot)
-        parser = ForensicParser(
+        with ForensicParser(
             evidence_path=evidence_path,
             case_dir=case_dir,
             audit_logger=audit_logger,
             parsed_dir=csv_output_dir,
-        )
-        results: list[dict[str, Any]] = []
-        total = len(parse_artifacts)
+        ) as parser:
+            results: list[dict[str, Any]] = []
+            total = len(parse_artifacts)
 
-        for index, artifact in enumerate(parse_artifacts, start=1):
-            _emit_progress(
-                PARSE_PROGRESS,
-                case_id,
-                {"type": "artifact_started", "artifact_key": artifact, "index": index, "total": total},
-            )
-
-            def _progress_callback(*args: Any, **_kwargs: Any) -> None:
-                """Emit per-artifact parse progress events to the SSE store."""
-                artifact_key, record_count = _extract_parse_progress(artifact, args)
+            for index, artifact in enumerate(parse_artifacts, start=1):
                 _emit_progress(
                     PARSE_PROGRESS,
                     case_id,
-                    {"type": "artifact_progress", "artifact_key": artifact_key, "record_count": record_count},
+                    {"type": "artifact_started", "artifact_key": artifact, "index": index, "total": total},
                 )
 
-            result = parser.parse_artifact(artifact, progress_callback=_progress_callback)
-            result_entry = {"artifact_key": artifact, **result}
-            results.append(result_entry)
+                def _progress_callback(*args: Any, **_kwargs: Any) -> None:
+                    """Emit per-artifact parse progress events to the SSE store."""
+                    artifact_key, record_count = _extract_parse_progress(artifact, args)
+                    _emit_progress(
+                        PARSE_PROGRESS,
+                        case_id,
+                        {"type": "artifact_progress", "artifact_key": artifact_key, "record_count": record_count},
+                    )
 
+                result = parser.parse_artifact(artifact, progress_callback=_progress_callback)
+                result_entry = {"artifact_key": artifact, **result}
+                results.append(result_entry)
+
+                _emit_progress(
+                    PARSE_PROGRESS,
+                    case_id,
+                    {
+                        "type": "artifact_completed" if result.get("success") else "artifact_failed",
+                        "artifact_key": artifact,
+                        "record_count": _safe_int(result.get("record_count", 0)),
+                        "duration_seconds": float(result.get("duration_seconds", 0.0)),
+                        "csv_path": str(result.get("csv_path", "")),
+                        "error": result.get("error"),
+                    },
+                )
+
+            csv_map = _build_csv_map(results)
+            with STATE_LOCK:
+                case["selected_artifacts"] = list(parse_artifacts)
+                case["analysis_artifacts"] = list(analysis_artifacts)
+                case["artifact_options"] = list(artifact_options)
+                case["parse_results"] = results
+                case["artifact_csv_paths"] = csv_map
+                case["csv_output_dir"] = str(csv_output_dir)
+
+            completed = sum(1 for item in results if item.get("success"))
+            failed = len(results) - completed
+            _set_progress_status(PARSE_PROGRESS, case_id, "completed")
             _emit_progress(
                 PARSE_PROGRESS,
                 case_id,
                 {
-                    "type": "artifact_completed" if result.get("success") else "artifact_failed",
-                    "artifact_key": artifact,
-                    "record_count": _safe_int(result.get("record_count", 0)),
-                    "duration_seconds": float(result.get("duration_seconds", 0.0)),
-                    "csv_path": str(result.get("csv_path", "")),
-                    "error": result.get("error"),
+                    "type": "parse_completed",
+                    "total_artifacts": len(results),
+                    "successful_artifacts": completed,
+                    "failed_artifacts": failed,
                 },
             )
-
-        csv_map = _build_csv_map(results)
-        with STATE_LOCK:
-            case["selected_artifacts"] = list(parse_artifacts)
-            case["analysis_artifacts"] = list(analysis_artifacts)
-            case["artifact_options"] = list(artifact_options)
-            case["parse_results"] = results
-            case["artifact_csv_paths"] = csv_map
-            case["csv_output_dir"] = str(csv_output_dir)
-
-        completed = sum(1 for item in results if item.get("success"))
-        failed = len(results) - completed
-        _set_progress_status(PARSE_PROGRESS, case_id, "completed")
-        _emit_progress(
-            PARSE_PROGRESS,
-            case_id,
-            {
-                "type": "parse_completed",
-                "total_artifacts": len(results),
-                "successful_artifacts": completed,
-                "failed_artifacts": failed,
-            },
-        )
-        _mark_case_status(case_id, "parsed")
+            _mark_case_status(case_id, "parsed")
     except Exception:
         LOGGER.exception("Background parse failed for case %s", case_id)
         user_message = (
@@ -2292,9 +2271,6 @@ def _run_parse(
         _mark_case_status(case_id, "error")
         _set_progress_status(PARSE_PROGRESS, case_id, "failed", user_message)
         _emit_progress(PARSE_PROGRESS, case_id, {"type": "parse_failed", "error": user_message})
-    finally:
-        if parser is not None:
-            _close_forensic_parser(parser)
 
 
 def _run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> None:
@@ -2912,16 +2888,13 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
             hashes = {"sha256": "N/A (directory)", "md5": "N/A (directory)", "size_bytes": 0}
         hashes["filename"] = source_path.name
 
-        parser = ForensicParser(
+        with ForensicParser(
             evidence_path=dissect_path,
             case_dir=case_dir,
             audit_logger=audit_logger,
-        )
-        try:
+        ) as parser:
             metadata = parser.get_image_metadata()
             available_artifacts = parser.get_available_artifacts()
-        finally:
-            _close_forensic_parser(parser)
 
         audit_logger.log(
             "evidence_intake",
