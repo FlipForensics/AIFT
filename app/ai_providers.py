@@ -47,6 +47,11 @@ Module-level constants:
     DEFAULT_KIMI_MODEL: Default Moonshot Kimi model identifier.
     DEFAULT_KIMI_FILE_UPLOAD_PURPOSE: File upload purpose string for Kimi.
     DEFAULT_LOCAL_MODEL: Default model identifier for local providers.
+    _RATE_LIMIT_STATE: Module-level dict mapping provider names to
+        ``RateLimitState`` instances, so rate-limit backoff persists across
+        provider re-instantiation.
+    _RATE_LIMIT_STATE_LOCK: Threading lock protecting ``_RATE_LIMIT_STATE``
+        dict creation.
 """
 
 from __future__ import annotations
@@ -55,7 +60,9 @@ import base64
 import logging
 import os
 import re
+import threading
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
 import time
 from typing import Any, Callable, Iterator, Mapping, TypeVar
@@ -63,6 +70,44 @@ from urllib.parse import urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
+
+
+@dataclass
+class RateLimitState:
+    """Persistent rate-limit tracking state for a single AI provider.
+
+    Attributes:
+        last_request_time: Monotonic timestamp of the last API request attempt.
+        backoff_duration: Current backoff duration in seconds. Reset to 0.0
+            on a successful request.
+        consecutive_error_count: Number of consecutive rate-limit errors.
+            Reset to 0 on a successful request.
+        lock: Per-provider lock for thread-safe state access.
+    """
+
+    last_request_time: float = 0.0
+    backoff_duration: float = 0.0
+    consecutive_error_count: int = 0
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+
+_RATE_LIMIT_STATE: dict[str, RateLimitState] = {}
+_RATE_LIMIT_STATE_LOCK = threading.Lock()
+
+
+def _get_rate_limit_state(provider_name: str) -> RateLimitState:
+    """Get or create the persistent rate-limit state for a provider.
+
+    Args:
+        provider_name: Human-readable provider name (e.g., ``"Claude"``).
+
+    Returns:
+        The ``RateLimitState`` instance for the given provider.
+    """
+    with _RATE_LIMIT_STATE_LOCK:
+        if provider_name not in _RATE_LIMIT_STATE:
+            _RATE_LIMIT_STATE[provider_name] = RateLimitState()
+        return _RATE_LIMIT_STATE[provider_name]
 
 DEFAULT_MAX_TOKENS = 256000
 RATE_LIMIT_MAX_RETRIES = 3
@@ -1209,6 +1254,13 @@ def _run_with_rate_limit_retries(
     Uses ``Retry-After`` headers when available, otherwise falls back to
     exponential backoff (1s, 2s, 4s, ...).
 
+    Rate-limit state (backoff duration, consecutive error count) is stored
+    in a module-level ``RateLimitState`` keyed by ``provider_name``, so
+    the backoff persists even when the provider instance is re-created
+    (e.g., after a config change). On entry, if an active backoff period
+    is still in effect from a previous call, this function waits for the
+    remaining duration before making the first attempt.
+
     Args:
         request_fn: A zero-argument callable that performs the API request
             and returns the result.
@@ -1224,24 +1276,66 @@ def _run_with_rate_limit_retries(
         AIProviderError: If the rate limit is still exceeded after all
             retries are exhausted.
     """
+    state = _get_rate_limit_state(provider_name)
     last_error: Exception | None = None
+
+    # Honour any residual backoff from a previous call / provider instance.
+    with state.lock:
+        if state.backoff_duration > 0.0 and state.last_request_time > 0.0:
+            elapsed = time.monotonic() - state.last_request_time
+            remaining = state.backoff_duration - elapsed
+            if remaining > 0.0:
+                logger.info(
+                    "%s: honouring residual backoff from prior request, "
+                    "waiting %.1fs before first attempt",
+                    provider_name,
+                    remaining,
+                )
+                # Release lock while sleeping so other threads aren't blocked.
+                wait_time = remaining
+            else:
+                wait_time = 0.0
+        else:
+            wait_time = 0.0
+
+    if wait_time > 0.0:
+        time.sleep(wait_time)
 
     for retry_count in range(RATE_LIMIT_MAX_RETRIES + 1):
         try:
-            return request_fn()
+            with state.lock:
+                state.last_request_time = time.monotonic()
+
+            result = request_fn()
+
+            # Success — clear backoff state.
+            with state.lock:
+                state.backoff_duration = 0.0
+                state.consecutive_error_count = 0
+
+            return result
         except rate_limit_error_type as error:
             last_error = error
-            if retry_count >= RATE_LIMIT_MAX_RETRIES:
-                break
 
             retry_after = _extract_retry_after_seconds(error)
             if retry_after is None:
                 retry_after = float(2**retry_count)
+
+            with state.lock:
+                state.consecutive_error_count += 1
+                state.backoff_duration = retry_after
+                state.last_request_time = time.monotonic()
+
+            if retry_count >= RATE_LIMIT_MAX_RETRIES:
+                break
+
             logger.warning(
-                "%s rate limited (attempt %d/%d), retrying in %.1fs",
+                "%s rate limited (attempt %d/%d, %d consecutive), "
+                "retrying in %.1fs",
                 provider_name,
                 retry_count + 1,
                 RATE_LIMIT_MAX_RETRIES,
+                state.consecutive_error_count,
                 retry_after,
             )
             time.sleep(retry_after)
