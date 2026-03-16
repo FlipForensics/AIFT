@@ -308,6 +308,9 @@
     const rawStep = Number(n);
     const normalizedStep = Number.isFinite(rawStep) ? Math.trunc(rawStep) : 1;
     st.step = Math.max(1, Math.min(STEP_IDS.length, normalizedStep));
+    if (priorStep === 3 && st.step !== 3 && !st.parse.run) closeParseSse();
+    if (priorStep === 4 && st.step !== 4 && !st.analysis.run) closeAnalysisSse();
+    if (priorStep === 5 && st.step !== 5 && !st.chat.run) closeChatSse();
     el.steps.forEach((s) => {
       const on = Number(s.dataset.step || 0) === st.step;
       s.hidden = !on;
@@ -1034,6 +1037,7 @@
       st.parse.retryCount = 0;
     };
     es.onmessage = (ev) => {
+      st.parse.retryCount = 0;
       const p = safeJson(ev.data);
       if (!p) return;
       const seq = num(p.sequence, -1);
@@ -1254,6 +1258,7 @@
       st.analysis.retryCount = 0;
     };
     es.onmessage = (ev) => {
+      st.analysis.retryCount = 0;
       const p = safeJson(ev.data);
       if (!p) return;
       const seq = num(p.sequence, -1);
@@ -1989,6 +1994,7 @@
       st.chat.retryCount = 0;
     };
     es.onmessage = (ev) => {
+      st.chat.retryCount = 0;
       const payload = safeJson(ev.data);
       if (!payload) return;
       const seq = num(payload.sequence, -1);
