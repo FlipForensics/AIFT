@@ -116,6 +116,46 @@ class ChatManagerTests(unittest.TestCase):
 
         self.assertEqual(result, {"retrieved": False})
 
+    def test_retrieve_csv_data_shows_total_row_count_when_truncated(self) -> None:
+        """Verify that large CSVs include a 'Total rows' summary."""
+        with TemporaryDirectory(prefix="aift-chat-rowcount-test-") as temp_dir:
+            parsed_dir = Path(temp_dir) / "parsed"
+            parsed_dir.mkdir(parents=True, exist_ok=True)
+            # Write a CSV with more rows than _CSV_ROW_LIMIT (500).
+            rows = [f"evil_{i}.exe,hash_{i}" for i in range(600)]
+            self._write_csv(parsed_dir / "shimcache.csv", "path,sha1", rows)
+
+            manager = ChatManager(temp_dir)
+            result = manager.retrieve_csv_data(
+                question="Show me shimcache rows",
+                parsed_dir=parsed_dir,
+            )
+
+        self.assertTrue(result["retrieved"])
+        self.assertIn("Total rows: 600", result["data"])
+        self.assertIn("showing first 500", result["data"])
+
+    def test_retrieve_csv_data_no_truncation_note_for_small_csv(self) -> None:
+        """Verify small CSVs show total rows without a truncation note."""
+        with TemporaryDirectory(prefix="aift-chat-small-test-") as temp_dir:
+            parsed_dir = Path(temp_dir) / "parsed"
+            parsed_dir.mkdir(parents=True, exist_ok=True)
+            self._write_csv(
+                parsed_dir / "shimcache.csv",
+                "path,sha1",
+                [r"C:\Temp\evil.exe,abc123"],
+            )
+
+            manager = ChatManager(temp_dir)
+            result = manager.retrieve_csv_data(
+                question="Show me shimcache rows",
+                parsed_dir=parsed_dir,
+            )
+
+        self.assertTrue(result["retrieved"])
+        self.assertIn("Total rows: 1", result["data"])
+        self.assertNotIn("showing first", result["data"])
+
     def test_estimate_token_count_and_max_context_tokens(self) -> None:
         with TemporaryDirectory(prefix="aift-chat-token-test-") as temp_dir:
             manager = ChatManager(temp_dir)

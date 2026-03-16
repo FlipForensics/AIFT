@@ -393,12 +393,22 @@ class ChatManager:
         for csv_path in target_paths:
             if rows_remaining <= 0:
                 break
-            headers, rows = self._read_csv_rows(csv_path=csv_path, limit=rows_remaining)
+            headers, rows, total_row_count = self._read_csv_rows(
+                csv_path=csv_path, limit=rows_remaining,
+            )
             if not headers and not rows:
                 continue
 
             rows_remaining -= len(rows)
             block_lines = [f"Artifact: {csv_path.name}"]
+            # Show total vs sampled row counts so the AI knows how much
+            # data was omitted.  This limit exists to prevent memory
+            # exhaustion on large artifacts (e.g. EVTX with millions of
+            # rows).
+            block_lines.append(
+                f"Total rows: {total_row_count}"
+                + (f" (showing first {len(rows)})" if len(rows) < total_row_count else "")
+            )
             if headers:
                 block_lines.append(f"Columns: {', '.join(headers)}")
             if rows:
@@ -653,24 +663,34 @@ class ChatManager:
                 headers.append(normalized)
         return headers
 
-    def _read_csv_rows(self, csv_path: Path, limit: int) -> tuple[list[str], list[dict[str, str]]]:
+    def _read_csv_rows(
+        self, csv_path: Path, limit: int,
+    ) -> tuple[list[str], list[dict[str, str]], int]:
         """Read up to *limit* data rows from a CSV file.
 
         Values are whitespace-collapsed and truncated to 240 characters
         to keep the resulting text compact for AI prompt injection.
+
+        After reading the sampled rows, the remainder of the file is
+        consumed (without storing data) to obtain an accurate total row
+        count.  This avoids loading the entire file into memory while
+        still letting callers report how much data was omitted.
 
         Args:
             csv_path: Path to the CSV file.
             limit: Maximum number of data rows to read.
 
         Returns:
-            A tuple of ``(headers, rows)`` where *headers* is a list of
-            column name strings and *rows* is a list of ordered
-            dictionaries mapping column names to string values.  Returns
-            ``([], [])`` on read failure or when *limit* is non-positive.
+            A tuple of ``(headers, rows, total_row_count)`` where
+            *headers* is a list of column name strings, *rows* is a
+            list of ordered dictionaries mapping column names to string
+            values, and *total_row_count* is the total number of data
+            rows in the file (including those beyond *limit*).  Returns
+            ``([], [], 0)`` on read failure or when *limit* is
+            non-positive.
         """
         if limit <= 0:
-            return [], []
+            return [], [], 0
 
         try:
             with csv_path.open("r", encoding="utf-8-sig", newline="", errors="replace") as csv_stream:
@@ -678,22 +698,23 @@ class ChatManager:
                 headers = [self._stringify(field) for field in (reader.fieldnames or []) if self._stringify(field)]
 
                 rows: list[dict[str, str]] = []
+                total_row_count = 0
                 for row in reader:
-                    if len(rows) >= limit:
-                        break
-                    compact_row: dict[str, str] = {}
-                    for column in headers:
-                        value = self._stringify(row.get(column, ""))
-                        value = re.sub(r"\s+", " ", value)
-                        if len(value) > 240:
-                            value = f"{value[:237]}..."
-                        compact_row[column] = value
-                    rows.append(compact_row)
+                    total_row_count += 1
+                    if len(rows) < limit:
+                        compact_row: dict[str, str] = {}
+                        for column in headers:
+                            value = self._stringify(row.get(column, ""))
+                            value = re.sub(r"\s+", " ", value)
+                            if len(value) > 240:
+                                value = f"{value[:237]}..."
+                            compact_row[column] = value
+                        rows.append(compact_row)
         except Exception:
             log.warning("Failed to read CSV rows from %s", csv_path, exc_info=True)
-            return [], []
+            return [], [], 0
 
-        return headers, rows
+        return headers, rows, total_row_count
 
 
 if __name__ == "__main__":
