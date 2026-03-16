@@ -55,14 +55,9 @@ def main() -> None:
     app.run(host=host, port=port, debug=False, use_reloader=False)
 
 
-def _run() -> None:
-    """Top-level wrapper that catches version errors and exits gracefully."""
+if __name__ == "__main__":
     try:
         main()
     except UnsupportedPythonVersionError as error:
         print(str(error), file=sys.stderr)
         raise SystemExit(1) from None
-
-
-if __name__ == "__main__":
-    _run()
