@@ -1512,5 +1512,130 @@ class AppFactoryPathResolutionTests(unittest.TestCase):
             self.assertEqual(app.config["AIFT_CONFIG_PATH"], str(config_path))
 
 
+class TestMatchColumnName(unittest.TestCase):
+    """Tests for ForensicAnalyzer._match_column_name static method."""
+
+    def test_exact_match(self) -> None:
+        status, header = ForensicAnalyzer._match_column_name(
+            "SourceFilename", ["ts", "SourceFilename", "Path"]
+        )
+        self.assertEqual(status, "exact")
+        self.assertEqual(header, "SourceFilename")
+
+    def test_exact_match_with_whitespace(self) -> None:
+        status, header = ForensicAnalyzer._match_column_name(
+            "  SourceFilename  ", ["SourceFilename", "Path"]
+        )
+        self.assertEqual(status, "exact")
+        self.assertEqual(header, "SourceFilename")
+
+    def test_fuzzy_match_case_difference(self) -> None:
+        status, header = ForensicAnalyzer._match_column_name(
+            "sourcefilename", ["SourceFilename", "Path"]
+        )
+        self.assertEqual(status, "fuzzy")
+        self.assertEqual(header, "SourceFilename")
+
+    def test_fuzzy_match_underscore_vs_no_separator(self) -> None:
+        status, header = ForensicAnalyzer._match_column_name(
+            "Source_Filename", ["SourceFilename", "Path"]
+        )
+        self.assertEqual(status, "fuzzy")
+        self.assertEqual(header, "SourceFilename")
+
+    def test_fuzzy_match_space_vs_underscore(self) -> None:
+        status, header = ForensicAnalyzer._match_column_name(
+            "Source Filename", ["Source_Filename", "Path"]
+        )
+        self.assertEqual(status, "fuzzy")
+        self.assertEqual(header, "Source_Filename")
+
+    def test_unverifiable_no_match(self) -> None:
+        status, header = ForensicAnalyzer._match_column_name(
+            "NonExistentColumn", ["SourceFilename", "Path"]
+        )
+        self.assertEqual(status, "unverifiable")
+        self.assertIsNone(header)
+
+    def test_unverifiable_empty_columns(self) -> None:
+        status, header = ForensicAnalyzer._match_column_name("Anything", [])
+        self.assertEqual(status, "unverifiable")
+        self.assertIsNone(header)
+
+
+class TestValidateCitationsColumns(unittest.TestCase):
+    """Tests for column-name citation validation in _validate_citations."""
+
+    def _make_analyzer_with_csv(
+        self, tmp_dir: str, headers: list[str], rows: list[list[str]]
+    ) -> tuple[ForensicAnalyzer, Path]:
+        """Create a ForensicAnalyzer with a CSV file containing the given data."""
+        csv_path = Path(tmp_dir) / "artifact.csv"
+        with csv_path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(headers)
+            for row in rows:
+                writer.writerow(row)
+        analyzer = ForensicAnalyzer(
+            artifact_csv_paths={"test_artifact": csv_path},
+        )
+        return analyzer, csv_path
+
+    def test_exact_column_match_no_warning(self) -> None:
+        with TemporaryDirectory(prefix="aift-col-test-") as tmp_dir:
+            analyzer, _ = self._make_analyzer_with_csv(
+                tmp_dir, ["Timestamp", "SourceFile"], [["2024-01-01T00:00:00Z", "test.exe"]]
+            )
+            analysis = "The `SourceFile` column shows suspicious activity."
+            warnings = analyzer._validate_citations("test_artifact", analysis)
+            # No warnings for exact match columns.
+            col_warnings = [w for w in warnings if "column" in w.lower()]
+            self.assertEqual(len(col_warnings), 0)
+
+    def test_fuzzy_column_match_produces_warning(self) -> None:
+        with TemporaryDirectory(prefix="aift-col-test-") as tmp_dir:
+            analyzer, _ = self._make_analyzer_with_csv(
+                tmp_dir, ["SourceFilename", "Path"], [["test.exe", "C:\\Windows"]]
+            )
+            analysis = "The `source_filename` column reveals the origin."
+            warnings = analyzer._validate_citations("test_artifact", analysis)
+            col_warnings = [w for w in warnings if "fuzzy match" in w.lower()]
+            self.assertEqual(len(col_warnings), 1)
+            self.assertIn("source_filename", col_warnings[0])
+            self.assertIn("SourceFilename", col_warnings[0])
+
+    def test_unverifiable_column_flagged(self) -> None:
+        with TemporaryDirectory(prefix="aift-col-test-") as tmp_dir:
+            analyzer, _ = self._make_analyzer_with_csv(
+                tmp_dir, ["Timestamp", "Path"], [["2024-01-01T00:00:00Z", "C:\\Windows"]]
+            )
+            analysis = "The `MalwareIndicator` column was not present."
+            warnings = analyzer._validate_citations("test_artifact", analysis)
+            col_warnings = [w for w in warnings if "unverifiable" in w.lower()]
+            self.assertEqual(len(col_warnings), 1)
+            self.assertIn("MalwareIndicator", col_warnings[0])
+
+    def test_column_field_keyword_pattern(self) -> None:
+        with TemporaryDirectory(prefix="aift-col-test-") as tmp_dir:
+            analyzer, _ = self._make_analyzer_with_csv(
+                tmp_dir, ["EventID", "Channel"], [["4624", "Security"]]
+            )
+            analysis = 'The field "FakeColumn" contains interesting data.'
+            warnings = analyzer._validate_citations("test_artifact", analysis)
+            col_warnings = [w for w in warnings if "unverifiable" in w.lower()]
+            self.assertEqual(len(col_warnings), 1)
+            self.assertIn("FakeColumn", col_warnings[0])
+
+    def test_analysis_failed_returns_empty(self) -> None:
+        with TemporaryDirectory(prefix="aift-col-test-") as tmp_dir:
+            analyzer, _ = self._make_analyzer_with_csv(
+                tmp_dir, ["Col"], [["val"]]
+            )
+            warnings = analyzer._validate_citations(
+                "test_artifact", "Analysis failed: provider error"
+            )
+            self.assertEqual(warnings, [])
+
+
 if __name__ == "__main__":
     unittest.main()

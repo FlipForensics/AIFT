@@ -229,6 +229,15 @@ _CITED_ISO_TIMESTAMP_RE = re.compile(
     r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?\b"
 )
 _CITED_ROW_REF_RE = re.compile(r"\brow[_ ]?(?:ref(?:erence)?)?[:\s#]*(\d+)\b", re.IGNORECASE)
+# Extracts column/field names cited by the AI.  Matches patterns like:
+# - backtick-wrapped: `ColumnName`
+# - "column ColumnName", "the ColumnName column", "field ColumnName"
+_CITED_COLUMN_REF_RE = re.compile(
+    r"(?:`([^`]{2,60})`"
+    r"|(?:column|field)\s+[\"']([^\"']{2,60})[\"']"
+    r"|[\"']([^\"']{2,60})[\"']\s+(?:column|field))",
+    re.IGNORECASE,
+)
 CITATION_SPOT_CHECK_LIMIT = 20
 
 _DEFAULT_SYSTEM_PROMPT = (
@@ -1865,12 +1874,19 @@ class ForensicAnalyzer:
             return
 
     def _validate_citations(self, artifact_key: str, analysis_text: str) -> list[str]:
-        """Spot-check timestamps and row references cited by the AI against source CSV.
+        """Spot-check timestamps, row references, and column names cited by the AI.
 
-        Extracts ISO timestamps and ``row <N>`` references from the AI's
-        analysis text, then verifies each against the source CSV data.
-        This helps detect potential hallucinations where the AI cites
-        records or timestamps that do not exist in the evidence.
+        Extracts ISO timestamps, ``row <N>`` references, and column/field
+        name references from the AI's analysis text, then verifies each
+        against the source CSV data.  This helps detect potential
+        hallucinations where the AI cites records, timestamps, or column
+        names that do not exist in the evidence.
+
+        Column name matching uses a three-tier approach:
+        - **exact**: cited name matches a CSV header exactly.
+        - **fuzzy**: case-insensitive, whitespace/underscore-normalized match.
+          A warning is logged but the citation is not flagged as unverifiable.
+        - **unverifiable**: no match found — flagged as an unverifiable citation.
 
         Only checks up to ``self.citation_spot_check_limit`` values per
         category.  Warnings are logged to the audit trail.
@@ -1898,17 +1914,34 @@ class ForensicAnalyzer:
         # --- Extract cited row references ---
         cited_row_refs: list[str] = _CITED_ROW_REF_RE.findall(analysis_text)
 
-        if not cited_timestamps and not cited_row_refs:
+        # --- Extract cited column names ---
+        cited_columns: list[str] = []
+        for match in _CITED_COLUMN_REF_RE.finditer(analysis_text):
+            # The regex has three capture groups; exactly one will be non-empty.
+            cited_col = match.group(1) or match.group(2) or match.group(3)
+            if cited_col and cited_col.strip():
+                cited_columns.append(cited_col.strip())
+        # Deduplicate while preserving order.
+        seen_cols: set[str] = set()
+        unique_cited_columns: list[str] = []
+        for col in cited_columns:
+            if col not in seen_cols:
+                seen_cols.add(col)
+                unique_cited_columns.append(col)
+        cited_columns = unique_cited_columns
+
+        if not cited_timestamps and not cited_row_refs and not cited_columns:
             return []
 
         # Build lookup sets from the source CSV (only the columns/rows we need).
         csv_timestamp_lookup: set[str] = set()
         csv_row_refs: set[str] = set()
+        csv_columns: list[str] = []
         try:
             with csv_path.open("r", newline="", encoding="utf-8-sig", errors="replace") as fh:
                 reader = csv.DictReader(fh)
-                columns = [str(c) for c in (reader.fieldnames or []) if c not in (None, "")]
-                ts_columns = [c for c in columns if self._looks_like_timestamp_column(c)]
+                csv_columns = [str(c) for c in (reader.fieldnames or []) if c not in (None, "")]
+                ts_columns = [c for c in csv_columns if self._looks_like_timestamp_column(c)]
                 for row_number, raw_row in enumerate(reader, start=1):
                     csv_row_refs.add(str(row_number))
                     for col in ts_columns:
@@ -1919,6 +1952,7 @@ class ForensicAnalyzer:
             return []
 
         warnings: list[str] = []
+        column_match_results: list[dict[str, str]] = []
 
         # Spot-check timestamps (up to limit).
         for ts in cited_timestamps[: self.citation_spot_check_limit]:
@@ -1934,16 +1968,42 @@ class ForensicAnalyzer:
                     f"Note: AI cited row {ref} which could not be verified in the source data."
                 )
 
+        # Spot-check column name references (up to limit).
+        for cited_col in cited_columns[: self.citation_spot_check_limit]:
+            match_status, matched_header = self._match_column_name(cited_col, csv_columns)
+            column_match_results.append({
+                "cited": cited_col,
+                "match_status": match_status,
+                "matched_header": matched_header or "",
+            })
+            if match_status == "fuzzy":
+                self.logger.warning(
+                    "AI cited column '%s' is a fuzzy match for CSV header '%s' "
+                    "(case/whitespace difference) in artifact %s.",
+                    cited_col,
+                    matched_header,
+                    artifact_key,
+                )
+                warnings.append(
+                    f"Note: AI cited column '{cited_col}' is a fuzzy match for CSV header "
+                    f"'{matched_header}' (case or whitespace difference)."
+                )
+            elif match_status == "unverifiable":
+                warnings.append(
+                    f"Note: AI cited column '{cited_col}' which does not match any column "
+                    f"in the source data — citation is unverifiable."
+                )
+
         if warnings:
-            self._audit_log(
-                "citation_validation",
-                {
-                    "artifact_key": artifact_key,
-                    "citation_validation": "warnings_found",
-                    "warning_count": len(warnings),
-                    "warnings": warnings[:10],
-                },
-            )
+            audit_details: dict[str, object] = {
+                "artifact_key": artifact_key,
+                "citation_validation": "warnings_found",
+                "warning_count": len(warnings),
+                "warnings": warnings[:10],
+            }
+            if column_match_results:
+                audit_details["column_match_results"] = column_match_results[:10]
+            self._audit_log("citation_validation", audit_details)
 
         return warnings
 
@@ -2032,6 +2092,45 @@ class ForensicAnalyzer:
             key in csv_timestamp_lookup
             for key in ForensicAnalyzer._timestamp_lookup_keys(cited)
         )
+
+    @staticmethod
+    def _match_column_name(
+        cited_column: str, csv_columns: list[str]
+    ) -> tuple[str, str | None]:
+        """Match an AI-cited column name against actual CSV headers.
+
+        Performs a three-tier match: exact, then case-insensitive with
+        whitespace/underscore normalization (fuzzy), then reports unverifiable.
+
+        Args:
+            cited_column: Column name string cited by the AI.
+            csv_columns: Actual CSV header column names.
+
+        Returns:
+            A 2-tuple of ``(match_status, matched_header)`` where
+            *match_status* is one of ``"exact"``, ``"fuzzy"``, or
+            ``"unverifiable"``, and *matched_header* is the actual CSV
+            header that matched (``None`` when unverifiable).
+        """
+        cited_stripped = cited_column.strip()
+
+        # Tier 1: exact match.
+        for header in csv_columns:
+            if header == cited_stripped:
+                return "exact", header
+
+        # Tier 2: fuzzy match — case-insensitive, collapse whitespace/underscores.
+        def _normalize_col(name: str) -> str:
+            """Normalize a column name for fuzzy comparison."""
+            return name.strip().lower().replace("_", "").replace(" ", "")
+
+        cited_norm = _normalize_col(cited_stripped)
+        for header in csv_columns:
+            if _normalize_col(header) == cited_norm:
+                return "fuzzy", header
+
+        # Tier 3: no match found.
+        return "unverifiable", None
 
     def _register_artifact_paths_from_metadata(self, metadata: Mapping[str, Any] | None) -> None:
         """Extract and register artifact CSV paths from run metadata.
