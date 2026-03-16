@@ -33,6 +33,8 @@ from uuid import uuid4
 
 from .version import TOOL_VERSION
 
+__all__ = ["AuditLogger"]
+
 ACTION_TYPES = frozenset(
     {
         "case_created",

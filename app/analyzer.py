@@ -97,6 +97,8 @@ except Exception as error:
     )
     ARTIFACT_REGISTRY: dict[str, dict[str, str]] = {}
 
+__all__ = ["ForensicAnalyzer"]
+
 TOKEN_CHAR_RATIO = 4
 DATE_BUFFER_DAYS = 7
 AI_MAX_TOKENS = 128000

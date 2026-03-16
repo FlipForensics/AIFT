@@ -43,6 +43,7 @@ from typing import Any, Callable
 from dissect.target import Target
 from dissect.target.exceptions import PluginError, UnsupportedPluginError
 
+__all__ = ["ForensicParser", "ARTIFACT_REGISTRY"]
 
 _ARTIFACT_PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts" / "artifact_instructions"
 

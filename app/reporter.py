@@ -42,6 +42,8 @@ from markupsafe import Markup, escape
 from .config import LOGO_FILE_CANDIDATES
 from .version import TOOL_VERSION
 
+__all__ = ["ReportGenerator"]
+
 DEFAULT_CASE_NAME = "Untitled Investigation"
 DEFAULT_TOOL_VERSION = TOOL_VERSION
 DEFAULT_AI_PROVIDER = "unknown"

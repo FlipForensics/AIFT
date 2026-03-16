@@ -30,6 +30,15 @@ from typing import Any
 
 import yaml
 
+__all__ = [
+    "load_config",
+    "save_config",
+    "get_default_config",
+    "apply_env_overrides",
+    "PROJECT_ROOT",
+    "DEFAULT_CONFIG",
+]
+
 logger = logging.getLogger(__name__)
 
 KNOWN_AI_PROVIDERS = ("claude", "openai", "kimi", "local")

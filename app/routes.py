@@ -127,6 +127,8 @@ from .parser import ARTIFACT_REGISTRY, ForensicParser
 from .reporter import ReportGenerator
 from .version import TOOL_VERSION
 
+__all__ = ["register_routes"]
+
 LOGGER = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -3631,12 +3633,3 @@ def register_routes(app: Flask) -> None:
         app: The Flask application instance to register routes on.
     """
     app.register_blueprint(routes_bp)
-
-
-__all__ = [
-    "ANALYSIS_PROGRESS",
-    "CASE_STATES",
-    "CHAT_PROGRESS",
-    "PARSE_PROGRESS",
-    "register_routes",
-]

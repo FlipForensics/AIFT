@@ -19,6 +19,8 @@ from hashlib import md5, sha256
 from pathlib import Path
 from typing import Callable, Protocol, TypedDict
 
+__all__ = ["compute_hashes", "verify_hash"]
+
 CHUNK_SIZE = 4 * 1024 * 1024
 
 

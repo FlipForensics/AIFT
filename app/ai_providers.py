@@ -71,6 +71,16 @@ from urllib.parse import urlsplit, urlunsplit
 logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
+__all__ = [
+    "AIProvider",
+    "AIProviderError",
+    "ClaudeProvider",
+    "OpenAIProvider",
+    "KimiProvider",
+    "LocalProvider",
+    "create_provider",
+]
+
 
 @dataclass
 class RateLimitState:
@@ -3632,14 +3642,3 @@ def create_provider(config: dict[str, Any]) -> AIProvider:
     raise ValueError(
         f"Unsupported AI provider '{provider_name}'. Expected one of: claude, openai, kimi, local."
     )
-
-
-__all__ = [
-    "AIProvider",
-    "AIProviderError",
-    "ClaudeProvider",
-    "OpenAIProvider",
-    "KimiProvider",
-    "LocalProvider",
-    "create_provider",
-]

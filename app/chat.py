@@ -35,6 +35,8 @@ from typing import Any, Mapping
 
 from .audit import _utc_now_iso8601_ms
 
+__all__ = ["ChatManager"]
+
 log = logging.getLogger(__name__)
 
 VALID_ROLES = frozenset({"user", "assistant"})
