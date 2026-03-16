@@ -30,6 +30,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+import html
 import json
 from pathlib import Path
 import re
@@ -754,10 +755,10 @@ class ReportGenerator:
             if not part:
                 continue
             if part.startswith("`") and part.endswith("`"):
-                output.append(f"<code>{escape(part[1:-1])}</code>")
+                output.append(f"<code>{part[1:-1]}</code>")
                 continue
 
-            escaped = str(escape(part))
+            escaped = part
             escaped = MARKDOWN_BOLD_STAR_PATTERN.sub(r"<strong>\1</strong>", escaped)
             escaped = MARKDOWN_BOLD_UNDERSCORE_PATTERN.sub(r"<strong>\1</strong>", escaped)
             escaped = MARKDOWN_ITALIC_STAR_PATTERN.sub(r"<em>\1</em>", escaped)
@@ -876,7 +877,8 @@ class ReportGenerator:
             An HTML string with all recognised Markdown constructs
             converted to their HTML equivalents.
         """
-        lines = str(value).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        value = html.escape(str(value))
+        lines = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
         blocks: list[str] = []
         paragraph_lines: list[str] = []
         list_items: list[str] = []
@@ -906,7 +908,7 @@ class ReportGenerator:
 
         def flush_code_fence() -> None:
             nonlocal code_lines
-            code_text = str(escape("\n".join(code_lines)))
+            code_text = "\n".join(code_lines)
             blocks.append(f"<pre><code>{code_text}</code></pre>")
             code_lines = []
 
