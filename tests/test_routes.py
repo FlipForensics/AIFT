@@ -51,6 +51,15 @@ class FakeParser:
         self.parsed_dir = Path(parsed_dir) if parsed_dir is not None else self.case_dir / "parsed"
         self.parsed_dir.mkdir(parents=True, exist_ok=True)
 
+    def __enter__(self) -> "FakeParser":
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return False
+
+    def close(self) -> None:
+        pass
+
     def get_image_metadata(self) -> dict[str, str]:
         return {
             "hostname": "demo-host",
