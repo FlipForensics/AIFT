@@ -743,4 +743,4 @@ if __name__ == "__main__":
         assert recent[2].get("content") == "Question 5?"
         assert recent[3].get("content") == "Answer 5."
 
-    print("ChatManager quick test passed.")
+    log.info("ChatManager quick test passed.")
