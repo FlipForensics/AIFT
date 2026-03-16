@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import yaml
 
-from app.config import PROJECT_ROOT, load_config, save_config
+from app.config import PROJECT_ROOT, _deep_merge_inplace, load_config, save_config
 
 
 class ConfigTests(unittest.TestCase):
@@ -125,6 +125,111 @@ class ConfigPathResolutionTests(unittest.TestCase):
             config = load_config(config_path)
             self.assertTrue(config_path.exists())
             self.assertEqual(config.get("ai", {}).get("provider"), "claude")
+
+
+class DeepMergeTests(unittest.TestCase):
+    def test_flat_override_replaces_value(self) -> None:
+        base = {"a": 1, "b": 2}
+        result = _deep_merge_inplace(base, {"b": 99})
+        self.assertEqual(result, {"a": 1, "b": 99})
+        self.assertIs(result, base)
+
+    def test_nested_dicts_are_merged_recursively(self) -> None:
+        base = {"ai": {"provider": "claude", "claude": {"model": "opus"}}}
+        override = {"ai": {"claude": {"api_key": "sk-test"}}}
+        result = _deep_merge_inplace(base, override)
+        self.assertEqual(result["ai"]["provider"], "claude")
+        self.assertEqual(result["ai"]["claude"]["model"], "opus")
+        self.assertEqual(result["ai"]["claude"]["api_key"], "sk-test")
+
+    def test_override_adds_new_keys(self) -> None:
+        base = {"a": 1}
+        result = _deep_merge_inplace(base, {"b": 2, "c": {"nested": True}})
+        self.assertEqual(result, {"a": 1, "b": 2, "c": {"nested": True}})
+
+    def test_override_replaces_non_dict_with_dict(self) -> None:
+        base = {"a": "string_value"}
+        result = _deep_merge_inplace(base, {"a": {"nested": True}})
+        self.assertEqual(result["a"], {"nested": True})
+
+    def test_override_replaces_dict_with_non_dict(self) -> None:
+        base = {"a": {"nested": True}}
+        result = _deep_merge_inplace(base, {"a": 42})
+        self.assertEqual(result["a"], 42)
+
+    def test_empty_override_leaves_base_unchanged(self) -> None:
+        base = {"a": 1, "b": {"c": 2}}
+        original = {"a": 1, "b": {"c": 2}}
+        _deep_merge_inplace(base, {})
+        self.assertEqual(base, original)
+
+    def test_deeply_nested_merge(self) -> None:
+        base = {"l1": {"l2": {"l3": {"value": "old", "keep": True}}}}
+        override = {"l1": {"l2": {"l3": {"value": "new"}}}}
+        result = _deep_merge_inplace(base, override)
+        self.assertEqual(result["l1"]["l2"]["l3"]["value"], "new")
+        self.assertTrue(result["l1"]["l2"]["l3"]["keep"])
+
+
+class ConfigRoundtripTests(unittest.TestCase):
+    def test_save_then_load_preserves_custom_values(self) -> None:
+        with TemporaryDirectory(prefix="aift-config-roundtrip-") as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config = load_config(config_path)
+            config["ai"]["provider"] = "openai"
+            config["server"]["port"] = 8080
+            config["analysis"]["date_buffer_days"] = 14
+            save_config(config, config_path)
+
+            reloaded = load_config(config_path, use_env_overrides=False)
+
+        self.assertEqual(reloaded["ai"]["provider"], "openai")
+        self.assertEqual(reloaded["server"]["port"], 8080)
+        self.assertEqual(reloaded["analysis"]["date_buffer_days"], 14)
+
+    def test_save_creates_parent_directories(self) -> None:
+        with TemporaryDirectory(prefix="aift-config-roundtrip-") as temp_dir:
+            config_path = Path(temp_dir) / "subdir" / "deep" / "config.yaml"
+            save_config({"ai": {"provider": "test"}}, config_path)
+            self.assertTrue(config_path.exists())
+            reloaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(reloaded["ai"]["provider"], "test")
+
+
+class ApplyEnvOverridesTests(unittest.TestCase):
+    def test_kimi_api_key_from_moonshot_env(self) -> None:
+        with TemporaryDirectory(prefix="aift-config-test-") as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            with patch.dict(
+                "os.environ",
+                {"MOONSHOT_API_KEY": "moonshot-key-123"},
+                clear=False,
+            ):
+                config = load_config(config_path)
+        self.assertEqual(config.get("ai", {}).get("kimi", {}).get("api_key"), "moonshot-key-123")
+
+    def test_kimi_api_key_from_kimi_env_fallback(self) -> None:
+        with TemporaryDirectory(prefix="aift-config-test-") as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            with patch.dict(
+                "os.environ",
+                {"KIMI_API_KEY": "kimi-key-456"},
+                clear=False,
+            ):
+                config = load_config(config_path)
+        self.assertEqual(config.get("ai", {}).get("kimi", {}).get("api_key"), "kimi-key-456")
+
+    def test_empty_env_vars_are_ignored(self) -> None:
+        with TemporaryDirectory(prefix="aift-config-test-") as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            with patch.dict(
+                "os.environ",
+                {"ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "  "},
+                clear=False,
+            ):
+                config = load_config(config_path, use_env_overrides=True)
+        self.assertEqual(config.get("ai", {}).get("claude", {}).get("api_key"), "")
+        self.assertEqual(config.get("ai", {}).get("openai", {}).get("api_key"), "")
 
 
 if __name__ == "__main__":

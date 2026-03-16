@@ -99,5 +99,59 @@ class AuditLoggerTests(unittest.TestCase):
         self.assertIsNotNone(parsed_timestamp)
 
 
+    def test_log_rejects_non_dict_details(self) -> None:
+        with TemporaryDirectory(prefix="aift-audit-test-") as temp_dir:
+            logger = AuditLogger(temp_dir)
+
+            with self.assertRaises(TypeError):
+                logger.log("case_created", "not-a-dict")
+
+            with self.assertRaises(TypeError):
+                logger.log("case_created", ["list", "of", "items"])
+
+    def test_log_entries_contain_session_id(self) -> None:
+        with TemporaryDirectory(prefix="aift-audit-test-") as temp_dir:
+            logger = AuditLogger(temp_dir)
+            logger.log("case_created", {"case_id": "session-test"})
+
+            audit_path = Path(temp_dir) / "audit.jsonl"
+            entry = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[-1])
+
+        self.assertIn("session_id", entry)
+        self.assertIsInstance(entry["session_id"], str)
+        self.assertGreater(len(entry["session_id"]), 0)
+
+    def test_log_timestamp_is_utc_iso8601(self) -> None:
+        with TemporaryDirectory(prefix="aift-audit-test-") as temp_dir:
+            logger = AuditLogger(temp_dir)
+            logger.log("case_created", {"case_id": "ts-test"})
+
+            audit_path = Path(temp_dir) / "audit.jsonl"
+            entry = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[-1])
+
+        ts = str(entry["timestamp"])
+        self.assertTrue(ts.endswith("Z") or "+00:00" in ts)
+        parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        self.assertIsNotNone(parsed)
+
+    def test_session_id_is_consistent_across_calls(self) -> None:
+        with TemporaryDirectory(prefix="aift-audit-test-") as temp_dir:
+            logger = AuditLogger(temp_dir)
+            logger.log("case_created", {"case_id": "c1"})
+            logger.log("report_generated", {"case_id": "c1"})
+
+            audit_path = Path(temp_dir) / "audit.jsonl"
+            entries = self._read_audit_entries(audit_path)
+
+        self.assertEqual(entries[0]["session_id"], entries[1]["session_id"])
+
+    def test_different_loggers_have_different_session_ids(self) -> None:
+        with TemporaryDirectory(prefix="aift-audit-test-") as temp_dir:
+            logger1 = AuditLogger(Path(temp_dir) / "case1")
+            logger2 = AuditLogger(Path(temp_dir) / "case2")
+
+        self.assertNotEqual(logger1.session_id, logger2.session_id)
+
+
 if __name__ == "__main__":
     unittest.main()

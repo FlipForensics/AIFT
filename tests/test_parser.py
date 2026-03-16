@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -307,6 +307,121 @@ class ParserTests(unittest.TestCase):
 
         self.assertEqual(metadata["timezone"], "UTC")
         self.assertEqual(metadata["install_date"], "2024-06-15")
+
+
+class RecordToDictTests(unittest.TestCase):
+    """Tests for ForensicParser._record_to_dict with various value types."""
+
+    def test_asdict_record(self) -> None:
+        record = FakeRecord({"name": "test", "value": 42})
+        result = ForensicParser._record_to_dict(record)
+        self.assertEqual(result, {"name": "test", "value": 42})
+
+    def test_plain_dict_passthrough(self) -> None:
+        result = ForensicParser._record_to_dict({"a": 1, "b": 2})
+        self.assertEqual(result, {"a": 1, "b": 2})
+
+    def test_object_with_dict_attr(self) -> None:
+        class SimpleObj:
+            def __init__(self) -> None:
+                self.field1 = "hello"
+                self.field2 = 99
+
+        result = ForensicParser._record_to_dict(SimpleObj())
+        self.assertEqual(result["field1"], "hello")
+        self.assertEqual(result["field2"], 99)
+
+    def test_unconvertible_raises_type_error(self) -> None:
+        with self.assertRaises(TypeError):
+            ForensicParser._record_to_dict(42)
+
+
+class StringifyCsvValueTests(unittest.TestCase):
+    """Tests for ForensicParser._stringify_csv_value with all special types."""
+
+    def test_none_returns_empty_string(self) -> None:
+        self.assertEqual(ForensicParser._stringify_csv_value(None), "")
+
+    def test_datetime_returns_isoformat(self) -> None:
+        dt = datetime(2026, 3, 15, 10, 30, 45)
+        self.assertEqual(ForensicParser._stringify_csv_value(dt), "2026-03-15T10:30:45")
+
+    def test_date_returns_isoformat(self) -> None:
+        d = date(2026, 3, 15)
+        self.assertEqual(ForensicParser._stringify_csv_value(d), "2026-03-15")
+
+    def test_time_returns_isoformat(self) -> None:
+        t = time(10, 30, 45)
+        self.assertEqual(ForensicParser._stringify_csv_value(t), "10:30:45")
+
+    def test_bytes_returns_hex(self) -> None:
+        self.assertEqual(ForensicParser._stringify_csv_value(b"\xde\xad\xbe\xef"), "deadbeef")
+
+    def test_bytearray_returns_hex(self) -> None:
+        self.assertEqual(ForensicParser._stringify_csv_value(bytearray(b"\xca\xfe")), "cafe")
+
+    def test_path_returns_string(self) -> None:
+        result = ForensicParser._stringify_csv_value(Path("C:/Users/test/file.txt"))
+        self.assertIn("file.txt", result)
+
+    def test_int_returns_string(self) -> None:
+        self.assertEqual(ForensicParser._stringify_csv_value(42), "42")
+
+    def test_nested_dict_returns_string_repr(self) -> None:
+        result = ForensicParser._stringify_csv_value({"key": "value"})
+        self.assertIn("key", result)
+
+
+class EvtxGroupNameTests(unittest.TestCase):
+    """Tests for ForensicParser._extract_evtx_group_name."""
+
+    def _create_parser(self, case_dir: Path) -> ForensicParser:
+        target = object()
+        audit = FakeAuditLogger()
+        with patch("app.parser.Target.open", return_value=target):
+            return ForensicParser("evidence.E01", case_dir, audit)
+
+    def test_channel_key_is_preferred(self) -> None:
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(Path(temp_dir))
+            result = parser._extract_evtx_group_name(
+                {"channel": "Security", "provider": "Microsoft-Windows-EventLog"}
+            )
+        self.assertEqual(result, "Security")
+
+    def test_provider_used_when_no_channel(self) -> None:
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(Path(temp_dir))
+            result = parser._extract_evtx_group_name(
+                {"provider": "Microsoft-Windows-Sysmon"}
+            )
+        self.assertEqual(result, "Microsoft-Windows-Sysmon")
+
+    def test_uppercase_channel_key(self) -> None:
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(Path(temp_dir))
+            result = parser._extract_evtx_group_name({"Channel": "Application"})
+        self.assertEqual(result, "Application")
+
+    def test_log_name_key(self) -> None:
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(Path(temp_dir))
+            result = parser._extract_evtx_group_name({"log_name": "System"})
+        self.assertEqual(result, "System")
+
+    def test_unknown_when_no_keys_match(self) -> None:
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(Path(temp_dir))
+            result = parser._extract_evtx_group_name({"event_id": 4624})
+        self.assertEqual(result, "unknown")
+
+    def test_empty_channel_falls_through_to_provider(self) -> None:
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(Path(temp_dir))
+            result = parser._extract_evtx_group_name(
+                {"channel": "", "Provider": "Sysmon"}
+            )
+        self.assertEqual(result, "Sysmon")
 
 
 if __name__ == "__main__":

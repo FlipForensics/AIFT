@@ -1686,5 +1686,87 @@ class TestEstimateTokens(unittest.TestCase):
         self.assertGreaterEqual(result, int(raw * 1.1))
 
 
+class TestBuildFullDataCsv(unittest.TestCase):
+    """Tests for ForensicAnalyzer._build_full_data_csv serialization."""
+
+    def test_serializes_rows_with_row_ref_column(self) -> None:
+        analyzer = ForensicAnalyzer()
+        rows = [
+            {"_row_ref": "1", "ts": "2026-01-15T00:00:00", "name": "alpha"},
+            {"_row_ref": "2", "ts": "2026-01-16T00:00:00", "name": "beta"},
+        ]
+        result = analyzer._build_full_data_csv(rows, ["ts", "name"])
+        lines = result.strip().split("\n")
+        self.assertEqual(lines[0].strip(), "row_ref,ts,name")
+        self.assertEqual(len(lines), 3)
+        self.assertIn("alpha", lines[1])
+        self.assertIn("beta", lines[2])
+
+    def test_empty_columns_returns_placeholder(self) -> None:
+        analyzer = ForensicAnalyzer()
+        result = analyzer._build_full_data_csv([{"a": "1"}], [])
+        self.assertEqual(result, "No columns available.")
+
+    def test_empty_rows_returns_header_only(self) -> None:
+        analyzer = ForensicAnalyzer()
+        result = analyzer._build_full_data_csv([], ["ts", "name"])
+        self.assertIn("row_ref,ts,name", result)
+
+    def test_missing_column_values_produce_empty_cells(self) -> None:
+        analyzer = ForensicAnalyzer()
+        rows = [{"_row_ref": "1", "ts": "2026-01-15"}]
+        result = analyzer._build_full_data_csv(rows, ["ts", "name"])
+        self.assertIn("2026-01-15", result)
+        # "name" column should be empty for this row
+        lines = result.strip().split("\n")
+        self.assertEqual(len(lines[1].split(",")), 3)
+
+
+class TestValidateCitationsTimestamps(unittest.TestCase):
+    """Tests for timestamp and row citation validation in _validate_citations."""
+
+    def _make_analyzer_with_csv(
+        self, tmp_dir: str, headers: list[str], rows: list[list[str]]
+    ) -> ForensicAnalyzer:
+        csv_path = Path(tmp_dir) / "artifact.csv"
+        with csv_path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(headers)
+            for row in rows:
+                writer.writerow(row)
+        return ForensicAnalyzer(artifact_csv_paths={"test_artifact": csv_path})
+
+    def test_valid_timestamp_citation_no_warning(self) -> None:
+        with TemporaryDirectory(prefix="aift-cite-test-") as tmp_dir:
+            analyzer = self._make_analyzer_with_csv(
+                tmp_dir,
+                ["ts", "value"],
+                [["2026-01-15T09:30:00Z", "test"]],
+            )
+            warnings = analyzer._validate_citations(
+                "test_artifact", "At 2026-01-15T09:30:00Z the event occurred."
+            )
+            ts_warnings = [w for w in warnings if "timestamp" in w.lower()]
+            self.assertEqual(len(ts_warnings), 0)
+
+    def test_invalid_timestamp_citation_produces_warning(self) -> None:
+        with TemporaryDirectory(prefix="aift-cite-test-") as tmp_dir:
+            analyzer = self._make_analyzer_with_csv(
+                tmp_dir,
+                ["ts", "value"],
+                [["2026-01-15T09:30:00Z", "test"]],
+            )
+            warnings = analyzer._validate_citations(
+                "test_artifact", "At 2099-12-31T00:00:00Z the event occurred."
+            )
+            ts_warnings = [w for w in warnings if "timestamp" in w.lower()]
+            self.assertGreaterEqual(len(ts_warnings), 1)
+
+    def test_missing_csv_returns_empty(self) -> None:
+        analyzer = ForensicAnalyzer(artifact_csv_paths={"test_artifact": Path("/nonexistent.csv")})
+        warnings = analyzer._validate_citations("test_artifact", "Some `Column` cited.")
+        self.assertEqual(warnings, [])
+
+
 if __name__ == "__main__":
     unittest.main()
