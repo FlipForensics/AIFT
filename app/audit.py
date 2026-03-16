@@ -26,6 +26,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timezone
 from importlib import metadata
 import json
+import os
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -167,3 +168,4 @@ class AuditLogger:
         with self.audit_file.open("ab", buffering=0) as audit_stream:
             audit_stream.write(line.encode("utf-8"))
             audit_stream.flush()
+            os.fsync(audit_stream.fileno())
