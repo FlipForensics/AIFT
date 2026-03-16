@@ -550,7 +550,7 @@ class AnalyzerTests(unittest.TestCase):
                 random_seed=7,
             )
             aware_timestamp = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
-            with patch("app.analyzer_data_prep.extract_row_datetime", return_value=aware_timestamp):
+            with patch("app.analyzer.data_prep.extract_row_datetime", return_value=aware_timestamp):
                 filled_prompt = analyzer._prepare_artifact_data(
                     artifact_key="runkeys",
                     investigation_context="Focus on activity around January 15, 2026.",
@@ -585,7 +585,7 @@ class AnalyzerTests(unittest.TestCase):
                 )
 
             fake_provider = FakeProvider(responses=["mft-analysis", "summary-analysis"])
-            with patch("app.analyzer.create_provider", return_value=fake_provider):
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
                 analyzer = ForensicAnalyzer(
                     artifact_csv_paths={"mft": csv_path},
                     prompts_dir=prompts_dir,
@@ -639,7 +639,7 @@ class AnalyzerTests(unittest.TestCase):
                 )
 
             fake_provider = FakeProvider(responses=["runkeys-analysis", "summary-analysis"])
-            with patch("app.analyzer.create_provider", return_value=fake_provider):
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
                 analyzer = ForensicAnalyzer(
                     artifact_csv_paths={"runkeys": csv_path},
                     prompts_dir=prompts_dir,
@@ -669,7 +669,7 @@ class AnalyzerTests(unittest.TestCase):
             fake_provider = FakeProvider()
             audit = FakeAuditLogger()
 
-            with patch("app.analyzer.create_provider", return_value=fake_provider) as create_provider_mock:
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider) as create_provider_mock:
                 analyzer = ForensicAnalyzer(
                     case_dir=temp_dir,
                     config={"ai": {"provider": "local", "local": {"model": "fake-model-1"}}},
@@ -704,7 +704,7 @@ class AnalyzerTests(unittest.TestCase):
 
             fake_provider = FakeProvider(responses=["artifact-analysis-output"])
             audit = FakeAuditLogger()
-            with patch("app.analyzer.create_provider", return_value=fake_provider):
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
                 analyzer = ForensicAnalyzer(
                     case_dir=temp_dir,
                     config={"ai": {"provider": "local"}},
@@ -748,7 +748,7 @@ class AnalyzerTests(unittest.TestCase):
                 )
 
             fake_provider = FakeAttachmentProvider(responses=["artifact-analysis-output"])
-            with patch("app.analyzer.create_provider", return_value=fake_provider):
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
                 analyzer = ForensicAnalyzer(
                     case_dir=temp_dir,
                     config={"ai": {"provider": "local"}},
@@ -1019,7 +1019,7 @@ class AnalyzerTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("app.analyzer.create_provider", return_value=FakeProvider()):
+            with patch("app.analyzer.core.create_provider", return_value=FakeProvider()):
                 with self.assertLogs("app.analyzer", level="WARNING") as captured_logs:
                     analyzer = ForensicAnalyzer(
                         config={
@@ -1050,7 +1050,7 @@ class AnalyzerTests(unittest.TestCase):
             )
 
             try:
-                with patch("app.analyzer.create_provider", return_value=FakeProvider()):
+                with patch("app.analyzer.core.create_provider", return_value=FakeProvider()):
                     with case_log_context(case_id):
                         analyzer = ForensicAnalyzer(
                             case_dir=temp_path,
@@ -1098,7 +1098,7 @@ class AnalyzerTests(unittest.TestCase):
                 )
 
             fake_provider = FakeProvider(responses=["artifact-analysis-output"])
-            with patch("app.analyzer.create_provider", return_value=fake_provider):
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
                 analyzer = ForensicAnalyzer(
                     case_dir=temp_dir,
                     config={
@@ -1162,7 +1162,7 @@ class AnalyzerTests(unittest.TestCase):
             def progress_callback(artifact_key: str, status: str, result: dict[str, str]) -> None:
                 progress_events.append((artifact_key, status, result))
 
-            with patch("app.analyzer.create_provider", return_value=fake_provider):
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
                 analyzer = ForensicAnalyzer(
                     case_dir=temp_dir,
                     config={"ai": {"provider": "local"}},
@@ -1192,7 +1192,7 @@ class AnalyzerTests(unittest.TestCase):
             self._write_prompt_template(prompts_dir)
 
             fake_provider = FakeProvider(responses=["summary-output"])
-            with patch("app.analyzer.create_provider", return_value=fake_provider):
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
                 analyzer = ForensicAnalyzer(
                     case_dir=temp_dir,
                     config={"ai": {"provider": "local"}},

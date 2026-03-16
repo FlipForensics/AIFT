@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from .analyzer_constants import (
+from .constants import (
     INTEGER_RE,
     TIMESTAMP_COLUMN_HINTS,
     TOKEN_CHAR_RATIO,
@@ -299,7 +299,7 @@ def is_dedup_safe_identifier_column(column_name: str) -> bool:
     Returns:
         ``True`` if the column is a safe dedup identifier.
     """
-    from .analyzer_constants import DEDUP_SAFE_IDENTIFIER_HINTS
+    from .constants import DEDUP_SAFE_IDENTIFIER_HINTS
     lowered = column_name.strip().lower().replace("-", "_").replace(" ", "_")
     return lowered in DEDUP_SAFE_IDENTIFIER_HINTS
 

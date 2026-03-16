@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .ai_providers import AIProviderError
+from ..ai_providers import AIProviderError
 
 __all__ = [
     "TOKEN_CHAR_RATIO",
@@ -61,7 +61,7 @@ ARTIFACT_DEDUPLICATION_ENABLED = True
 DEDUPLICATED_PARSED_DIRNAME = "parsed_deduplicated"
 DEDUP_COMMENT_COLUMN = "_dedup_comment"
 CITATION_SPOT_CHECK_LIMIT = 20
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ARTIFACT_AI_COLUMNS_CONFIG_PATH = PROJECT_ROOT / "config" / "artifact_ai_columns.yaml"
 
 # ---------------------------------------------------------------------------

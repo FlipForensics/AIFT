@@ -10,7 +10,7 @@ Attributes:
 
 from __future__ import annotations
 
-from .analyzer_constants import (
+from .constants import (
     DOMAIN_EXCLUDED_SUFFIXES,
     IOC_DOMAIN_RE,
     IOC_EMAIL_RE,
@@ -21,7 +21,7 @@ from .analyzer_constants import (
     KNOWN_MALICIOUS_TOOL_KEYWORDS,
     WINDOWS_PATH_RE,
 )
-from .analyzer_utils import (
+from .utils import (
     extract_url_host,
     stringify_value,
     truncate_for_prompt,

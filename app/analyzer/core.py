@@ -26,10 +26,10 @@ from typing import Any, Callable, Iterable, Mapping
 
 import yaml
 
-from .ai_providers import AIProviderError, create_provider
-from .analyzer_chunking import analyze_artifact_chunked, split_csv_and_suffix, split_csv_into_chunks
-from .analyzer_citations import match_column_name, timestamp_found_in_csv, timestamp_lookup_keys, validate_citations
-from .analyzer_constants import (
+from ..ai_providers import AIProviderError, create_provider
+from .chunking import analyze_artifact_chunked, split_csv_and_suffix, split_csv_into_chunks
+from .citations import match_column_name, timestamp_found_in_csv, timestamp_lookup_keys, validate_citations
+from .constants import (
     AI_MAX_TOKENS, AI_RETRY_ATTEMPTS, AI_RETRY_BASE_DELAY,
     ARTIFACT_DEDUPLICATION_ENABLED, CITATION_SPOT_CHECK_LIMIT, DATE_BUFFER_DAYS,
     DEFAULT_ARTIFACT_AI_COLUMNS_CONFIG_PATH, DEFAULT_ARTIFACT_PROMPT_TEMPLATE,
@@ -38,12 +38,12 @@ from .analyzer_constants import (
     DEFAULT_SYSTEM_PROMPT, MAX_MERGE_ROUNDS, PROJECT_ROOT, TOKEN_CHAR_RATIO,
     UnavailableProvider,
 )
-from .analyzer_data_prep import (
+from .data_prep import (
     build_artifact_csv_attachment, build_full_data_csv, compute_statistics,
     deduplicate_rows_for_analysis, extract_dates_from_context, prepare_artifact_data,
 )
-from .analyzer_ioc import build_priority_directives, extract_ioc_targets, format_ioc_targets
-from .analyzer_utils import (
+from .ioc import build_priority_directives, extract_ioc_targets, format_ioc_targets
+from .utils import (
     build_datetime, coerce_projection_columns, emit_analysis_progress,
     estimate_tokens, is_dedup_safe_identifier_column, normalize_artifact_key,
     read_bool_setting, read_int_setting, read_path_setting,
@@ -53,7 +53,7 @@ from .analyzer_utils import (
 LOGGER = logging.getLogger(__name__)
 
 try:
-    from .parser import ARTIFACT_REGISTRY
+    from ..parser import ARTIFACT_REGISTRY
 except Exception as error:
     LOGGER.warning(
         "Failed to import artifact registry from app.parser: %s. "

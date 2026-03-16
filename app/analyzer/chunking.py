@@ -14,8 +14,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .analyzer_constants import CSV_DATA_SECTION_RE, CSV_TRAILING_FENCE_RE
-from .analyzer_utils import sanitize_filename, emit_analysis_progress
+from .constants import CSV_DATA_SECTION_RE, CSV_TRAILING_FENCE_RE
+from .utils import sanitize_filename, emit_analysis_progress
 
 LOGGER = logging.getLogger(__name__)
 

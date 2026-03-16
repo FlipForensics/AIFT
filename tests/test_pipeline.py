@@ -122,7 +122,7 @@ class PipelineTests(unittest.TestCase):
                     "Executive Summary\n- Cross-artifact synthesis points to persistence.",
                 ]
             )
-            with patch("app.analyzer.create_provider", return_value=provider):
+            with patch("app.analyzer.core.create_provider", return_value=provider):
                 analyzer = ForensicAnalyzer(
                     case_dir=case_dir,
                     audit_logger=audit_logger,

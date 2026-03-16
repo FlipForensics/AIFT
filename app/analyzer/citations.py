@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .analyzer_constants import CITED_ISO_TIMESTAMP_RE, CITED_ROW_REF_RE, CITED_COLUMN_REF_RE
-from .analyzer_utils import looks_like_timestamp_column, stringify_value
+from .constants import CITED_ISO_TIMESTAMP_RE, CITED_ROW_REF_RE, CITED_COLUMN_REF_RE
+from .utils import looks_like_timestamp_column, stringify_value
 
 LOGGER = logging.getLogger(__name__)
 
