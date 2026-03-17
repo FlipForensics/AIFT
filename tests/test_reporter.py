@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from app.reporter import ReportGenerator
+from app.reporter.markdown import highlight_confidence_tokens, markdown_to_html
 
 
 class ReporterTests(unittest.TestCase):
@@ -272,31 +273,31 @@ class ReporterTests(unittest.TestCase):
 
 
 class MarkdownToHtmlTests(unittest.TestCase):
-    """Direct unit tests for ReportGenerator._markdown_to_html."""
+    """Direct unit tests for markdown_to_html."""
 
     def test_bold_with_double_stars(self) -> None:
-        result = ReportGenerator._markdown_to_html("This is **bold** text.")
+        result = markdown_to_html("This is **bold** text.")
         self.assertIn("<strong>bold</strong>", result)
 
     def test_bold_with_double_underscores(self) -> None:
-        result = ReportGenerator._markdown_to_html("This is __bold__ text.")
+        result = markdown_to_html("This is __bold__ text.")
         self.assertIn("<strong>bold</strong>", result)
 
     def test_italic_with_single_star(self) -> None:
-        result = ReportGenerator._markdown_to_html("This is *italic* text.")
+        result = markdown_to_html("This is *italic* text.")
         self.assertIn("<em>italic</em>", result)
 
     def test_italic_with_single_underscore(self) -> None:
-        result = ReportGenerator._markdown_to_html("This is _italic_ text.")
+        result = markdown_to_html("This is _italic_ text.")
         self.assertIn("<em>italic</em>", result)
 
     def test_inline_code(self) -> None:
-        result = ReportGenerator._markdown_to_html("Run `cmd.exe` to test.")
+        result = markdown_to_html("Run `cmd.exe` to test.")
         self.assertIn("<code>cmd.exe</code>", result)
 
     def test_fenced_code_block(self) -> None:
         md = "```\nsome code\nmore code\n```"
-        result = ReportGenerator._markdown_to_html(md)
+        result = markdown_to_html(md)
         self.assertIn("<pre><code>", result)
         self.assertIn("some code", result)
         self.assertIn("more code", result)
@@ -306,12 +307,12 @@ class MarkdownToHtmlTests(unittest.TestCase):
         for level in range(1, 4):
             hashes = "#" * level
             md = f"{hashes} Heading Level {level}"
-            result = ReportGenerator._markdown_to_html(md)
+            result = markdown_to_html(md)
             self.assertIn(f"<h{level}>Heading Level {level}</h{level}>", result)
 
     def test_unordered_list(self) -> None:
         md = "- Item one\n- Item two\n- Item three"
-        result = ReportGenerator._markdown_to_html(md)
+        result = markdown_to_html(md)
         self.assertIn("<ul>", result)
         self.assertIn("<li>Item one</li>", result)
         self.assertIn("<li>Item two</li>", result)
@@ -320,7 +321,7 @@ class MarkdownToHtmlTests(unittest.TestCase):
 
     def test_ordered_list(self) -> None:
         md = "1. First\n2. Second\n3. Third"
-        result = ReportGenerator._markdown_to_html(md)
+        result = markdown_to_html(md)
         self.assertIn("<ol>", result)
         self.assertIn("<li>First</li>", result)
         self.assertIn("<li>Third</li>", result)
@@ -328,7 +329,7 @@ class MarkdownToHtmlTests(unittest.TestCase):
 
     def test_table_rendering(self) -> None:
         md = "| Header1 | Header2 |\n|---|---|\n| cell1 | cell2 |"
-        result = ReportGenerator._markdown_to_html(md)
+        result = markdown_to_html(md)
         self.assertIn("<table>", result)
         self.assertIn("<th>Header1</th>", result)
         self.assertIn("<td>cell1</td>", result)
@@ -339,21 +340,21 @@ class HtmlEscapingTests(unittest.TestCase):
     """Test that HTML special characters are escaped to prevent XSS."""
 
     def test_script_tag_is_escaped(self) -> None:
-        result = ReportGenerator._markdown_to_html("<script>alert('xss')</script>")
+        result = markdown_to_html("<script>alert('xss')</script>")
         self.assertNotIn("<script>", result)
         self.assertIn("&lt;script&gt;", result)
 
     def test_angle_brackets_escaped_in_inline_text(self) -> None:
-        result = ReportGenerator._markdown_to_html("Value <img onerror=alert(1)> test")
+        result = markdown_to_html("Value <img onerror=alert(1)> test")
         self.assertNotIn("<img", result)
         self.assertIn("&lt;img", result)
 
     def test_ampersand_is_escaped(self) -> None:
-        result = ReportGenerator._markdown_to_html("A & B")
+        result = markdown_to_html("A & B")
         self.assertIn("&amp;", result)
 
     def test_quotes_are_escaped(self) -> None:
-        result = ReportGenerator._markdown_to_html('He said "hello"')
+        result = markdown_to_html('He said "hello"')
         self.assertIn("&quot;", result)
 
 
@@ -361,38 +362,38 @@ class ConfidenceHighlightingTests(unittest.TestCase):
     """Test confidence token highlighting in _highlight_confidence_tokens."""
 
     def test_critical_token_highlighted(self) -> None:
-        result = ReportGenerator._highlight_confidence_tokens("Severity: CRITICAL")
+        result = highlight_confidence_tokens("Severity: CRITICAL")
         self.assertIn("confidence-critical", result)
         self.assertIn("CRITICAL", result)
 
     def test_high_token_highlighted(self) -> None:
-        result = ReportGenerator._highlight_confidence_tokens("Confidence HIGH")
+        result = highlight_confidence_tokens("Confidence HIGH")
         self.assertIn("confidence-high", result)
 
     def test_medium_token_highlighted(self) -> None:
-        result = ReportGenerator._highlight_confidence_tokens("Risk level: MEDIUM")
+        result = highlight_confidence_tokens("Risk level: MEDIUM")
         self.assertIn("confidence-medium", result)
 
     def test_low_token_highlighted(self) -> None:
-        result = ReportGenerator._highlight_confidence_tokens("Priority: LOW")
+        result = highlight_confidence_tokens("Priority: LOW")
         self.assertIn("confidence-low", result)
 
     def test_case_insensitive_matching(self) -> None:
-        result = ReportGenerator._highlight_confidence_tokens("confidence high here")
+        result = highlight_confidence_tokens("confidence high here")
         self.assertIn("confidence-high", result)
 
     def test_multiple_tokens_highlighted(self) -> None:
-        result = ReportGenerator._highlight_confidence_tokens("CRITICAL and LOW findings")
+        result = highlight_confidence_tokens("CRITICAL and LOW findings")
         self.assertIn("confidence-critical", result)
         self.assertIn("confidence-low", result)
 
     def test_no_tokens_returns_unchanged(self) -> None:
         text = "No severity tokens here"
-        result = ReportGenerator._highlight_confidence_tokens(text)
+        result = highlight_confidence_tokens(text)
         self.assertEqual(result, text)
 
     def test_markdown_to_html_highlights_confidence_inline(self) -> None:
-        result = ReportGenerator._markdown_to_html("- severity: CRITICAL\n- confidence: HIGH")
+        result = markdown_to_html("- severity: CRITICAL\n- confidence: HIGH")
         self.assertIn("confidence-inline confidence-critical", result)
         self.assertIn("confidence-inline confidence-high", result)
 

@@ -7,22 +7,20 @@ standalone file without a web server.
 
 Key capabilities:
 
-* **Markdown rendering** -- AI-produced Markdown (headings, lists, bold,
-  italic, code spans, tables, code fences) is converted to HTML for
-  display in the report.
-* **Confidence highlighting** -- Severity tokens (``CRITICAL``, ``HIGH``,
-  ``MEDIUM``, ``LOW``) are wrapped in coloured ``<span>`` elements.
 * **Flexible input normalisation** -- Per-artifact findings can be
   supplied as a list, a dict keyed by artifact name, or a single finding
   mapping; the generator coerces all shapes into a uniform list.
 * **Logo embedding** -- The project logo is base64-encoded and embedded as
   a ``data:`` URI so the report is fully self-contained.
 
+Markdown rendering and confidence highlighting are delegated to
+:mod:`app.reporter.markdown`.
+
 Attributes:
     DEFAULT_CASE_NAME: Fallback case name when none is provided.
     DEFAULT_TOOL_VERSION: AIFT version from :mod:`app.version`.
     DEFAULT_AI_PROVIDER: Placeholder string when the provider is unknown.
-    CONFIDENCE_CLASS_MAP: Maps severity label strings to CSS class names.
+    SAFE_CASE_ID_PATTERN: Regex for sanitising case IDs.
 """
 
 from __future__ import annotations
@@ -30,17 +28,21 @@ from __future__ import annotations
 import base64
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-import html
 import json
 from pathlib import Path
 import re
 from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from markupsafe import Markup, escape
 
-from .config import LOGO_FILE_CANDIDATES
-from .version import TOOL_VERSION
+from ..config import LOGO_FILE_CANDIDATES
+from ..version import TOOL_VERSION
+from .markdown import (
+    CONFIDENCE_CLASS_MAP,
+    CONFIDENCE_PATTERN,
+    format_block,
+    format_markdown_block,
+)
 
 __all__ = ["ReportGenerator"]
 
@@ -48,23 +50,7 @@ DEFAULT_CASE_NAME = "Untitled Investigation"
 DEFAULT_TOOL_VERSION = TOOL_VERSION
 DEFAULT_AI_PROVIDER = "unknown"
 
-CONFIDENCE_PATTERN = re.compile(r"\b(CRITICAL|HIGH|MEDIUM|LOW)\b", re.IGNORECASE)
-MARKDOWN_HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.*)$")
-MARKDOWN_ORDERED_LIST_PATTERN = re.compile(r"^\d+\.\s+(.*)$")
-MARKDOWN_UNORDERED_LIST_PATTERN = re.compile(r"^[-*]\s+(.*)$")
-MARKDOWN_BOLD_STAR_PATTERN = re.compile(r"\*\*(.+?)\*\*")
-MARKDOWN_BOLD_UNDERSCORE_PATTERN = re.compile(r"__(.+?)__")
-MARKDOWN_ITALIC_STAR_PATTERN = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
-MARKDOWN_ITALIC_UNDERSCORE_PATTERN = re.compile(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)")
-MARKDOWN_TABLE_SEPARATOR_CELL_PATTERN = re.compile(r"^:?-{3,}:?$")
 SAFE_CASE_ID_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
-
-CONFIDENCE_CLASS_MAP = {
-    "CRITICAL": "confidence-critical",
-    "HIGH": "confidence-high",
-    "MEDIUM": "confidence-medium",
-    "LOW": "confidence-low",
-}
 
 
 class ReportGenerator:
@@ -97,7 +83,7 @@ class ReportGenerator:
                 ``<project_root>/cases/``.
             template_name: Filename of the Jinja2 report template.
         """
-        project_root = Path(__file__).resolve().parents[1]
+        project_root = Path(__file__).resolve().parents[2]
         self.templates_dir = Path(templates_dir) if templates_dir is not None else project_root / "templates"
         self.cases_root = Path(cases_root) if cases_root is not None else project_root / "cases"
 
@@ -107,8 +93,8 @@ class ReportGenerator:
             trim_blocks=True,
             lstrip_blocks=True,
         )
-        self.environment.filters["format_block"] = self._format_block
-        self.environment.filters["format_markdown_block"] = self._format_markdown_block
+        self.environment.filters["format_block"] = format_block
+        self.environment.filters["format_markdown_block"] = format_markdown_block
         self.template = self.environment.get_template(template_name)
 
     def generate(
@@ -189,7 +175,7 @@ class ReportGenerator:
         Returns:
             A ``data:image/...;base64,...`` string, or ``""`` if no logo found.
         """
-        project_root = Path(__file__).resolve().parents[1]
+        project_root = Path(__file__).resolve().parents[2]
         images_dir = project_root / "images"
         if not images_dir.is_dir():
             return ""
@@ -672,347 +658,3 @@ class ReportGenerator:
             return default
         text = str(value).strip()
         return text if text else default
-
-    @staticmethod
-    def _format_block(value: Any) -> Markup:
-        """Escape plain text and convert it to safe HTML with line breaks.
-
-        Applies confidence-token highlighting (CRITICAL, HIGH, etc.)
-        and replaces newline characters with ``<br>`` tags.
-
-        Args:
-            value: Raw text to format.
-
-        Returns:
-            A :class:`~markupsafe.Markup` string safe for Jinja2
-            rendering, or an N/A placeholder when *value* is empty.
-        """
-        text = ReportGenerator._stringify(value, default="")
-        if not text:
-            return Markup('<span class="empty-value">N/A</span>')
-
-        escaped = str(escape(text.replace("\r\n", "\n").replace("\r", "\n")))
-        highlighted = ReportGenerator._highlight_confidence_tokens(escaped)
-        with_line_breaks = highlighted.replace("\n", "<br>\n")
-        return Markup(with_line_breaks)
-
-    @staticmethod
-    def _format_markdown_block(value: Any) -> Markup:
-        """Convert Markdown text to HTML via :meth:`_markdown_to_html`.
-
-        Args:
-            value: Raw Markdown text to render.
-
-        Returns:
-            A :class:`~markupsafe.Markup` string of rendered HTML, or
-            an N/A placeholder when *value* is empty.
-        """
-        text = ReportGenerator._stringify(value, default="")
-        if not text:
-            return Markup('<span class="empty-value">N/A</span>')
-        return Markup(ReportGenerator._markdown_to_html(text))
-
-    @staticmethod
-    def _highlight_confidence_tokens(text: str) -> str:
-        """Wrap severity tokens in coloured ``<span>`` elements.
-
-        Matches ``CRITICAL``, ``HIGH``, ``MEDIUM``, and ``LOW``
-        (case-insensitive) and wraps each in a ``<span>`` with the
-        corresponding CSS class from :data:`CONFIDENCE_CLASS_MAP`.
-
-        Args:
-            text: Pre-escaped HTML string to scan for severity tokens.
-
-        Returns:
-            The input string with severity tokens wrapped in spans.
-        """
-        def _replace_confidence(match: re.Match[str]) -> str:
-            token = match.group(1).upper()
-            css_class = CONFIDENCE_CLASS_MAP.get(token, "confidence-unknown")
-            return f'<span class="confidence-inline {css_class}">{token}</span>'
-
-        return CONFIDENCE_PATTERN.sub(_replace_confidence, text)
-
-    @staticmethod
-    def _render_inline_markdown(value: str) -> str:
-        """Render inline Markdown formatting to HTML.
-
-        Handles backtick code spans, bold (``**`` and ``__``), italic
-        (``*`` and ``_``), and confidence-token highlighting.  Code spans
-        are preserved verbatim; all other text is HTML-escaped first.
-
-        Args:
-            value: Raw inline Markdown text.
-
-        Returns:
-            An HTML string with inline formatting applied.
-        """
-        source = str(value or "")
-        if not source:
-            return ""
-
-        parts = re.split(r"(`[^`\n]*`)", source)
-        output: list[str] = []
-        for part in parts:
-            if not part:
-                continue
-            if part.startswith("`") and part.endswith("`"):
-                output.append(f"<code>{part[1:-1]}</code>")
-                continue
-
-            escaped = part
-            escaped = MARKDOWN_BOLD_STAR_PATTERN.sub(r"<strong>\1</strong>", escaped)
-            escaped = MARKDOWN_BOLD_UNDERSCORE_PATTERN.sub(r"<strong>\1</strong>", escaped)
-            escaped = MARKDOWN_ITALIC_STAR_PATTERN.sub(r"<em>\1</em>", escaped)
-            escaped = MARKDOWN_ITALIC_UNDERSCORE_PATTERN.sub(r"<em>\1</em>", escaped)
-            escaped = ReportGenerator._highlight_confidence_tokens(escaped)
-            output.append(escaped)
-        return "".join(output)
-
-    @staticmethod
-    def _split_markdown_table_row(value: str) -> list[str]:
-        """Split a Markdown table row into cell strings.
-
-        Strips leading and trailing pipe characters before splitting on
-        the remaining pipes.  Returns an empty list when *value* does
-        not contain a pipe.
-
-        Args:
-            value: A single Markdown table row line.
-
-        Returns:
-            A list of stripped cell strings, or an empty list.
-        """
-        row_text = str(value or "")
-        if "|" not in row_text:
-            return []
-
-        trimmed = row_text.strip()
-        if not trimmed or "|" not in trimmed:
-            return []
-
-        if trimmed.startswith("|"):
-            trimmed = trimmed[1:]
-        if trimmed.endswith("|"):
-            trimmed = trimmed[:-1]
-
-        return [cell.strip() for cell in trimmed.split("|")]
-
-    @staticmethod
-    def _is_markdown_table_separator_row(cells: Sequence[str]) -> bool:
-        """Determine whether *cells* represent a Markdown table separator row.
-
-        A separator row consists entirely of cells matching the pattern
-        ``:?-+:?`` (e.g. ``---``, ``:---:``, ``---:``).
-
-        Args:
-            cells: List of cell strings from a split table row.
-
-        Returns:
-            *True* when every cell matches the separator pattern.
-        """
-        if not cells:
-            return False
-        return all(MARKDOWN_TABLE_SEPARATOR_CELL_PATTERN.match(str(cell).strip()) for cell in cells)
-
-    @staticmethod
-    def _normalize_table_row_cells(cells: Sequence[str], expected_count: int) -> list[str]:
-        """Pad or truncate *cells* to exactly *expected_count* entries.
-
-        Cells beyond *expected_count* are discarded; missing cells are
-        filled with empty strings.
-
-        Args:
-            cells: Raw cell values from a split table row.
-            expected_count: The desired number of columns.
-
-        Returns:
-            A list of exactly *expected_count* stripped cell strings.
-        """
-        normalized = [str(cell).strip() for cell in cells[:expected_count]]
-        if len(normalized) < expected_count:
-            normalized.extend([""] * (expected_count - len(normalized)))
-        return normalized
-
-    @staticmethod
-    def _render_markdown_table_html(header_cells: Sequence[str], body_rows: Sequence[Sequence[str]]) -> str:
-        """Render a parsed Markdown table as an HTML ``<table>`` element.
-
-        Each cell value is processed through :meth:`_render_inline_markdown`
-        so that inline formatting (bold, italic, code spans) is preserved.
-
-        Args:
-            header_cells: List of header cell strings.
-            body_rows: List of body row lists, each containing cell
-                strings matching the header column count.
-
-        Returns:
-            An HTML string containing the complete ``<table>`` element.
-        """
-        header_html = "".join(f"<th>{ReportGenerator._render_inline_markdown(cell)}</th>" for cell in header_cells)
-        table_html = [f"<table><thead><tr>{header_html}</tr></thead>"]
-
-        if body_rows:
-            rows_html: list[str] = []
-            for row in body_rows:
-                row_html = "".join(f"<td>{ReportGenerator._render_inline_markdown(cell)}</td>" for cell in row)
-                rows_html.append(f"<tr>{row_html}</tr>")
-            table_html.append(f"<tbody>{''.join(rows_html)}</tbody>")
-
-        table_html.append("</table>")
-        return "".join(table_html)
-
-    @staticmethod
-    def _markdown_to_html(value: str) -> str:
-        """Convert a complete Markdown text block to HTML.
-
-        Supports headings (``#`` through ``######``), ordered and
-        unordered lists, fenced code blocks (triple backticks), tables,
-        inline formatting (bold, italic, code spans), and
-        confidence-token highlighting.  Paragraphs are wrapped in
-        ``<p>`` tags with ``<br>`` line breaks.
-
-        Args:
-            value: Raw Markdown text (may contain multiple blocks).
-
-        Returns:
-            An HTML string with all recognised Markdown constructs
-            converted to their HTML equivalents.
-        """
-        value = html.escape(str(value))
-        lines = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-        blocks: list[str] = []
-        paragraph_lines: list[str] = []
-        list_items: list[str] = []
-        list_type = ""
-        in_code_fence = False
-        code_lines: list[str] = []
-
-        def flush_paragraph() -> None:
-            nonlocal paragraph_lines
-            if not paragraph_lines:
-                return
-            paragraph_text = "\n".join(paragraph_lines)
-            rendered = ReportGenerator._render_inline_markdown(paragraph_text).replace("\n", "<br>\n")
-            blocks.append(f"<p>{rendered}</p>")
-            paragraph_lines = []
-
-        def flush_list() -> None:
-            nonlocal list_items, list_type
-            if not list_items or not list_type:
-                list_items = []
-                list_type = ""
-                return
-            items_html = "".join(f"<li>{item}</li>" for item in list_items)
-            blocks.append(f"<{list_type}>{items_html}</{list_type}>")
-            list_items = []
-            list_type = ""
-
-        def flush_code_fence() -> None:
-            nonlocal code_lines
-            code_text = "\n".join(code_lines)
-            blocks.append(f"<pre><code>{code_text}</code></pre>")
-            code_lines = []
-
-        index = 0
-        while index < len(lines):
-            line = lines[index]
-            stripped = line.strip()
-
-            if in_code_fence:
-                if stripped.startswith("```"):
-                    in_code_fence = False
-                    flush_code_fence()
-                else:
-                    code_lines.append(line)
-                index += 1
-                continue
-
-            if stripped.startswith("```"):
-                flush_paragraph()
-                flush_list()
-                in_code_fence = True
-                code_lines = []
-                index += 1
-                continue
-
-            if not stripped:
-                flush_paragraph()
-                flush_list()
-                index += 1
-                continue
-
-            header_cells = ReportGenerator._split_markdown_table_row(line)
-            if header_cells and index + 1 < len(lines):
-                separator_cells = ReportGenerator._split_markdown_table_row(lines[index + 1])
-                if (
-                    separator_cells
-                    and len(header_cells) == len(separator_cells)
-                    and ReportGenerator._is_markdown_table_separator_row(separator_cells)
-                ):
-                    flush_paragraph()
-                    flush_list()
-
-                    expected_columns = len(header_cells)
-                    normalized_header = ReportGenerator._normalize_table_row_cells(header_cells, expected_columns)
-                    body_rows: list[list[str]] = []
-
-                    index += 2
-                    while index < len(lines):
-                        body_line = lines[index]
-                        body_stripped = body_line.strip()
-                        if not body_stripped:
-                            break
-
-                        parsed_cells = ReportGenerator._split_markdown_table_row(body_line)
-                        if not parsed_cells:
-                            break
-
-                        body_rows.append(ReportGenerator._normalize_table_row_cells(parsed_cells, expected_columns))
-                        index += 1
-
-                    blocks.append(ReportGenerator._render_markdown_table_html(normalized_header, body_rows))
-                    continue
-
-            heading_match = MARKDOWN_HEADING_PATTERN.match(stripped)
-            if heading_match:
-                flush_paragraph()
-                flush_list()
-                level = len(heading_match.group(1))
-                heading_text = ReportGenerator._render_inline_markdown(heading_match.group(2))
-                blocks.append(f"<h{level}>{heading_text}</h{level}>")
-                index += 1
-                continue
-
-            ordered_match = MARKDOWN_ORDERED_LIST_PATTERN.match(stripped)
-            if ordered_match:
-                flush_paragraph()
-                if list_type != "ol":
-                    flush_list()
-                    list_type = "ol"
-                    list_items = []
-                list_items.append(ReportGenerator._render_inline_markdown(ordered_match.group(1)))
-                index += 1
-                continue
-
-            unordered_match = MARKDOWN_UNORDERED_LIST_PATTERN.match(stripped)
-            if unordered_match:
-                flush_paragraph()
-                if list_type != "ul":
-                    flush_list()
-                    list_type = "ul"
-                    list_items = []
-                list_items.append(ReportGenerator._render_inline_markdown(unordered_match.group(1)))
-                index += 1
-                continue
-
-            flush_list()
-            paragraph_lines.append(line.strip())
-            index += 1
-
-        if in_code_fence:
-            flush_code_fence()
-        flush_paragraph()
-        flush_list()
-
-        return "\n".join(blocks)
