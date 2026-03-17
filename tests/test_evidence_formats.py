@@ -24,6 +24,10 @@ import py7zr
 
 from app import create_app
 import app.routes as routes
+import app.routes.evidence as routes_evidence
+import app.routes.handlers as routes_handlers
+import app.routes.state as routes_state
+import app.routes.tasks as routes_tasks
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +46,12 @@ class FakeParser:
         self.case_dir = Path(case_dir)
         self.parsed_dir = Path(parsed_dir) if parsed_dir is not None else self.case_dir / "parsed"
         self.parsed_dir.mkdir(parents=True, exist_ok=True)
+
+    def __enter__(self) -> "FakeParser":
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return False
 
     def get_image_metadata(self) -> dict[str, str]:
         return {
@@ -111,52 +121,52 @@ class TestSegmentRegexes(unittest.TestCase):
     # -- EWF variants --
 
     def test_ewf_e01(self) -> None:
-        m = routes.EWF_SEGMENT_RE.match("Disk.E01")
+        m = routes_evidence.EWF_SEGMENT_RE.match("Disk.E01")
         self.assertIsNotNone(m)
         self.assertEqual(m.group("base"), "Disk")
         self.assertEqual(m.group("segment"), "01")
 
     def test_ewf_e02_case_insensitive(self) -> None:
-        m = routes.EWF_SEGMENT_RE.match("Image.e02")
+        m = routes_evidence.EWF_SEGMENT_RE.match("Image.e02")
         self.assertIsNotNone(m)
         self.assertEqual(m.group("segment"), "02")
 
     def test_ewf_ex01(self) -> None:
-        m = routes.EWF_SEGMENT_RE.match("Disk.Ex01")
+        m = routes_evidence.EWF_SEGMENT_RE.match("Disk.Ex01")
         self.assertIsNotNone(m)
         self.assertEqual(m.group("base"), "Disk")
         self.assertEqual(m.group("segment"), "01")
 
     def test_ewf_s01(self) -> None:
-        m = routes.EWF_SEGMENT_RE.match("Evidence.S01")
+        m = routes_evidence.EWF_SEGMENT_RE.match("Evidence.S01")
         self.assertIsNotNone(m)
         self.assertEqual(m.group("base"), "Evidence")
 
     def test_ewf_l01(self) -> None:
-        m = routes.EWF_SEGMENT_RE.match("LogicalImage.L01")
+        m = routes_evidence.EWF_SEGMENT_RE.match("LogicalImage.L01")
         self.assertIsNotNone(m)
         self.assertEqual(m.group("base"), "LogicalImage")
 
     def test_ewf_no_match_on_vmdk(self) -> None:
-        m = routes.EWF_SEGMENT_RE.match("disk.vmdk")
+        m = routes_evidence.EWF_SEGMENT_RE.match("disk.vmdk")
         self.assertIsNone(m)
 
     # -- Split raw segments --
 
     def test_split_raw_000(self) -> None:
-        m = routes.SPLIT_RAW_SEGMENT_RE.match("disk.000")
+        m = routes_evidence.SPLIT_RAW_SEGMENT_RE.match("disk.000")
         self.assertIsNotNone(m)
         self.assertEqual(m.group("base"), "disk")
         self.assertEqual(m.group("segment"), "000")
 
     def test_split_raw_001(self) -> None:
-        m = routes.SPLIT_RAW_SEGMENT_RE.match("disk.001")
+        m = routes_evidence.SPLIT_RAW_SEGMENT_RE.match("disk.001")
         self.assertIsNotNone(m)
         self.assertEqual(m.group("segment"), "001")
 
     def test_split_raw_no_match_on_e01(self) -> None:
         # E01 only has 2-digit suffix, should not match 3-digit pattern
-        m = routes.SPLIT_RAW_SEGMENT_RE.match("Disk.E01")
+        m = routes_evidence.SPLIT_RAW_SEGMENT_RE.match("Disk.E01")
         self.assertIsNone(m)
 
 
@@ -180,7 +190,7 @@ class TestExtractZip(unittest.TestCase):
         with ZipFile(zip_path, "w") as zf:
             zf.writestr("case/Disk.E01", b"EWF-DATA")
             zf.writestr("case/Disk.E02", b"EWF-DATA-2")
-        result = routes._extract_zip(zip_path, dest)
+        result = routes_evidence._extract_zip(zip_path, dest)
         self.assertTrue(str(result).endswith(".E01"))
 
     def test_zip_containing_vmdk(self) -> None:
@@ -188,7 +198,7 @@ class TestExtractZip(unittest.TestCase):
         dest = self.root / "extracted"
         with ZipFile(zip_path, "w") as zf:
             zf.writestr("server.vmdk", b"VMDK-DATA")
-        result = routes._extract_zip(zip_path, dest)
+        result = routes_evidence._extract_zip(zip_path, dest)
         self.assertTrue(str(result).endswith(".vmdk"))
 
     def test_zip_containing_dd(self) -> None:
@@ -196,7 +206,7 @@ class TestExtractZip(unittest.TestCase):
         dest = self.root / "extracted"
         with ZipFile(zip_path, "w") as zf:
             zf.writestr("disk.dd", b"RAW-DATA")
-        result = routes._extract_zip(zip_path, dest)
+        result = routes_evidence._extract_zip(zip_path, dest)
         self.assertTrue(str(result).endswith(".dd"))
 
     def test_zip_containing_vhd(self) -> None:
@@ -204,7 +214,7 @@ class TestExtractZip(unittest.TestCase):
         dest = self.root / "extracted"
         with ZipFile(zip_path, "w") as zf:
             zf.writestr("machine.vhdx", b"VHDX-DATA")
-        result = routes._extract_zip(zip_path, dest)
+        result = routes_evidence._extract_zip(zip_path, dest)
         self.assertTrue(str(result).endswith(".vhdx"))
 
     def test_zip_prefers_e01_over_other_formats(self) -> None:
@@ -213,7 +223,7 @@ class TestExtractZip(unittest.TestCase):
         with ZipFile(zip_path, "w") as zf:
             zf.writestr("disk.vmdk", b"VMDK-DATA")
             zf.writestr("disk.E01", b"EWF-DATA")
-        result = routes._extract_zip(zip_path, dest)
+        result = routes_evidence._extract_zip(zip_path, dest)
         self.assertTrue(str(result).endswith(".E01"))
 
     def test_zip_triage_collection_returns_directory(self) -> None:
@@ -222,7 +232,7 @@ class TestExtractZip(unittest.TestCase):
         with ZipFile(zip_path, "w") as zf:
             zf.writestr("Windows/System32/config/SAM", b"sam")
             zf.writestr("Users/Admin/NTUSER.DAT", b"reg")
-        result = routes._extract_zip(zip_path, dest)
+        result = routes_evidence._extract_zip(zip_path, dest)
         self.assertTrue(result.is_dir())
 
     def test_zip_empty_raises(self) -> None:
@@ -231,7 +241,7 @@ class TestExtractZip(unittest.TestCase):
         with ZipFile(zip_path, "w") as zf:
             pass  # empty archive
         with self.assertRaises(ValueError, msg="Evidence ZIP is empty."):
-            routes._extract_zip(zip_path, dest)
+            routes_evidence._extract_zip(zip_path, dest)
 
     def test_zip_path_traversal_raises(self) -> None:
         zip_path = self.root / "evil.zip"
@@ -239,7 +249,7 @@ class TestExtractZip(unittest.TestCase):
         with ZipFile(zip_path, "w") as zf:
             zf.writestr("../../etc/passwd", b"root:x:0:0")
         with self.assertRaises(ValueError, msg="unsafe paths"):
-            routes._extract_zip(zip_path, dest)
+            routes_evidence._extract_zip(zip_path, dest)
 
 
 class TestExtractTar(unittest.TestCase):
@@ -265,19 +275,19 @@ class TestExtractTar(unittest.TestCase):
     def test_tar_containing_e01(self) -> None:
         tar_path = self._make_tar("evidence.tar", {"Disk.E01": b"EWF", "Disk.E02": b"EWF2"})
         dest = self.root / "extracted"
-        result = routes._extract_tar(tar_path, dest)
+        result = routes_evidence._extract_tar(tar_path, dest)
         self.assertTrue(str(result).endswith(".E01"))
 
     def test_tar_gz_containing_vmdk(self) -> None:
         tar_path = self._make_tar("vm.tar.gz", {"server.vmdk": b"VMDK"}, compress=True)
         dest = self.root / "extracted"
-        result = routes._extract_tar(tar_path, dest)
+        result = routes_evidence._extract_tar(tar_path, dest)
         self.assertTrue(str(result).endswith(".vmdk"))
 
     def test_tar_containing_raw_image(self) -> None:
         tar_path = self._make_tar("raw.tar", {"disk.raw": b"RAW"})
         dest = self.root / "extracted"
-        result = routes._extract_tar(tar_path, dest)
+        result = routes_evidence._extract_tar(tar_path, dest)
         self.assertTrue(str(result).endswith(".raw"))
 
     def test_tar_triage_returns_directory(self) -> None:
@@ -286,14 +296,14 @@ class TestExtractTar(unittest.TestCase):
             "Users/Admin/NTUSER.DAT": b"reg",
         })
         dest = self.root / "extracted"
-        result = routes._extract_tar(tar_path, dest)
+        result = routes_evidence._extract_tar(tar_path, dest)
         self.assertTrue(result.is_dir())
 
     def test_tar_path_traversal_raises(self) -> None:
         tar_path = self._make_tar("evil.tar", {"../../etc/passwd": b"root"})
         dest = self.root / "extracted"
         with self.assertRaises(ValueError, msg="unsafe paths"):
-            routes._extract_tar(tar_path, dest)
+            routes_evidence._extract_tar(tar_path, dest)
 
 
 class TestExtract7z(unittest.TestCase):
@@ -316,19 +326,19 @@ class TestExtract7z(unittest.TestCase):
     def test_7z_containing_e01(self) -> None:
         archive_path = self._make_7z("evidence.7z", {"Disk.E01": b"EWF", "Disk.E02": b"EWF2"})
         dest = self.root / "extracted"
-        result = routes._extract_7z(archive_path, dest)
+        result = routes_evidence._extract_7z(archive_path, dest)
         self.assertTrue(str(result).endswith(".E01"))
 
     def test_7z_containing_vmdk(self) -> None:
         archive_path = self._make_7z("vm.7z", {"server.vmdk": b"VMDK-DATA"})
         dest = self.root / "extracted"
-        result = routes._extract_7z(archive_path, dest)
+        result = routes_evidence._extract_7z(archive_path, dest)
         self.assertTrue(str(result).endswith(".vmdk"))
 
     def test_7z_containing_dd(self) -> None:
         archive_path = self._make_7z("raw.7z", {"disk.dd": b"RAW-DATA"})
         dest = self.root / "extracted"
-        result = routes._extract_7z(archive_path, dest)
+        result = routes_evidence._extract_7z(archive_path, dest)
         self.assertTrue(str(result).endswith(".dd"))
 
     def test_7z_triage_returns_directory(self) -> None:
@@ -337,7 +347,7 @@ class TestExtract7z(unittest.TestCase):
             "Users/Admin/NTUSER.DAT": b"reg",
         })
         dest = self.root / "extracted"
-        result = routes._extract_7z(archive_path, dest)
+        result = routes_evidence._extract_7z(archive_path, dest)
         self.assertTrue(result.is_dir())
 
     def test_7z_prefers_e01(self) -> None:
@@ -346,7 +356,7 @@ class TestExtract7z(unittest.TestCase):
             "disk.E01": b"EWF",
         })
         dest = self.root / "extracted"
-        result = routes._extract_7z(archive_path, dest)
+        result = routes_evidence._extract_7z(archive_path, dest)
         self.assertTrue(str(result).endswith(".E01"))
 
 
@@ -371,52 +381,52 @@ class TestResolveUploadedDissectPath(unittest.TestCase):
 
     def test_single_file_returned_directly(self) -> None:
         p = self._touch("disk.vmdk")
-        result = routes._resolve_uploaded_dissect_path([p])
+        result = routes_evidence._resolve_uploaded_dissect_path([p])
         self.assertEqual(result, p)
 
     def test_ewf_segments_returns_e01(self) -> None:
         paths = [self._touch(f"Disk.E0{i}") for i in range(1, 5)]
-        result = routes._resolve_uploaded_dissect_path(paths)
+        result = routes_evidence._resolve_uploaded_dissect_path(paths)
         self.assertTrue(result.name.endswith(".E01"))
 
     def test_ex01_segments_returns_first(self) -> None:
         paths = [self._touch("Disk.Ex01"), self._touch("Disk.Ex02")]
-        result = routes._resolve_uploaded_dissect_path(paths)
+        result = routes_evidence._resolve_uploaded_dissect_path(paths)
         self.assertTrue(result.name.endswith(".Ex01"))
 
     def test_s01_segments_returns_first(self) -> None:
         paths = [self._touch("Disk.S01"), self._touch("Disk.S02")]
-        result = routes._resolve_uploaded_dissect_path(paths)
+        result = routes_evidence._resolve_uploaded_dissect_path(paths)
         self.assertTrue(result.name.endswith(".S01"))
 
     def test_l01_segments_returns_first(self) -> None:
         paths = [self._touch("Image.L01"), self._touch("Image.L02")]
-        result = routes._resolve_uploaded_dissect_path(paths)
+        result = routes_evidence._resolve_uploaded_dissect_path(paths)
         self.assertTrue(result.name.endswith(".L01"))
 
     def test_split_raw_segments_returns_000(self) -> None:
         paths = [self._touch("disk.001"), self._touch("disk.000"), self._touch("disk.002")]
-        result = routes._resolve_uploaded_dissect_path(paths)
+        result = routes_evidence._resolve_uploaded_dissect_path(paths)
         self.assertTrue(result.name.endswith(".000"))
 
     def test_zip_mixed_with_others_raises(self) -> None:
         paths = [self._touch("archive.zip"), self._touch("Disk.E01")]
         with self.assertRaises(ValueError, msg="archive"):
-            routes._resolve_uploaded_dissect_path(paths)
+            routes_evidence._resolve_uploaded_dissect_path(paths)
 
     def test_7z_mixed_with_others_raises(self) -> None:
         paths = [self._touch("archive.7z"), self._touch("disk.vmdk")]
         with self.assertRaises(ValueError, msg="archive"):
-            routes._resolve_uploaded_dissect_path(paths)
+            routes_evidence._resolve_uploaded_dissect_path(paths)
 
     def test_tar_mixed_with_others_raises(self) -> None:
         paths = [self._touch("evidence.tar"), self._touch("disk.dd")]
         with self.assertRaises(ValueError, msg="archive"):
-            routes._resolve_uploaded_dissect_path(paths)
+            routes_evidence._resolve_uploaded_dissect_path(paths)
 
     def test_empty_list_raises(self) -> None:
         with self.assertRaises(ValueError):
-            routes._resolve_uploaded_dissect_path([])
+            routes_evidence._resolve_uploaded_dissect_path([])
 
 
 # ---------------------------------------------------------------------------
@@ -442,7 +452,10 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def _create_case(self) -> str:
-        with patch.object(routes, "CASES_ROOT", self.cases_root):
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+        ):
             resp = self.client.post("/api/cases", json={"case_name": "Format Test"})
             self.assertEqual(resp.status_code, 201)
             return resp.get_json()["case_id"]
@@ -450,8 +463,11 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
     def _intake_path(self, case_id: str, evidence_path: Path) -> dict:
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_handlers, "compute_hashes", return_value=FAKE_HASHES),
         ):
             resp = self.client.post(
                 f"/api/cases/{case_id}/evidence",
@@ -532,8 +548,11 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_handlers, "compute_hashes", return_value=FAKE_HASHES),
         ):
             resp = self.client.post(
                 f"/api/cases/{case_id}/evidence",
@@ -554,8 +573,11 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_handlers, "compute_hashes", return_value=FAKE_HASHES),
         ):
             resp = self.client.post(
                 f"/api/cases/{case_id}/evidence",
@@ -573,8 +595,11 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_handlers, "compute_hashes", return_value=FAKE_HASHES),
         ):
             resp = self.client.post(
                 f"/api/cases/{case_id}/evidence",
@@ -588,8 +613,11 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
         case_id = self._create_case()
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_handlers, "compute_hashes", return_value=FAKE_HASHES),
         ):
             resp = self.client.post(
                 f"/api/cases/{case_id}/evidence",
@@ -609,8 +637,11 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
         case_id = self._create_case()
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_handlers, "compute_hashes", return_value=FAKE_HASHES),
         ):
             resp = self.client.post(
                 f"/api/cases/{case_id}/evidence",
@@ -638,7 +669,7 @@ class TestExtensionConstants(unittest.TestCase):
     def test_evidence_file_extensions_subset_of_dissect_extensions(self) -> None:
         """Every extension we search for inside archives should also be in the
         main DISSECT_EVIDENCE_EXTENSIONS set."""
-        missing = routes._EVIDENCE_FILE_EXTENSIONS - routes.DISSECT_EVIDENCE_EXTENSIONS
+        missing = routes_evidence._EVIDENCE_FILE_EXTENSIONS - routes_state.DISSECT_EVIDENCE_EXTENSIONS
         self.assertFalse(
             missing,
             f"_EVIDENCE_FILE_EXTENSIONS has entries not in DISSECT_EVIDENCE_EXTENSIONS: {missing}",

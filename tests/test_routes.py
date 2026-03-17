@@ -16,6 +16,10 @@ import yaml
 from app import create_app
 from app.case_logging import unregister_all_case_log_handlers
 import app.routes as routes
+import app.routes.evidence as routes_evidence
+import app.routes.handlers as routes_handlers
+import app.routes.tasks as routes_tasks
+import app.routes.state as routes_state
 
 
 class ImmediateThread:
@@ -179,9 +183,14 @@ class RoutesTests(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes, "ReportGenerator", FakeReportGenerator),
+            patch.object(routes_handlers, "ReportGenerator", FakeReportGenerator),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -191,7 +200,17 @@ class RoutesTests(unittest.TestCase):
                     "size_bytes": 4,
                 },
             ),
+            patch.object(
+                routes_handlers,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
             patch.object(routes, "verify_hash", return_value=(True, "a" * 64)),
+            patch.object(routes_handlers, "verify_hash", return_value=(True, "a" * 64)),
             patch.object(routes.threading, "Thread", ImmediateThread),
         ):
             create_resp = self.client.post("/api/cases", json={"case_name": "Demo Case"})
@@ -243,9 +262,14 @@ class RoutesTests(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes, "ReportGenerator", FakeReportGenerator),
+            patch.object(routes_handlers, "ReportGenerator", FakeReportGenerator),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -255,7 +279,17 @@ class RoutesTests(unittest.TestCase):
                     "size_bytes": 4,
                 },
             ),
+            patch.object(
+                routes_handlers,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
             patch.object(routes, "verify_hash", return_value=(True, "a" * 64)),
+            patch.object(routes_handlers, "verify_hash", return_value=(True, "a" * 64)),
             patch.object(routes.threading, "Thread", ImmediateThread),
         ):
             create_resp = self.client.post("/api/cases", json={"case_name": "Cleanup On Completion"})
@@ -300,7 +334,8 @@ class RoutesTests(unittest.TestCase):
     def test_parse_progress_sse_waits_before_emitting_idle(self) -> None:
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
-            patch.object(routes, "SSE_INITIAL_IDLE_GRACE_SECONDS", 0.4),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "SSE_INITIAL_IDLE_GRACE_SECONDS", 0.4),
         ):
             create_resp = self.client.post("/api/cases", json={"case_name": "SSE Wait Case"})
             self.assertEqual(create_resp.status_code, 201)
@@ -308,10 +343,10 @@ class RoutesTests(unittest.TestCase):
 
             def mark_parse_running() -> None:
                 time.sleep(0.05)
-                routes._set_progress_status(routes.PARSE_PROGRESS, case_id, "running")
-                routes._emit_progress(routes.PARSE_PROGRESS, case_id, {"type": "parse_started"})
-                routes._set_progress_status(routes.PARSE_PROGRESS, case_id, "completed")
-                routes._emit_progress(routes.PARSE_PROGRESS, case_id, {"type": "parse_completed"})
+                routes.set_progress_status(routes.PARSE_PROGRESS, case_id, "running")
+                routes.emit_progress(routes.PARSE_PROGRESS, case_id, {"type": "parse_started"})
+                routes.set_progress_status(routes.PARSE_PROGRESS, case_id, "completed")
+                routes.emit_progress(routes.PARSE_PROGRESS, case_id, {"type": "parse_completed"})
 
             worker = threading.Thread(target=mark_parse_running, daemon=True)
             worker.start()
@@ -324,27 +359,27 @@ class RoutesTests(unittest.TestCase):
             self.assertNotIn('"type":"idle"', payload)
 
     def test_create_case_cleans_up_terminal_case_entries(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
             with routes.STATE_LOCK:
                 routes.CASE_STATES["terminal-completed"] = {"status": "completed"}
-                routes.PARSE_PROGRESS["terminal-completed"] = routes._new_progress(status="completed")
-                routes.ANALYSIS_PROGRESS["terminal-completed"] = routes._new_progress(status="completed")
-                routes.CHAT_PROGRESS["terminal-completed"] = routes._new_progress(status="completed")
+                routes.PARSE_PROGRESS["terminal-completed"] = routes.new_progress(status="completed")
+                routes.ANALYSIS_PROGRESS["terminal-completed"] = routes.new_progress(status="completed")
+                routes.CHAT_PROGRESS["terminal-completed"] = routes.new_progress(status="completed")
 
                 routes.CASE_STATES["terminal-failed"] = {"status": "failed"}
-                routes.PARSE_PROGRESS["terminal-failed"] = routes._new_progress(status="failed")
-                routes.ANALYSIS_PROGRESS["terminal-failed"] = routes._new_progress(status="idle")
-                routes.CHAT_PROGRESS["terminal-failed"] = routes._new_progress(status="failed")
+                routes.PARSE_PROGRESS["terminal-failed"] = routes.new_progress(status="failed")
+                routes.ANALYSIS_PROGRESS["terminal-failed"] = routes.new_progress(status="idle")
+                routes.CHAT_PROGRESS["terminal-failed"] = routes.new_progress(status="failed")
 
                 routes.CASE_STATES["terminal-error"] = {"status": "error"}
-                routes.PARSE_PROGRESS["terminal-error"] = routes._new_progress(status="error")
-                routes.ANALYSIS_PROGRESS["terminal-error"] = routes._new_progress(status="idle")
-                routes.CHAT_PROGRESS["terminal-error"] = routes._new_progress(status="error")
+                routes.PARSE_PROGRESS["terminal-error"] = routes.new_progress(status="error")
+                routes.ANALYSIS_PROGRESS["terminal-error"] = routes.new_progress(status="idle")
+                routes.CHAT_PROGRESS["terminal-error"] = routes.new_progress(status="error")
 
                 routes.CASE_STATES["active-case"] = {"status": "running"}
-                routes.PARSE_PROGRESS["active-case"] = routes._new_progress(status="running")
-                routes.ANALYSIS_PROGRESS["active-case"] = routes._new_progress(status="idle")
-                routes.CHAT_PROGRESS["active-case"] = routes._new_progress(status="idle")
+                routes.PARSE_PROGRESS["active-case"] = routes.new_progress(status="running")
+                routes.ANALYSIS_PROGRESS["active-case"] = routes.new_progress(status="idle")
+                routes.CHAT_PROGRESS["active-case"] = routes.new_progress(status="idle")
 
             create_resp = self.client.post("/api/cases", json={"case_name": "Cleanup Trigger Case"})
             self.assertEqual(create_resp.status_code, 201)
@@ -381,9 +416,21 @@ class RoutesTests(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", CapturingParser),
+            patch.object(routes_handlers, "ForensicParser", CapturingParser),
+            patch.object(routes_tasks, "ForensicParser", CapturingParser),
             patch.object(
                 routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 12,
+                },
+            ),
+            patch.object(
+                routes_handlers,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -421,7 +468,7 @@ class RoutesTests(unittest.TestCase):
             self.assertTrue(CapturingParser.opened_paths[-1].endswith("Disk.E01"))
 
     def test_settings_endpoints_mask_api_keys(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
             update_resp = self.client.post(
                 "/api/settings",
                 json={"ai": {"openai": {"api_key": "secret-key", "model": "gpt-test"}}},
@@ -440,7 +487,7 @@ class RoutesTests(unittest.TestCase):
         (images_dir / "AIFT Logo Wide.png").write_bytes(b"\x89PNG\r\n\x1a\nwide")
         (images_dir / "AIFT_Logo.png").write_bytes(b"\x89PNG\r\n\x1a\nnormal")
 
-        with patch.object(routes, "IMAGES_ROOT", images_dir):
+        with patch.object(routes, "IMAGES_ROOT", images_dir), patch.object(routes_handlers, "IMAGES_ROOT", images_dir), patch.object(routes_state, "IMAGES_ROOT", images_dir):
             index_resp = self.client.get("/")
             self.assertEqual(index_resp.status_code, 200)
             html = index_resp.get_data(as_text=True)
@@ -474,7 +521,7 @@ class RoutesTests(unittest.TestCase):
             def get_model_info(self) -> dict[str, str]:
                 return {"provider": "local", "model": "demo-model"}
 
-        with patch.object(routes, "create_provider", return_value=FakeConnectionProvider()):
+        with patch.object(routes, "create_provider", return_value=FakeConnectionProvider()), patch.object(routes_handlers, "create_provider", return_value=FakeConnectionProvider()):
             response = self.client.post("/api/settings/test-connection")
 
         self.assertEqual(response.status_code, 200)
@@ -504,7 +551,7 @@ class RoutesTests(unittest.TestCase):
                 return {"provider": "local", "model": "demo-model"}
 
         fake_provider = FakeConnectionProvider()
-        with patch.object(routes, "create_provider", return_value=fake_provider):
+        with patch.object(routes, "create_provider", return_value=fake_provider), patch.object(routes_handlers, "create_provider", return_value=fake_provider):
             update_resp = self.client.post(
                 "/api/settings",
                 json={"analysis": {"connection_test_max_tokens": 777}},
@@ -529,14 +576,14 @@ class RoutesTests(unittest.TestCase):
             def get_model_info(self) -> dict[str, str]:
                 return {"provider": "local", "model": "demo-model"}
 
-        with patch.object(routes, "create_provider", return_value=FailingConnectionProvider()):
+        with patch.object(routes, "create_provider", return_value=FailingConnectionProvider()), patch.object(routes_handlers, "create_provider", return_value=FailingConnectionProvider()):
             response = self.client.post("/api/settings/test-connection")
 
         self.assertEqual(response.status_code, 502)
         self.assertIn("Unable to connect to local AI endpoint.", response.get_json()["error"])
 
     def test_settings_test_connection_returns_config_error(self) -> None:
-        with patch.object(routes, "create_provider", side_effect=ValueError("Invalid configuration.")):
+        with patch.object(routes, "create_provider", side_effect=ValueError("Invalid configuration.")), patch.object(routes_handlers, "create_provider", side_effect=ValueError("Invalid configuration.")):
             response = self.client.post("/api/settings/test-connection")
 
         self.assertEqual(response.status_code, 400)
@@ -564,7 +611,7 @@ class RoutesTests(unittest.TestCase):
 
     def test_artifact_profiles_endpoints_persist_custom_profiles(self) -> None:
         profiles_dir = Path(self.temp_dir.name) / "profile"
-        with patch.object(routes, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
             list_resp = self.client.get("/api/artifact-profiles")
             self.assertEqual(list_resp.status_code, 200)
             profiles = list_resp.get_json()["profiles"]
@@ -601,7 +648,7 @@ class RoutesTests(unittest.TestCase):
         self.assertEqual(len(saved_payload["artifact_options"]), 2)
 
     def test_recommended_profile_includes_all_artifacts_except_excluded_defaults(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
             response = self.client.get("/api/artifact-profiles")
             self.assertEqual(response.status_code, 200)
 
@@ -628,7 +675,7 @@ class RoutesTests(unittest.TestCase):
 
     def test_settings_update_persists_csv_output_dir(self) -> None:
         csv_output_dir = str((Path(self.temp_dir.name) / "csv output").resolve())
-        with patch.object(routes, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
             update_resp = self.client.post(
                 "/api/settings",
                 json={"evidence": {"csv_output_dir": csv_output_dir}},
@@ -643,7 +690,7 @@ class RoutesTests(unittest.TestCase):
         )
 
     def test_settings_update_persists_advanced_analysis_settings(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
             update_resp = self.client.post(
                 "/api/settings",
                 json={
@@ -687,9 +734,21 @@ class RoutesTests(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(
                 routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_handlers,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -719,9 +778,21 @@ class RoutesTests(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(
                 routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_handlers,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -776,9 +847,21 @@ class RoutesTests(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(
                 routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_handlers,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -816,10 +899,23 @@ class RoutesTests(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(
                 routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_handlers,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -866,10 +962,22 @@ class RoutesTests(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes.threading, "Thread", ImmediateThread),
             patch.object(
                 routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_handlers,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -899,7 +1007,7 @@ class RoutesTests(unittest.TestCase):
             prompt_path.write_text("existing prompt", encoding="utf-8")
 
             with routes.STATE_LOCK:
-                routes.ANALYSIS_PROGRESS[case_id] = routes._new_progress(status="running")
+                routes.ANALYSIS_PROGRESS[case_id] = routes.new_progress(status="running")
                 case_state["status"] = "running"
 
             analyze_resp = self.client.post(
@@ -915,10 +1023,22 @@ class RoutesTests(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes.threading, "Thread", ImmediateThread),
             patch.object(
                 routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_handlers,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -956,11 +1076,24 @@ class RoutesTests(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes.threading, "Thread", ImmediateThread),
             patch.object(
                 routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_handlers,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -1028,12 +1161,27 @@ class RoutesTests(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes.threading, "Thread", ImmediateThread),
             patch.object(routes, "create_provider", return_value=fake_provider),
+            patch.object(routes_handlers, "create_provider", return_value=fake_provider),
+            patch.object(routes_tasks, "create_provider", return_value=fake_provider),
             patch.object(
                 routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_handlers,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -1120,7 +1268,7 @@ class RoutesTests(unittest.TestCase):
             # 20% of ai_max_tokens (2222) is allocated for the AI response.
             self.assertEqual(first_call["max_tokens"], int(2222 * 0.2))
 
-        audit_entries = routes._read_audit_entries(self.cases_root / case_id)
+        audit_entries = routes.read_audit_entries(self.cases_root / case_id)
         audit_actions = {str(entry.get("action", "")) for entry in audit_entries}
         self.assertIn("chat_message_sent", audit_actions)
         self.assertIn("chat_response_received", audit_actions)
@@ -1133,9 +1281,21 @@ class RoutesTests(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(
                 routes,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_handlers,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -1185,8 +1345,12 @@ class RoutesTests(unittest.TestCase):
 
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes, "ReportGenerator", FakeReportGenerator),
+            patch.object(routes_handlers, "ReportGenerator", FakeReportGenerator),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -1196,7 +1360,17 @@ class RoutesTests(unittest.TestCase):
                     "size_bytes": 4,
                 },
             ),
-            patch.object(routes, "verify_hash", return_value=(True, "a" * 64)) as verify_hash_mock,
+            patch.object(
+                routes_handlers,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(routes, "verify_hash", return_value=(True, "a" * 64)),
+            patch.object(routes_handlers, "verify_hash", return_value=(True, "a" * 64)) as verify_hash_mock,
         ):
             create_resp = self.client.post("/api/cases", json={"case_name": "ZIP Case"})
             self.assertEqual(create_resp.status_code, 201)
@@ -1237,7 +1411,7 @@ class RoutesTests(unittest.TestCase):
             archive.writestr("Windows/System32/config/SAM", b"sam")
             archive.writestr("Users/Alice/NTUSER.DAT", b"profile")
 
-        dissect_target = routes._extract_zip(zip_path, destination)
+        dissect_target = routes_evidence._extract_zip(zip_path, destination)
 
         self.assertEqual(dissect_target, destination)
         self.assertTrue(dissect_target.is_dir())
@@ -1249,18 +1423,18 @@ class RoutesTests(unittest.TestCase):
             archive.writestr("collection/Windows/System32/config/SAM", b"sam")
             archive.writestr("collection/Users/Alice/NTUSER.DAT", b"profile")
 
-        dissect_target = routes._extract_zip(zip_path, destination)
+        dissect_target = routes_evidence._extract_zip(zip_path, destination)
 
         self.assertEqual(dissect_target, destination / "collection")
         self.assertTrue(dissect_target.is_dir())
 
     def test_evidence_intake_unexpected_error_returns_friendly_message(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Friendly Error Case"})
             self.assertEqual(create_resp.status_code, 201)
             case_id = create_resp.get_json()["case_id"]
 
-            with patch.object(routes, "_resolve_evidence_payload", side_effect=RuntimeError("internal-boom")):
+            with patch.object(routes, "resolve_evidence_payload", side_effect=RuntimeError("internal-boom")), patch.object(routes_handlers, "resolve_evidence_payload", side_effect=RuntimeError("internal-boom")):
                 response = self.client.post(f"/api/cases/{case_id}/evidence", json={"path": "C:\\bad.E01"})
 
         self.assertEqual(response.status_code, 500)
@@ -1269,13 +1443,13 @@ class RoutesTests(unittest.TestCase):
         self.assertNotIn("internal-boom", error_message)
 
     def test_case_log_file_collects_module_logs_in_single_file(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Unified Log Case"})
             self.assertEqual(create_resp.status_code, 201)
             case_id = str(create_resp.get_json()["case_id"])
             case_dir = self.cases_root / case_id
 
-            with patch.object(routes, "_resolve_evidence_payload", side_effect=RuntimeError("internal-boom")):
+            with patch.object(routes, "resolve_evidence_payload", side_effect=RuntimeError("internal-boom")), patch.object(routes_handlers, "resolve_evidence_payload", side_effect=RuntimeError("internal-boom")):
                 response = self.client.post(f"/api/cases/{case_id}/evidence", json={"path": "C:\\bad.E01"})
             self.assertEqual(response.status_code, 500)
 
@@ -1297,6 +1471,7 @@ class RoutesTests(unittest.TestCase):
     def test_settings_update_does_not_persist_env_api_keys(self) -> None:
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.dict("os.environ", {"OPENAI_API_KEY": "env-only-secret"}, clear=False),
         ):
             update_resp = self.client.post(
@@ -1310,7 +1485,7 @@ class RoutesTests(unittest.TestCase):
         self.assertEqual(persisted_key, "")
 
     def test_settings_update_writes_config_changed_audit_entries(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Settings Audit Case"})
             self.assertEqual(create_resp.status_code, 201)
             case_id = create_resp.get_json()["case_id"]

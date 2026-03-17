@@ -1,0 +1,130 @@
+"""HTTP route layer for the AIFT Flask application.
+
+This package contains all HTTP endpoint definitions, in-memory state
+management, evidence handling, artifact/profile logic, and background
+task runners for the AIFT forensic triage wizard.
+
+Sub-modules:
+
+- ``state``: Constants, global state dicts, SSE streaming, case management.
+- ``evidence``: Archive extraction, file upload, evidence resolution, CSV/hash.
+- ``artifacts``: Artifact option normalisation, profile CRUD, date validation.
+- ``tasks``: Background parse/analysis/chat runners and prompt helpers.
+- ``handlers``: Flask Blueprint with all route handler functions.
+"""
+
+from __future__ import annotations
+
+# Re-export the primary entry point used by app/__init__.py.
+from .handlers import register_routes
+
+# Re-export names that external code (tests, etc.) accesses via
+# ``import app.routes as routes; routes.SOME_NAME``.
+#
+# State, constants, and helpers:
+from .state import (  # noqa: F401
+    ANALYSIS_PROGRESS,
+    CASE_STATES,
+    CASE_TTL_SECONDS,
+    CASES_ROOT,
+    CHAT_HISTORY_MAX_PAIRS,
+    CHAT_PROGRESS,
+    CONNECTION_TEST_SYSTEM_PROMPT,
+    CONNECTION_TEST_USER_PROMPT,
+    DEFAULT_FORENSIC_SYSTEM_PROMPT,
+    DISSECT_EVIDENCE_EXTENSIONS,
+    IMAGES_ROOT,
+    MASKED,
+    MODE_PARSE_AND_AI,
+    MODE_PARSE_ONLY,
+    PARSE_PROGRESS,
+    PROJECT_ROOT,
+    SAFE_NAME_RE,
+    SENSITIVE_KEYS,
+    SSE_INITIAL_IDLE_GRACE_SECONDS,
+    SSE_POLL_INTERVAL_SECONDS,
+    STATE_LOCK,
+    TERMINAL_CASE_STATUSES,
+    audit_config_change,
+    cleanup_case_entries,
+    cleanup_terminal_cases,
+    deep_merge,
+    emit_progress,
+    error_response,
+    get_case,
+    mark_case_status,
+    mask_sensitive,
+    new_progress,
+    normalize_case_status,
+    now_iso,
+    resolve_logo_filename,
+    safe_int,
+    safe_name,
+    sanitize_changed_keys,
+    set_progress_status,
+    stream_sse,
+    success_response,
+)
+
+# Evidence helpers:
+from .evidence import (  # noqa: F401
+    EWF_SEGMENT_RE,
+    SPLIT_RAW_SEGMENT_RE,
+    build_csv_map,
+    collect_case_csv_paths,
+    read_audit_entries,
+    resolve_case_csv_output_dir,
+    resolve_evidence_payload,
+    resolve_hash_verification_path,
+)
+
+# Artifact / profile helpers:
+from .artifacts import (  # noqa: F401
+    BUILTIN_RECOMMENDED_PROFILE,
+    PROFILE_DIRNAME,
+    PROFILE_FILE_SUFFIX,
+    PROFILE_NAME_RE,
+    RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS,
+    artifact_options_to_lists,
+    compose_profile_response,
+    extract_parse_progress,
+    extract_parse_selection_payload,
+    load_profiles_from_directory,
+    normalize_artifact_mode,
+    normalize_artifact_options,
+    normalize_profile_name,
+    profile_path_for_new_name,
+    resolve_profiles_root,
+    sanitize_prompt,
+    validate_analysis_date_range,
+    write_profile_file,
+)
+
+# Background task runners:
+from .tasks import (  # noqa: F401
+    load_case_analysis_results,
+    resolve_case_investigation_context,
+    resolve_case_parsed_dir,
+    run_analysis,
+    run_chat,
+    run_parse,
+    run_task_with_case_log_context,
+)
+
+# Re-export names from handlers.py that tests patch directly on ``routes``.
+from .handlers import (  # noqa: F401
+    ARTIFACT_REGISTRY,
+    ForensicAnalyzer,
+    ForensicParser,
+    ReportGenerator,
+    TOOL_VERSION,
+    case_log_context,
+    compute_hashes,
+    create_provider,
+    verify_hash,
+    AIProviderError,
+    routes_bp,
+    threading,
+)
+
+__all__ = ["register_routes"]
