@@ -15,9 +15,8 @@ Key responsibilities:
 * **Token budgeting** -- Estimates token counts and trims conversation
   history to fit within a configurable context window, dropping the oldest
   pairs first.
-* **CSV data retrieval** -- Heuristically matches user questions to parsed
-  artifact CSV files and injects relevant rows into the prompt so the AI
-  can answer data-specific queries (e.g. "show me the prefetch entries").
+* **CSV data retrieval** -- Delegates to :mod:`~app.chat.csv_retrieval`
+  for heuristic matching of user questions to parsed artifact CSV files.
 
 Attributes:
     VALID_ROLES: Frozenset of accepted message role strings
@@ -26,20 +25,33 @@ Attributes:
 
 from __future__ import annotations
 
-import csv
 import json
 import logging
 from pathlib import Path
-import re
 from typing import Any, Mapping
 
-from .audit import _utc_now_iso8601_ms
+from ..audit import _utc_now_iso8601_ms
+from .csv_retrieval import retrieve_csv_data as _retrieve_csv_data
 
 __all__ = ["ChatManager"]
 
 log = logging.getLogger(__name__)
 
 VALID_ROLES = frozenset({"user", "assistant"})
+
+
+def _stringify(value: Any, default: str = "") -> str:
+    """Convert *value* to a stripped string, returning *default* when empty.
+
+    Args:
+        value: Arbitrary value to stringify.
+        default: Fallback string when *value* is *None* or blank.
+
+    Returns:
+        The stripped string representation or *default*.
+    """
+    text = str(value).strip() if value is not None else ""
+    return text or default
 
 
 class ChatManager:
@@ -58,16 +70,6 @@ class ChatManager:
     """
 
     MAX_CONTEXT_TOKENS = 100000
-    _CSV_RETRIEVAL_KEYWORDS = (
-        "show me",
-        "list",
-        "csv",
-        "rows",
-        "records",
-        "check the",
-        "look in",
-    )
-    _CSV_ROW_LIMIT = 500
 
     def __init__(self, case_dir: str | Path, max_context_tokens: int | None = None) -> None:
         """Initialise the chat manager for a case directory.
@@ -82,6 +84,10 @@ class ChatManager:
         self.case_dir = Path(case_dir)
         self.chat_file = self.case_dir / "chat_history.jsonl"
         self.MAX_CONTEXT_TOKENS = self._resolve_max_context_tokens(max_context_tokens)
+
+    # ------------------------------------------------------------------
+    # Message persistence
+    # ------------------------------------------------------------------
 
     def add_message(
         self,
@@ -203,6 +209,10 @@ class ChatManager:
         if self.chat_file.exists():
             self.chat_file.unlink()
 
+    # ------------------------------------------------------------------
+    # Context assembly
+    # ------------------------------------------------------------------
+
     def build_chat_context(
         self,
         analysis_results: Mapping[str, Any] | None,
@@ -228,45 +238,11 @@ class ChatManager:
             A formatted multi-section context string.
         """
         analysis = analysis_results if isinstance(analysis_results, Mapping) else {}
-        metadata_map = metadata if isinstance(metadata, Mapping) else {}
-
-        hostname = self._stringify(metadata_map.get("hostname"), default="Unknown")
-        os_value = self._stringify(metadata_map.get("os_version") or metadata_map.get("os"), default="Unknown")
-        domain = self._stringify(metadata_map.get("domain"), default="Unknown")
-        summary = self._stringify(analysis.get("summary"), default="No executive summary available.")
-        context_text = self._stringify(
-            investigation_context,
-            default="No investigation context provided.",
-        )
-
         per_artifact_lines = self._format_per_artifact_findings(analysis)
-        sections = [
-            f"Investigation Context:\n{context_text}",
-            (
-                "System Under Analysis:\n"
-                f"- Hostname: {hostname}\n"
-                f"- OS: {os_value}\n"
-                f"- Domain: {domain}"
-            ),
-            f"Executive Summary:\n{summary}",
-            f"Per-Artifact Findings:\n{per_artifact_lines}",
-        ]
-        return "\n\n".join(sections)
-
-    def context_needs_compression(self, context_block: str, token_budget: int) -> bool:
-        """Return *True* when the context block exceeds 80 % of the token budget.
-
-        Args:
-            context_block: The assembled context text to measure.
-            token_budget: Maximum token allowance for the context window.
-
-        Returns:
-            *True* if the estimated token count of *context_block* exceeds
-            80 % of *token_budget*, *False* otherwise.
-        """
-        if token_budget <= 0:
-            return False
-        return self.estimate_token_count(context_block) > int(token_budget * 0.8)
+        findings_section = f"Per-Artifact Findings:\n{per_artifact_lines}"
+        return self._assemble_context(
+            analysis_results, investigation_context, metadata, findings_section,
+        )
 
     def rebuild_context_with_compressed_findings(
         self,
@@ -293,38 +269,34 @@ class ChatManager:
             A formatted multi-section context string with compressed
             findings.
         """
-        analysis = analysis_results if isinstance(analysis_results, Mapping) else {}
-        metadata_map = metadata if isinstance(metadata, Mapping) else {}
-
-        hostname = self._stringify(metadata_map.get("hostname"), default="Unknown")
-        os_value = self._stringify(metadata_map.get("os_version") or metadata_map.get("os"), default="Unknown")
-        domain = self._stringify(metadata_map.get("domain"), default="Unknown")
-        summary = self._stringify(analysis.get("summary"), default="No executive summary available.")
-        context_text = self._stringify(
-            investigation_context,
-            default="No investigation context provided.",
+        findings_section = f"Per-Artifact Findings (compressed):\n{compressed_findings}"
+        return self._assemble_context(
+            analysis_results, investigation_context, metadata, findings_section,
         )
 
-        sections = [
-            f"Investigation Context:\n{context_text}",
-            (
-                "System Under Analysis:\n"
-                f"- Hostname: {hostname}\n"
-                f"- OS: {os_value}\n"
-                f"- Domain: {domain}"
-            ),
-            f"Executive Summary:\n{summary}",
-            f"Per-Artifact Findings (compressed):\n{compressed_findings}",
-        ]
-        return "\n\n".join(sections)
+    def context_needs_compression(self, context_block: str, token_budget: int) -> bool:
+        """Return *True* when the context block exceeds 80 % of the token budget.
+
+        Args:
+            context_block: The assembled context text to measure.
+            token_budget: Maximum token allowance for the context window.
+
+        Returns:
+            *True* if the estimated token count of *context_block* exceeds
+            80 % of *token_budget*, *False* otherwise.
+        """
+        if token_budget <= 0:
+            return False
+        return self.estimate_token_count(context_block) > int(token_budget * 0.8)
+
+    # ------------------------------------------------------------------
+    # CSV data retrieval (delegates to csv_retrieval module)
+    # ------------------------------------------------------------------
 
     def retrieve_csv_data(self, question: str, parsed_dir: str | Path) -> dict[str, Any]:
         """Best-effort retrieval of raw CSV rows for data-centric chat questions.
 
-        Heuristically matches the user's *question* against parsed artifact
-        CSV filenames and column headers.  When a match is found, up to
-        :attr:`_CSV_ROW_LIMIT` rows are read and formatted as a structured
-        text block for injection into the AI prompt.
+        Delegates to :func:`~app.chat.csv_retrieval.retrieve_csv_data`.
 
         Args:
             question: The user's chat question text.
@@ -336,104 +308,11 @@ class ChatManager:
             includes ``artifacts`` (list of matched CSV filenames) and
             ``data`` (formatted row text).
         """
-        question_text = self._stringify(question)
-        if not question_text:
-            return {"retrieved": False}
+        return _retrieve_csv_data(question, parsed_dir)
 
-        parsed_path = Path(parsed_dir)
-        if not parsed_path.exists() or not parsed_path.is_dir():
-            return {"retrieved": False}
-
-        csv_paths = sorted(path for path in parsed_path.glob("*.csv") if path.is_file())
-        if not csv_paths:
-            return {"retrieved": False}
-
-        question_lower = question_text.lower()
-        keyword_detected = any(keyword in question_lower for keyword in self._CSV_RETRIEVAL_KEYWORDS)
-
-        aliases_by_path = {path: self._build_csv_aliases(path) for path in csv_paths}
-        artifact_matches = [
-            path
-            for path, aliases in aliases_by_path.items()
-            if any(self._contains_heuristic_term(question_lower, alias) for alias in aliases)
-        ]
-
-        if artifact_matches:
-            target_paths = artifact_matches
-        else:
-            # Only scan CSV headers when artifact-name matching didn't find anything,
-            # to avoid reading every CSV file on every chat message.
-            headers_by_path = {path: self._read_csv_headers(path) for path in csv_paths}
-            matched_columns = {
-                header.lower()
-                for headers in headers_by_path.values()
-                for header in headers
-                if self._contains_heuristic_term(question_lower, header.lower())
-            }
-            if matched_columns:
-                target_paths = [
-                    path
-                    for path, headers in headers_by_path.items()
-                    if any(header.lower() in matched_columns for header in headers)
-                ]
-            elif keyword_detected:
-                # Keywords detected but no specific artifact/column identified —
-                # return all CSVs only if the collection is small, otherwise skip
-                # to avoid blowing up the context window with irrelevant data.
-                if len(csv_paths) <= 3:
-                    target_paths = csv_paths
-                else:
-                    return {"retrieved": False}
-            else:
-                return {"retrieved": False}
-
-        target_paths = list(dict.fromkeys(target_paths))
-        artifacts = [path.name for path in target_paths]
-        formatted_blocks: list[str] = []
-        rows_remaining = self._CSV_ROW_LIMIT
-
-        for csv_path in target_paths:
-            if rows_remaining <= 0:
-                break
-            headers, rows, total_row_count = self._read_csv_rows(
-                csv_path=csv_path, limit=rows_remaining,
-            )
-            if not headers and not rows:
-                continue
-
-            rows_remaining -= len(rows)
-            block_lines = [f"Artifact: {csv_path.name}"]
-            # Show total vs sampled row counts so the AI knows how much
-            # data was omitted.  This limit exists to prevent memory
-            # exhaustion on large artifacts (e.g. EVTX with millions of
-            # rows).
-            block_lines.append(
-                f"Total rows: {total_row_count}"
-                + (f" (showing first {len(rows)})" if len(rows) < total_row_count else "")
-            )
-            if headers:
-                block_lines.append(f"Columns: {', '.join(headers)}")
-            if rows:
-                block_lines.append("Rows:")
-                for row_index, row in enumerate(rows, start=1):
-                    parts = [f"{column}={value}" for column, value in row.items()]
-                    block_lines.append(f"{row_index}. " + " | ".join(parts))
-            else:
-                block_lines.append("Rows: none")
-            formatted_blocks.append("\n".join(block_lines))
-
-        if not formatted_blocks:
-            return {
-                "retrieved": True,
-                "artifacts": artifacts,
-                "data": "No readable rows found in selected CSV files.",
-            }
-
-        return {
-            "retrieved": True,
-            "artifacts": artifacts,
-            "data": "\n\n".join(formatted_blocks),
-        }
+    # ------------------------------------------------------------------
+    # Token budgeting
+    # ------------------------------------------------------------------
 
     def estimate_token_count(self, text: str) -> int:
         """Estimate token count using a rough 4-characters-per-token ratio.
@@ -500,6 +379,10 @@ class ChatManager:
             result.append(assistant_msg)
         return result
 
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
     @classmethod
     def _resolve_max_context_tokens(cls, value: Any) -> int:
         """Coerce *value* to a positive integer token limit.
@@ -519,19 +402,55 @@ class ChatManager:
             resolved = int(cls.MAX_CONTEXT_TOKENS)
         return max(1, resolved)
 
-    @staticmethod
-    def _stringify(value: Any, default: str = "") -> str:
-        """Convert *value* to a stripped string, returning *default* when empty.
+    def _assemble_context(
+        self,
+        analysis_results: Mapping[str, Any] | None,
+        investigation_context: str,
+        metadata: Mapping[str, Any] | None,
+        findings_section: str,
+    ) -> str:
+        """Assemble context sections shared by build and rebuild methods.
+
+        Extracts metadata fields, formats the standard sections, and
+        appends the caller-provided findings section.
 
         Args:
-            value: Arbitrary value to stringify.
-            default: Fallback string when *value* is *None* or blank.
+            analysis_results: The full analysis results mapping.
+            investigation_context: Free-text investigation context.
+            metadata: Evidence metadata mapping.
+            findings_section: Pre-formatted findings section string
+                (including its header line).
 
         Returns:
-            The stripped string representation or *default*.
+            A formatted multi-section context string.
         """
-        text = str(value).strip() if value is not None else ""
-        return text or default
+        analysis = analysis_results if isinstance(analysis_results, Mapping) else {}
+        metadata_map = metadata if isinstance(metadata, Mapping) else {}
+
+        hostname = _stringify(metadata_map.get("hostname"), default="Unknown")
+        os_value = _stringify(
+            metadata_map.get("os_version") or metadata_map.get("os"),
+            default="Unknown",
+        )
+        domain = _stringify(metadata_map.get("domain"), default="Unknown")
+        summary = _stringify(analysis.get("summary"), default="No executive summary available.")
+        context_text = _stringify(
+            investigation_context,
+            default="No investigation context provided.",
+        )
+
+        sections = [
+            f"Investigation Context:\n{context_text}",
+            (
+                "System Under Analysis:\n"
+                f"- Hostname: {hostname}\n"
+                f"- OS: {os_value}\n"
+                f"- Domain: {domain}"
+            ),
+            f"Executive Summary:\n{summary}",
+            findings_section,
+        ]
+        return "\n\n".join(sections)
 
     def _format_per_artifact_findings(self, analysis_results: Mapping[str, Any]) -> str:
         """Format per-artifact findings as a bulleted text block.
@@ -568,11 +487,11 @@ class ChatManager:
 
         for item in items:
             if isinstance(item, Mapping):
-                artifact_name = self._stringify(
+                artifact_name = _stringify(
                     item.get("artifact_name") or item.get("name") or item.get("artifact_key"),
                     default="Unknown Artifact",
                 )
-                analysis_text = self._stringify(
+                analysis_text = _stringify(
                     item.get("analysis")
                     or item.get("finding")
                     or item.get("summary")
@@ -580,7 +499,7 @@ class ChatManager:
                 )
             else:
                 artifact_name = "Unknown Artifact"
-                analysis_text = self._stringify(item)
+                analysis_text = _stringify(item)
 
             if analysis_text:
                 findings.append((artifact_name, analysis_text))
@@ -588,161 +507,7 @@ class ChatManager:
         if not findings:
             return "- No per-artifact findings available."
 
-        return "\n".join(f"- {artifact_name}: {analysis_text}" for artifact_name, analysis_text in findings)
-
-    @staticmethod
-    def _build_csv_aliases(csv_path: Path) -> set[str]:
-        """Build a set of lowercase name aliases for a CSV file.
-
-        Aliases include the full filename, stem, space-separated stem,
-        base name (without ``_partN`` suffixes), and leading segments
-        before the first underscore.
-
-        Args:
-            csv_path: Path to the CSV file.
-
-        Returns:
-            A set of non-empty lowercase alias strings.
-        """
-        stem = csv_path.stem.lower()
-        base = re.sub(r"_part\d+$", "", stem)
-        aliases = {
-            csv_path.name.lower(),
-            stem,
-            stem.replace("_", " "),
-            base,
-            base.replace("_", " "),
-        }
-        if "_" in stem:
-            aliases.add(stem.split("_", 1)[0])
-        if "_" in base:
-            aliases.add(base.split("_", 1)[0])
-        return {alias.strip() for alias in aliases if alias.strip()}
-
-    @staticmethod
-    def _contains_heuristic_term(question_lower: str, term: str) -> bool:
-        """Check whether *term* appears as a distinct token in *question_lower*.
-
-        Uses a word-boundary regex so that short substrings do not
-        produce false positives.  Terms shorter than 3 characters are
-        always rejected.
-
-        Args:
-            question_lower: Lowercased question text to search.
-            term: Candidate term to look for.
-
-        Returns:
-            *True* when *term* (>= 3 chars) appears on a word boundary
-            in *question_lower*.
-        """
-        normalized = term.strip().lower()
-        if len(normalized) < 3:
-            return False
-        pattern = rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])"
-        return re.search(pattern, question_lower) is not None
-
-    def _read_csv_headers(self, csv_path: Path) -> list[str]:
-        """Read and return the header row from a CSV file.
-
-        Args:
-            csv_path: Path to the CSV file.
-
-        Returns:
-            A list of non-empty, stripped header strings.  Returns an
-            empty list on read failure.
-        """
-        try:
-            with csv_path.open("r", encoding="utf-8-sig", newline="", errors="replace") as csv_stream:
-                header_row = next(csv.reader(csv_stream), [])
-        except Exception:
-            log.warning("Failed to read CSV headers from %s", csv_path, exc_info=True)
-            return []
-
-        headers: list[str] = []
-        for header in header_row:
-            normalized = self._stringify(header)
-            if normalized:
-                headers.append(normalized)
-        return headers
-
-    def _read_csv_rows(
-        self, csv_path: Path, limit: int,
-    ) -> tuple[list[str], list[dict[str, str]], int]:
-        """Read up to *limit* data rows from a CSV file.
-
-        Values are whitespace-collapsed and truncated to 240 characters
-        to keep the resulting text compact for AI prompt injection.
-
-        After reading the sampled rows, the remainder of the file is
-        consumed (without storing data) to obtain an accurate total row
-        count.  This avoids loading the entire file into memory while
-        still letting callers report how much data was omitted.
-
-        Args:
-            csv_path: Path to the CSV file.
-            limit: Maximum number of data rows to read.
-
-        Returns:
-            A tuple of ``(headers, rows, total_row_count)`` where
-            *headers* is a list of column name strings, *rows* is a
-            list of ordered dictionaries mapping column names to string
-            values, and *total_row_count* is the total number of data
-            rows in the file (including those beyond *limit*).  Returns
-            ``([], [], 0)`` on read failure or when *limit* is
-            non-positive.
-        """
-        if limit <= 0:
-            return [], [], 0
-
-        try:
-            with csv_path.open("r", encoding="utf-8-sig", newline="", errors="replace") as csv_stream:
-                reader = csv.DictReader(csv_stream)
-                headers = [self._stringify(field) for field in (reader.fieldnames or []) if self._stringify(field)]
-
-                rows: list[dict[str, str]] = []
-                total_row_count = 0
-                for row in reader:
-                    total_row_count += 1
-                    if len(rows) < limit:
-                        compact_row: dict[str, str] = {}
-                        for column in headers:
-                            value = self._stringify(row.get(column, ""))
-                            value = re.sub(r"\s+", " ", value)
-                            if len(value) > 240:
-                                value = f"{value[:237]}..."
-                            compact_row[column] = value
-                        rows.append(compact_row)
-        except Exception:
-            log.warning("Failed to read CSV rows from %s", csv_path, exc_info=True)
-            return [], [], 0
-
-        return headers, rows, total_row_count
-
-
-if __name__ == "__main__":
-    from tempfile import TemporaryDirectory
-    with TemporaryDirectory(prefix="aift-chat-test-") as temp_dir:
-        manager = ChatManager(temp_dir)
-        for pair_index in range(1, 6):
-            manager.add_message("user", f"Question {pair_index}?")
-            manager.add_message(
-                "assistant",
-                f"Answer {pair_index}.",
-                metadata={"pair_index": pair_index},
-            )
-
-        recent = manager.get_recent_history(max_pairs=2)
-
-        assert len(recent) == 4, f"Expected 4 messages (2 pairs), got {len(recent)}."
-        assert [message.get("role") for message in recent] == [
-            "user",
-            "assistant",
-            "user",
-            "assistant",
-        ], "Recent history did not contain complete user/assistant pairs."
-        assert recent[0].get("content") == "Question 4?"
-        assert recent[1].get("content") == "Answer 4."
-        assert recent[2].get("content") == "Question 5?"
-        assert recent[3].get("content") == "Answer 5."
-
-    log.info("ChatManager quick test passed.")
+        return "\n".join(
+            f"- {artifact_name}: {analysis_text}"
+            for artifact_name, analysis_text in findings
+        )
