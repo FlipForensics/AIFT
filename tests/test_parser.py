@@ -9,6 +9,10 @@ from unittest.mock import Mock, patch
 
 from app.parser import ARTIFACT_REGISTRY, EVTX_MAX_RECORDS_PER_FILE, ForensicParser, UnsupportedPluginError
 
+# Patch targets point to where the names are looked up at runtime (the core module).
+_PATCH_TARGET_OPEN = "app.parser.core.Target.open"
+_PATCH_EVTX_CAP = "app.parser.core.EVTX_MAX_RECORDS_PER_FILE"
+
 
 class FakeAuditLogger:
     def __init__(self) -> None:
@@ -38,7 +42,7 @@ class SRUNamespace:
 
 class ParserTests(unittest.TestCase):
     def _create_parser(self, target: object, case_dir: Path, audit: FakeAuditLogger) -> ForensicParser:
-        with patch("app.parser.Target.open", return_value=target):
+        with patch(_PATCH_TARGET_OPEN, return_value=target):
             return ForensicParser("evidence.E01", case_dir, audit)
 
     def test_init_opens_target_and_creates_parsed_directory(self) -> None:
@@ -46,7 +50,7 @@ class ParserTests(unittest.TestCase):
         audit = FakeAuditLogger()
         with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
             case_dir = Path(temp_dir)
-            with patch("app.parser.Target.open", return_value=target) as open_mock:
+            with patch(_PATCH_TARGET_OPEN, return_value=target) as open_mock:
                 parser = ForensicParser("sample.E01", case_dir, audit)
 
             self.assertIs(parser.target, target)
@@ -59,7 +63,7 @@ class ParserTests(unittest.TestCase):
         with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
             case_dir = Path(temp_dir) / "case"
             parsed_dir = Path(temp_dir) / "csv output" / "case-123" / "parsed"
-            with patch("app.parser.Target.open", return_value=target):
+            with patch(_PATCH_TARGET_OPEN, return_value=target):
                 parser = ForensicParser(
                     "sample.E01",
                     case_dir,
@@ -91,7 +95,7 @@ class ParserTests(unittest.TestCase):
         target = Mock()
         audit = FakeAuditLogger()
         with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
-            with patch("app.parser.Target.open", return_value=target):
+            with patch(_PATCH_TARGET_OPEN, return_value=target):
                 with ForensicParser("sample.E01", Path(temp_dir), audit) as parser:
                     self.assertIs(parser.target, target)
 
@@ -225,7 +229,7 @@ class ParserTests(unittest.TestCase):
         audit = FakeAuditLogger()
         with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
             parser = self._create_parser(EvtxTarget(), Path(temp_dir), audit)
-            with patch("app.parser.EVTX_MAX_RECORDS_PER_FILE", 2):
+            with patch(_PATCH_EVTX_CAP, 2):
                 result = parser.parse_artifact("evtx")
 
             parsed_dir = Path(temp_dir) / "parsed"
@@ -378,7 +382,7 @@ class EvtxGroupNameTests(unittest.TestCase):
     def _create_parser(self, case_dir: Path) -> ForensicParser:
         target = object()
         audit = FakeAuditLogger()
-        with patch("app.parser.Target.open", return_value=target):
+        with patch(_PATCH_TARGET_OPEN, return_value=target):
             return ForensicParser("evidence.E01", case_dir, audit)
 
     def test_channel_key_is_preferred(self) -> None:

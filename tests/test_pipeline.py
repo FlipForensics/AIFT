@@ -98,7 +98,7 @@ class PipelineTests(unittest.TestCase):
             audit_logger = AuditLogger(case_dir)
             fake_target = FakeTarget()
 
-            with patch("app.parser.Target.open", return_value=fake_target):
+            with patch("app.parser.core.Target.open", return_value=fake_target):
                 parser = ForensicParser(
                     evidence_path=evidence_path,
                     case_dir=case_dir,
