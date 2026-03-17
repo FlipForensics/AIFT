@@ -9,6 +9,13 @@
     <link rel="apple-touch-icon" href="{{ url_for('routes.image_asset', filename=logo_filename) }}">
   {% endif %}
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='js/utils.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/markdown.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/evidence.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/parsing.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/analysis.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/chat.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/settings.js') }}" defer></script>
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </head>
 <body>

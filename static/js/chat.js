@@ -1,0 +1,425 @@
+/**
+ * Chat panel, SSE streaming, and history management for AIFT.
+ *
+ * Handles the follow-up chat feature on the results step: sending
+ * messages, streaming responses via SSE, rendering chat bubbles,
+ * loading/clearing history, and the typing indicator.
+ *
+ * Depends on: AIFT (utils.js, markdown.js)
+ */
+"use strict";
+
+(() => {
+  const A = window.AIFT;
+  const { st, el } = A;
+
+  // ── Results step wiring ────────────────────────────────────────────────────
+
+  function setupResults() {
+    if (el.downloadReport) el.downloadReport.addEventListener("click", async () => downloadCaseFile("report"));
+    if (el.downloadCsvs) el.downloadCsvs.addEventListener("click", async () => downloadCaseFile("csvs"));
+    if (el.newAnalysis) el.newAnalysis.addEventListener("click", () => {
+      A.resetCaseUi();
+      A.showStep(1);
+    });
+    if (el.chatToggle) el.chatToggle.addEventListener("click", () => toggleChat());
+    if (el.chatForm) {
+      el.chatForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        await sendChatMessage();
+      });
+    }
+    if (el.chatClear) {
+      el.chatClear.addEventListener("click", async () => { await clearChat(); });
+    }
+    syncChatControls();
+  }
+
+  // ── Downloads ──────────────────────────────────────────────────────────────
+
+  async function downloadCaseFile(kind) {
+    A.clearMsg(el.resultsMsg);
+    const caseId = A.activeCaseId();
+    if (!caseId) return A.setMsg(el.resultsMsg, "No active case to download from.", "error");
+    const endpoint = kind === "report"
+      ? `/api/cases/${encodeURIComponent(caseId)}/report`
+      : `/api/cases/${encodeURIComponent(caseId)}/csvs`;
+    const fallback = kind === "report" ? `${caseId}_report.html` : `${caseId}_parsed_csvs.zip`;
+    try {
+      const r = await fetch(endpoint, { method: "GET" });
+      if (!r.ok) throw new Error((await A.readErr(r)) || `Download failed (${r.status}).`);
+      const blob = await r.blob();
+      const filename = A.getFilename(r.headers) || fallback;
+      triggerDownload(blob, filename);
+      A.setMsg(el.resultsMsg, `Download started: ${filename}`, "success");
+    } catch (e) {
+      A.setMsg(el.resultsMsg, `Download failed: ${e.message}`, "error");
+    }
+  }
+
+  function triggerDownload(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  // ── Chat toggle & controls ─────────────────────────────────────────────────
+
+  function toggleChat(forceOpen = null) {
+    if (!el.chatPanel || !el.chatToggle) return;
+    const open = typeof forceOpen === "boolean" ? forceOpen : !!el.chatPanel.hidden;
+    el.chatPanel.hidden = !open;
+    el.chatToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    el.chatToggle.textContent = open ? "Hide Chat" : "Show Chat";
+    if (!open) return;
+    if (!st.chat.run && st.chat.historyLoadedCaseId !== A.activeCaseId()) {
+      loadChatHistory().catch((e) => A.setMsg(el.resultsMsg, `Unable to load chat history: ${e.message}`, "error"));
+    }
+    scrollChatToBottom();
+    if (el.chatInput && !el.chatInput.disabled) el.chatInput.focus();
+  }
+
+  function syncChatControls() {
+    const busy = !!st.chat.run;
+    if (el.chatInput) el.chatInput.disabled = busy;
+    if (el.chatSend) el.chatSend.disabled = busy;
+    if (el.chatClear) el.chatClear.disabled = busy || !hasChatMessages();
+  }
+
+  function hasChatMessages() {
+    return !!(el.chatThread && el.chatThread.querySelector(".chat-message-row"));
+  }
+
+  function scrollChatToBottom() {
+    if (!el.chatThread) return;
+    el.chatThread.scrollTop = el.chatThread.scrollHeight;
+  }
+
+  function strRole(value) {
+    const role = String(value || "").trim().toLowerCase();
+    if (role === "assistant" || role === "user") return role;
+    return "";
+  }
+
+  // ── Chat history ───────────────────────────────────────────────────────────
+
+  async function loadChatHistory() {
+    const caseId = A.activeCaseId();
+    if (!caseId || !el.chatThread || st.chat.run) return;
+    if (st.chat.historyLoadedCaseId === caseId) return;
+    const history = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/chat/history`, { method: "GET" });
+    if (caseId !== A.activeCaseId()) return;
+    const messages = Array.isArray(history) ? history : (Array.isArray(history?.messages) ? history.messages : []);
+    renderChatHistory(messages);
+    st.chat.historyLoadedCaseId = caseId;
+  }
+
+  function renderChatHistory(history) {
+    if (!el.chatThread) return;
+    el.chatThread.innerHTML = "";
+    const messages = Array.isArray(history)
+      ? history.filter((entry) => {
+        const role = strRole(entry && entry.role);
+        const content = String(entry && entry.content || "").trim();
+        return (role === "user" || role === "assistant") && !!content;
+      })
+      : [];
+    if (!messages.length) {
+      renderChatEmptyState();
+      syncChatControls();
+      return;
+    }
+    messages.forEach((entry) => {
+      const role = strRole(entry.role);
+      const content = String(entry.content || "");
+      let retrieved = [];
+      if (role === "assistant" && A.isObj(entry.metadata) && Array.isArray(entry.metadata.data_retrieved)) {
+        retrieved = entry.metadata.data_retrieved.map((item) => String(item || "").trim()).filter(Boolean);
+      }
+      appendChatMessage(role, content, { dataRetrieved: retrieved });
+    });
+    scrollChatToBottom();
+    syncChatControls();
+  }
+
+  function renderChatEmptyState() {
+    if (!el.chatThread) return;
+    el.chatThread.innerHTML = "";
+    const empty = document.createElement("p");
+    empty.id = "chat-empty-state";
+    empty.textContent = "Chat history will appear here.";
+    el.chatThread.appendChild(empty);
+  }
+
+  function removeChatEmptyState() {
+    if (!el.chatThread) return;
+    const empty = el.chatThread.querySelector("#chat-empty-state");
+    if (empty) empty.remove();
+  }
+
+  // ── Chat message rendering ─────────────────────────────────────────────────
+
+  function appendChatMessage(role, content, opts = {}) {
+    if (!el.chatThread) return null;
+    const normalizedRole = strRole(role);
+    removeChatEmptyState();
+
+    const row = document.createElement("div");
+    row.className = `chat-message-row ${normalizedRole === "user" ? "chat-message-user" : "chat-message-ai"}`;
+
+    const bubble = document.createElement("article");
+    bubble.className = `chat-bubble ${normalizedRole === "user" ? "chat-bubble-user" : "chat-bubble-ai"}`;
+
+    const contentNode = document.createElement("div");
+    contentNode.className = "chat-message-content markdown-output";
+    renderChatMessageText(contentNode, content);
+    bubble.appendChild(contentNode);
+
+    let typingNode = null;
+    if (opts.typing) {
+      bubble.classList.add("is-streaming");
+      typingNode = createTypingIndicator();
+      bubble.appendChild(typingNode);
+    }
+
+    const retrievedArtifacts = Array.isArray(opts.dataRetrieved)
+      ? opts.dataRetrieved.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    if (retrievedArtifacts.length) {
+      appendDataRetrievedIndicator(bubble, retrievedArtifacts);
+    }
+
+    row.appendChild(bubble);
+    el.chatThread.appendChild(row);
+    scrollChatToBottom();
+    syncChatControls();
+    return { row, bubble, contentNode, typingNode };
+  }
+
+  function renderChatMessageText(container, text) {
+    if (!container) return;
+    const value = String(text || "");
+    if (!value.trim()) { container.innerHTML = ""; return; }
+    A.renderMarkdownInto(container, value, "");
+  }
+
+  function createTypingIndicator() {
+    const indicator = document.createElement("div");
+    indicator.className = "chat-typing-indicator";
+    indicator.setAttribute("aria-label", "AI is streaming a response");
+    indicator.setAttribute("aria-live", "polite");
+    for (let index = 0; index < 3; index += 1) {
+      const dot = document.createElement("span");
+      dot.className = "chat-typing-dot";
+      dot.style.animationDelay = `${index * 0.15}s`;
+      indicator.appendChild(dot);
+    }
+    return indicator;
+  }
+
+  function appendDataRetrievedIndicator(target, artifacts) {
+    if (!target) return;
+    const clean = Array.isArray(artifacts)
+      ? artifacts.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    if (!clean.length) return;
+    let indicator = target.querySelector(".chat-data-retrieved");
+    if (!indicator) {
+      indicator = document.createElement("p");
+      indicator.className = "chat-data-retrieved";
+      target.appendChild(indicator);
+    }
+    indicator.textContent = `📎 Referenced: ${clean.join(", ")}`;
+  }
+
+  // ── Send message & SSE ─────────────────────────────────────────────────────
+
+  async function sendChatMessage() {
+    A.clearMsg(el.resultsMsg);
+    const caseId = A.activeCaseId();
+    if (!caseId) return A.setMsg(el.resultsMsg, "No active case for chat.", "error");
+    if (st.chat.run) return A.setMsg(el.resultsMsg, "Wait for the current chat response to finish.", "error");
+    const message = A.val(el.chatInput);
+    if (!message) return;
+
+    toggleChat(true);
+    appendChatMessage("user", message);
+    if (el.chatInput) el.chatInput.value = "";
+
+    const pendingMessage = appendChatMessage("assistant", "", { typing: true });
+    st.chat.pending = pendingMessage
+      ? { bubble: pendingMessage.bubble, contentNode: pendingMessage.contentNode, typingNode: pendingMessage.typingNode, text: "" }
+      : null;
+    st.chat.run = true;
+    st.chat.seq = -1;
+    st.chat.retryCount = 0;
+    syncChatControls();
+
+    try {
+      await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/chat`, { method: "POST", json: { message } });
+      startChatSse(caseId);
+    } catch (e) {
+      finalizeChatError(`Failed to send chat message: ${e.message}`);
+    }
+  }
+
+  function startChatSse(caseId) {
+    closeChatSse();
+    const es = new EventSource(`/api/cases/${encodeURIComponent(caseId)}/chat/stream`);
+    st.chat.es = es;
+    es.onopen = () => { st.chat.retryCount = 0; };
+    es.onmessage = (ev) => {
+      st.chat.retryCount = 0;
+      const payload = A.safeJson(ev.data);
+      if (!payload) return;
+      const seq = A.num(payload.sequence, -1);
+      if (seq >= 0) {
+        if (seq <= st.chat.seq) return;
+        st.chat.seq = seq;
+      }
+      onChatEvent(caseId, payload);
+    };
+    es.onerror = () => {
+      if (!st.chat.run) return;
+      retryChatSse(caseId);
+    };
+  }
+
+  function onChatEvent(caseId, payload) {
+    if (caseId !== A.activeCaseId()) { finalizeChatStream(); return; }
+    const type = String(payload.type || "");
+    if (type === "token") {
+      const pending = ensurePendingChatMessage();
+      pending.text += String(payload.content || "");
+      renderChatMessageText(pending.contentNode, pending.text);
+      scrollChatToBottom();
+      return;
+    }
+    if (type === "done") {
+      const pending = ensurePendingChatMessage();
+      if (!String(pending.text || "").trim()) {
+        renderChatMessageText(pending.contentNode, "No response text was returned.");
+      }
+      if (Array.isArray(payload.data_retrieved)) {
+        const files = payload.data_retrieved.map((item) => String(item || "").trim()).filter(Boolean);
+        appendDataRetrievedIndicator(pending.bubble, files);
+      }
+      finalizePendingChatMessage();
+      st.chat.historyLoadedCaseId = caseId;
+      finalizeChatStream();
+      return;
+    }
+    if (type === "error") {
+      finalizeChatError(String(payload.message || "Chat stream failed."));
+      return;
+    }
+  }
+
+  function ensurePendingChatMessage() {
+    if (st.chat.pending && st.chat.pending.contentNode) return st.chat.pending;
+    const created = appendChatMessage("assistant", "", { typing: true });
+    st.chat.pending = created
+      ? { bubble: created.bubble, contentNode: created.contentNode, typingNode: created.typingNode, text: "" }
+      : { bubble: null, contentNode: null, typingNode: null, text: "" };
+    return st.chat.pending;
+  }
+
+  function finalizePendingChatMessage() {
+    if (!st.chat.pending) return;
+    if (st.chat.pending.typingNode && st.chat.pending.typingNode.parentNode) {
+      st.chat.pending.typingNode.parentNode.removeChild(st.chat.pending.typingNode);
+    }
+    if (st.chat.pending.bubble) st.chat.pending.bubble.classList.remove("is-streaming");
+    st.chat.pending = null;
+    syncChatControls();
+  }
+
+  // ── SSE retry / close ──────────────────────────────────────────────────────
+
+  function retryChatSse(caseId) {
+    if (st.chat.retry || !st.chat.run) return;
+    const attempt = st.chat.retryCount + 1;
+    if (attempt > A.SSE_MAX_RETRIES) {
+      finalizeChatError(`Chat connection lost after ${A.SSE_MAX_RETRIES} retries.`);
+      return;
+    }
+    st.chat.retryCount = attempt;
+    const delay = A.sseRetryDelayMs(attempt);
+    closeChatSse();
+    st.chat.retry = window.setTimeout(() => {
+      st.chat.retry = null;
+      if (st.chat.run) startChatSse(caseId);
+    }, delay);
+  }
+
+  function finalizeChatError(message) {
+    const pending = ensurePendingChatMessage();
+    const current = String(pending.text || "").trim();
+    const rendered = current ? `${current}\n\n${message}` : message;
+    renderChatMessageText(pending.contentNode, rendered);
+    finalizePendingChatMessage();
+    finalizeChatStream();
+    A.setMsg(el.resultsMsg, message, "error");
+  }
+
+  function closeChatSse() {
+    A.closeSseChannel(st.chat);
+  }
+
+  function finalizeChatStream() {
+    closeChatSse();
+    st.chat.run = false;
+    st.chat.retryCount = 0;
+    st.chat.seq = -1;
+    syncChatControls();
+  }
+
+  function resetChatState() {
+    closeChatSse();
+    st.chat.run = false;
+    st.chat.retryCount = 0;
+    st.chat.seq = -1;
+    st.chat.pending = null;
+    st.chat.historyLoadedCaseId = "";
+    if (el.chatInput) { el.chatInput.disabled = false; el.chatInput.value = ""; }
+    if (el.chatSend) el.chatSend.disabled = false;
+    if (el.chatPanel) el.chatPanel.hidden = true;
+    if (el.chatToggle) {
+      el.chatToggle.setAttribute("aria-expanded", "false");
+      el.chatToggle.textContent = "Show Chat";
+    }
+    renderChatEmptyState();
+    syncChatControls();
+  }
+
+  async function clearChat() {
+    const caseId = A.activeCaseId();
+    if (!caseId) return A.setMsg(el.resultsMsg, "No active case for chat.", "error");
+    if (st.chat.run) return A.setMsg(el.resultsMsg, "Wait for the current chat response to finish.", "error");
+    if (!hasChatMessages()) return;
+    const confirmed = window.confirm("Clear chat history for this case?");
+    if (!confirmed) return;
+    A.clearMsg(el.resultsMsg);
+    try {
+      await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/chat/history`, { method: "DELETE" });
+      renderChatEmptyState();
+      st.chat.historyLoadedCaseId = caseId;
+      A.setMsg(el.resultsMsg, "Chat history cleared.", "success");
+      syncChatControls();
+    } catch (e) {
+      A.setMsg(el.resultsMsg, `Failed to clear chat history: ${e.message}`, "error");
+    }
+  }
+
+  // ── Public API ─────────────────────────────────────────────────────────────
+  A.setupResults = setupResults;
+  A.closeChatSse = closeChatSse;
+  A.resetChatState = resetChatState;
+  A.loadChatHistory = loadChatHistory;
+  A.toggleChat = toggleChat;
+})();
