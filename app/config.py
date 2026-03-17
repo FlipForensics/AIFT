@@ -35,8 +35,11 @@ __all__ = [
     "save_config",
     "get_default_config",
     "apply_env_overrides",
+    "validate_config",
     "PROJECT_ROOT",
     "DEFAULT_CONFIG",
+    "KNOWN_AI_PROVIDERS",
+    "LOGO_FILE_CANDIDATES",
 ]
 
 logger = logging.getLogger(__name__)
