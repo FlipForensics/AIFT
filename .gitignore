@@ -42,3 +42,6 @@ cases/
 Thumbs.db
 
 config.yaml
+
+# pdoc build output
+_site/

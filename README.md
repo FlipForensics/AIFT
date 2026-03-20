@@ -31,6 +31,13 @@ No Elasticsearch. No Docker. No database. One Python script, one command.
 
 ---
 
+## Documentation
+
+- **User Guide**: https://github.com/FlipForensics/AIFT/wiki
+- **Code Reference**: https://flipforensics.github.io/AIFT/docs/
+
+---
+
 ## Example Reports
 
 A [publicly available test image](https://cfreds.nist.gov/all/BenjaminDonnachie/CompromisedWindowsServer2022simulation) (Compromised Windows Server 2022 Simulation by Benjamin Donnachie, NIST CFReDS) was used to compare AI providers. The analysis prompt included one real IOC (`PsExec`) and one not observed IOC (`redpetya.exe`) to test each model's ability to identify true findings and avoid false positives.

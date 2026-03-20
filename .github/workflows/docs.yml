@@ -1,0 +1,43 @@
+name: Build and Deploy Code Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'aift.py'
+      - 'runtime_compat.py'
+  workflow_dispatch:
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install project dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install pdoc
+        run: pip install pdoc
+
+      - name: Build documentation
+        run: pdoc app aift runtime_compat -o _site/docs --docformat google
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: _site/docs
+          destination_dir: docs
+          keep_files: true
