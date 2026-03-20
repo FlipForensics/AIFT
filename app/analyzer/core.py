@@ -497,7 +497,27 @@ class ForensicAnalyzer:
                     return list(mapped)
                 return [mapped]
 
-        # Delegate to single-path resolver for filesystem fallback.
+        # Filesystem fallback: search case_dir/parsed for all matching parts.
+        if self.case_dir is not None:
+            parsed_dir = self.case_dir / "parsed"
+            if parsed_dir.exists():
+                normalized = normalize_artifact_key(artifact_key)
+                file_stubs = {
+                    artifact_key, normalized,
+                    sanitize_filename(artifact_key),
+                    sanitize_filename(normalized),
+                }
+                for file_stub in file_stubs:
+                    direct_csv_path = parsed_dir / f"{file_stub}.csv"
+                    prefixed_paths = sorted(parsed_dir.glob(f"{file_stub}_*.csv"))
+                    if direct_csv_path.exists() and prefixed_paths:
+                        return sorted([direct_csv_path] + prefixed_paths)
+                    if prefixed_paths:
+                        return prefixed_paths
+                    if direct_csv_path.exists():
+                        return [direct_csv_path]
+
+        # Final fallback: delegate to single-path resolver.
         return [self._resolve_artifact_csv_path(artifact_key)]
 
     def _combine_csv_files(self, artifact_key: str, csv_paths: list[Path]) -> Path:

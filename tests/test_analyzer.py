@@ -3635,6 +3635,40 @@ class TestSplitArtifactCsvHandling(unittest.TestCase):
         result = analyzer._resolve_all_artifact_csv_paths("runkeys")
         self.assertEqual(result, [Path("/runkeys.csv")])
 
+    def test_resolve_all_artifact_csv_paths_fallback_split(self) -> None:
+        """_resolve_all_artifact_csv_paths discovers all split parts from case_dir/parsed."""
+        with TemporaryDirectory(prefix="aift-split-") as tmp_dir:
+            parsed_dir = Path(tmp_dir) / "parsed"
+            parsed_dir.mkdir()
+            csv1 = parsed_dir / "evtx_Security.csv"
+            csv2 = parsed_dir / "evtx_System.csv"
+            csv3 = parsed_dir / "evtx_Application.csv"
+            for f in (csv1, csv2, csv3):
+                f.write_text("ts,msg\n", encoding="utf-8")
+            fake_provider = FakeProvider()
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(case_dir=tmp_dir)
+            result = analyzer._resolve_all_artifact_csv_paths("evtx")
+            self.assertEqual(len(result), 3)
+            # Ordering must be deterministic (sorted).
+            self.assertEqual(result, sorted(result))
+            # All parts must be present.
+            basenames = {p.name for p in result}
+            self.assertEqual(basenames, {"evtx_Application.csv", "evtx_Security.csv", "evtx_System.csv"})
+
+    def test_resolve_all_artifact_csv_paths_fallback_single(self) -> None:
+        """_resolve_all_artifact_csv_paths returns single CSV from case_dir/parsed."""
+        with TemporaryDirectory(prefix="aift-single-") as tmp_dir:
+            parsed_dir = Path(tmp_dir) / "parsed"
+            parsed_dir.mkdir()
+            csv_path = parsed_dir / "runkeys.csv"
+            csv_path.write_text("ts,name\n", encoding="utf-8")
+            fake_provider = FakeProvider()
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(case_dir=tmp_dir)
+            result = analyzer._resolve_all_artifact_csv_paths("runkeys")
+            self.assertEqual(result, [csv_path])
+
     def test_combine_csv_files(self) -> None:
         """_combine_csv_files merges multiple CSVs into one with all rows."""
         with TemporaryDirectory() as tmpdir:
