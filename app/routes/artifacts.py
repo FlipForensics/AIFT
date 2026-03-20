@@ -608,6 +608,13 @@ def start_parse(case_id: str) -> tuple[Response, int]:
         case["artifact_options"] = list(artifact_options)
         case["analysis_date_range"] = analysis_date_range
 
+        # Invalidate prior parse-derived outputs so a failed rerun
+        # cannot leave stale data usable by downstream analysis.
+        case["parse_results"] = []
+        case["artifact_csv_paths"] = {}
+        case["analysis_results"] = {}
+        case["csv_output_dir"] = ""
+
     parse_started_event: dict[str, Any] = {
         "type": "parse_started",
         "artifacts": parse_artifacts,

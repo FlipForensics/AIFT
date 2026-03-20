@@ -464,6 +464,16 @@ def resolve_evidence_payload(case_dir: Path) -> dict[str, Any]:
         extract_dir = _make_extract_dir(evidence_dir, source_path)
         dissect_path = extractor(source_path, extract_dir)
 
+    # Determine the files to hash for integrity verification.
+    # For split-image uploads all segments are included; for archives and
+    # single files only the source file is hashed; directories get N/A.
+    if source_path.is_file() and len(uploaded_paths) > 1:
+        evidence_files_to_hash = sorted(set(str(p) for p in uploaded_paths))
+    elif source_path.is_file():
+        evidence_files_to_hash = [str(source_path)]
+    else:
+        evidence_files_to_hash = []
+
     return {
         "mode": mode,
         "filename": source_path.name,
@@ -471,6 +481,7 @@ def resolve_evidence_payload(case_dir: Path) -> dict[str, Any]:
         "stored_path": str(source_path) if mode == "upload" else "",
         "dissect_path": str(dissect_path),
         "uploaded_files": [str(path) for path in uploaded_paths],
+        "evidence_files_to_hash": evidence_files_to_hash,
     }
 
 
@@ -667,10 +678,26 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
         source_path = Path(evidence_payload["source_path"])
         dissect_path = Path(evidence_payload["dissect_path"])
 
-        if source_path.is_file():
-            hashes = dict(compute_hashes(source_path))
+        files_to_hash = evidence_payload.get("evidence_files_to_hash", [])
+        if files_to_hash:
+            file_hashes: list[dict[str, Any]] = []
+            for fpath in files_to_hash:
+                h = dict(compute_hashes(fpath))
+                h["path"] = fpath
+                file_hashes.append(h)
+            if len(file_hashes) == 1:
+                hashes = dict(file_hashes[0])
+            else:
+                # Summary entry for backward compat — individual hashes
+                # are persisted separately in evidence_file_hashes.
+                hashes = {
+                    "sha256": file_hashes[0]["sha256"],
+                    "md5": file_hashes[0]["md5"],
+                    "size_bytes": sum(h["size_bytes"] for h in file_hashes),
+                }
         else:
             hashes = {"sha256": "N/A (directory)", "md5": "N/A (directory)", "size_bytes": 0}
+            file_hashes = []
         hashes["filename"] = source_path.name
 
         with ForensicParser(
@@ -693,6 +720,10 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
                 "sha256": hashes["sha256"],
                 "md5": hashes["md5"],
                 "file_size_bytes": hashes["size_bytes"],
+                "evidence_file_hashes": [
+                    {"path": h["path"], "sha256": h["sha256"], "md5": h["md5"], "size_bytes": h["size_bytes"]}
+                    for h in file_hashes
+                ],
             },
         )
         audit_logger.log(
@@ -717,6 +748,10 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
             case["uploaded_files"] = list(evidence_payload.get("uploaded_files", []))
             case["evidence_path"] = str(dissect_path)
             case["evidence_hashes"] = hashes
+            case["evidence_file_hashes"] = [
+                {"path": h["path"], "sha256": h["sha256"], "md5": h["md5"], "size_bytes": h["size_bytes"]}
+                for h in file_hashes
+            ]
             case["image_metadata"] = metadata
             case["available_artifacts"] = available_artifacts
 
@@ -790,26 +825,61 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
 
     hashes = dict(case_snapshot.get("evidence_hashes", {}))
     intake_sha256 = str(hashes.get("sha256", "")).strip()
-    verification_path = resolve_hash_verification_path(case_snapshot)
+    file_hash_entries = list(case_snapshot.get("evidence_file_hashes", []))
 
     if intake_sha256.startswith("N/A"):
         hash_ok = True
         computed_sha256 = intake_sha256
-    elif verification_path is None or not intake_sha256:
-        return error_response("Evidence hash context is missing for this case.", 400)
-    elif not verification_path.exists():
-        return error_response("Evidence file is no longer available for hash verification.", 404)
+        verify_details: list[dict[str, object]] = []
+    elif file_hash_entries:
+        # Verify every file that was hashed at intake.
+        hash_ok = True
+        verify_details = []
+        for entry in file_hash_entries:
+            fpath = Path(str(entry["path"]))
+            expected = str(entry["sha256"]).strip().lower()
+            if not fpath.exists():
+                verify_details.append({
+                    "path": str(fpath), "match": False,
+                    "expected": expected, "computed": "FILE_MISSING",
+                })
+                hash_ok = False
+                continue
+            ok, computed = verify_hash(fpath, expected, return_computed=True)
+            verify_details.append({
+                "path": str(fpath), "match": ok,
+                "expected": expected, "computed": computed,
+            })
+            if not ok:
+                hash_ok = False
+        computed_sha256 = (
+            str(verify_details[0]["computed"]) if len(verify_details) == 1
+            else "; ".join(str(d["computed"]) for d in verify_details)
+        )
     else:
+        # Fallback for cases created before evidence_file_hashes existed.
+        verification_path = resolve_hash_verification_path(case_snapshot)
+        if verification_path is None or not intake_sha256:
+            return error_response("Evidence hash context is missing for this case.", 400)
+        if not verification_path.exists():
+            return error_response("Evidence file is no longer available for hash verification.", 404)
         hash_ok, computed_sha256 = verify_hash(
             verification_path, intake_sha256, return_computed=True,
         )
+        verify_details = [{
+            "path": str(verification_path),
+            "match": hash_ok,
+            "expected": intake_sha256,
+            "computed": computed_sha256,
+        }]
+
     audit_logger.log(
         "hash_verification",
         {
             "expected_sha256": intake_sha256,
             "computed_sha256": computed_sha256,
             "match": hash_ok,
-            "verification_path": str(verification_path),
+            "verified_files": verify_details,
         },
     )
 

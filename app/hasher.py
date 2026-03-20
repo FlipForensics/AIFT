@@ -19,7 +19,12 @@ from hashlib import md5, sha256
 from pathlib import Path
 from typing import Callable, Protocol, TypedDict
 
-__all__ = ["compute_hashes", "verify_hash"]
+__all__ = [
+    "compute_hashes",
+    "compute_hashes_multi",
+    "verify_hash",
+    "verify_hashes_multi",
+]
 
 CHUNK_SIZE = 4 * 1024 * 1024
 
@@ -145,3 +150,75 @@ def verify_hash(
     if return_computed:
         return matches, computed_sha256
     return matches
+
+
+def compute_hashes_multi(
+    filepaths: list[Path],
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> list[HashResult]:
+    """Compute SHA-256 and MD5 digests for each file in a list.
+
+    Each file is hashed independently via :func:`compute_hashes`.  The
+    returned list preserves the input order and augments each result with
+    a ``path`` key so the caller can correlate results back to files.
+
+    Args:
+        filepaths: List of evidence file paths to hash.
+        progress_callback: Optional ``(bytes_read, total_bytes)`` callback
+            forwarded to :func:`compute_hashes` for each file.
+
+    Returns:
+        A list of :class:`HashResult` dicts, each with an additional
+        ``path`` key containing the string representation of the file.
+    """
+    results: list[HashResult] = []
+    for filepath in filepaths:
+        result = compute_hashes(filepath, progress_callback)
+        result["path"] = str(filepath)  # type: ignore[typeddict-unknown-key]
+        results.append(result)
+    return results
+
+
+def verify_hashes_multi(
+    file_hash_entries: list[dict[str, str | int]],
+) -> tuple[bool, list[dict[str, object]]]:
+    """Verify multiple evidence files against their recorded SHA-256 digests.
+
+    Each entry in *file_hash_entries* must have ``path`` and ``sha256``
+    keys.  Missing files are reported as failures.
+
+    Args:
+        file_hash_entries: List of dicts with ``path`` (str) and
+            ``sha256`` (str) keys from intake-time hashing.
+
+    Returns:
+        A tuple ``(all_passed, details)`` where *all_passed* is ``True``
+        only if every file matches, and *details* is a list of per-file
+        result dicts with ``path``, ``match``, ``expected``, and
+        ``computed`` keys.
+    """
+    all_ok = True
+    details: list[dict[str, object]] = []
+    for entry in file_hash_entries:
+        path = Path(str(entry["path"]))
+        expected = str(entry["sha256"]).strip().lower()
+        if not path.exists():
+            details.append({
+                "path": str(path),
+                "match": False,
+                "expected": expected,
+                "computed": "FILE_MISSING",
+            })
+            all_ok = False
+            continue
+        computed = compute_sha256(path)
+        match = computed == expected
+        details.append({
+            "path": str(path),
+            "match": match,
+            "expected": expected,
+            "computed": computed,
+        })
+        if not match:
+            all_ok = False
+    return all_ok, details

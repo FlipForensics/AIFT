@@ -717,5 +717,270 @@ class TestExtensionConstants(unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# 7. Evidence integrity regression tests
+# ---------------------------------------------------------------------------
+
+class TestEvidenceIntegrityArchive(unittest.TestCase):
+    """Verify that archive intake hashes the archive file and report
+    verification uses the stored evidence_file_hashes."""
+
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory(prefix="aift-integrity-archive-")
+        self.cases_root = Path(self.temp_dir.name) / "cases"
+        self.config_path = Path(self.temp_dir.name) / "config.yaml"
+        self.app = create_app(str(self.config_path))
+        self.app.testing = True
+        self.client = self.app.test_client()
+        self.client.environ_base["HTTP_X_CSRF_TOKEN"] = self.app.config["CSRF_TOKEN"]
+        routes.CASE_STATES.clear()
+        routes.PARSE_PROGRESS.clear()
+        routes.ANALYSIS_PROGRESS.clear()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _create_case(self) -> str:
+        """Create a fresh case and return its ID."""
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+        ):
+            resp = self.client.post("/api/cases", json={"case_name": "Archive Integrity"})
+            self.assertEqual(resp.status_code, 201)
+            return resp.get_json()["case_id"]
+
+    def test_archive_intake_stores_file_hashes_for_source(self) -> None:
+        """Intake of a ZIP must record evidence_file_hashes for the ZIP itself."""
+        case_id = self._create_case()
+        zip_path = Path(self.temp_dir.name) / "evidence.zip"
+        with ZipFile(zip_path, "w") as zf:
+            zf.writestr("Disk.E01", b"EWF-DATA")
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "compute_hashes", return_value=FAKE_HASHES),
+        ):
+            resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                json={"path": str(zip_path)},
+            )
+            self.assertEqual(resp.status_code, 200)
+
+        with routes.STATE_LOCK:
+            case = routes.CASE_STATES[case_id]
+            file_hashes = case.get("evidence_file_hashes", [])
+
+        self.assertEqual(len(file_hashes), 1)
+        self.assertEqual(file_hashes[0]["path"], str(zip_path))
+        self.assertEqual(file_hashes[0]["sha256"], "a" * 64)
+
+    def test_archive_report_verifies_via_evidence_file_hashes(self) -> None:
+        """Report generation for archived evidence must verify using the stored
+        evidence_file_hashes, calling verify_hash for each entry."""
+        case_id = self._create_case()
+        zip_path = Path(self.temp_dir.name) / "evidence.zip"
+        with ZipFile(zip_path, "w") as zf:
+            zf.writestr("Disk.E01", b"EWF-DATA")
+
+        from app.reporter import ReportGenerator as _RealRG
+
+        class _FakeRG(_RealRG):
+            def generate(self, **kwargs):
+                report_dir = self.cases_root / case_id / "reports"
+                report_dir.mkdir(parents=True, exist_ok=True)
+                report_path = report_dir / "report.html"
+                report_path.write_text("<html>ok</html>", encoding="utf-8")
+                return report_path
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_evidence, "ReportGenerator", _FakeRG),
+            patch.object(routes_evidence, "verify_hash", return_value=(True, "a" * 64)) as mock_verify,
+        ):
+            self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(zip_path)})
+            report_resp = self.client.get(f"/api/cases/{case_id}/report")
+            self.assertEqual(report_resp.status_code, 200)
+            mock_verify.assert_called_once()
+            called_path = mock_verify.call_args.args[0]
+            self.assertEqual(str(called_path), str(zip_path))
+
+
+class TestEvidenceIntegritySplitSegments(unittest.TestCase):
+    """Verify that split-image uploads hash and verify ALL segments."""
+
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory(prefix="aift-integrity-split-")
+        self.cases_root = Path(self.temp_dir.name) / "cases"
+        self.config_path = Path(self.temp_dir.name) / "config.yaml"
+        self.app = create_app(str(self.config_path))
+        self.app.testing = True
+        self.client = self.app.test_client()
+        self.client.environ_base["HTTP_X_CSRF_TOKEN"] = self.app.config["CSRF_TOKEN"]
+        routes.CASE_STATES.clear()
+        routes.PARSE_PROGRESS.clear()
+        routes.ANALYSIS_PROGRESS.clear()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _create_case(self) -> str:
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+        ):
+            resp = self.client.post("/api/cases", json={"case_name": "Split Integrity"})
+            self.assertEqual(resp.status_code, 201)
+            return resp.get_json()["case_id"]
+
+    def test_split_upload_hashes_all_segments(self) -> None:
+        """Uploading E01+E02 must produce evidence_file_hashes for both."""
+        case_id = self._create_case()
+        call_count = {"n": 0}
+
+        def _fake_compute(filepath, progress_callback=None):
+            call_count["n"] += 1
+            return {"sha256": f"{call_count['n']:0>64x}", "md5": f"{call_count['n']:0>32x}", "size_bytes": 4}
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "compute_hashes", side_effect=_fake_compute),
+        ):
+            resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                data={
+                    "evidence_file": [
+                        (io.BytesIO(b"seg1"), "Disk.E01"),
+                        (io.BytesIO(b"seg2"), "Disk.E02"),
+                    ]
+                },
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(resp.status_code, 200)
+
+        # compute_hashes must have been called for both segments.
+        self.assertEqual(call_count["n"], 2)
+
+        with routes.STATE_LOCK:
+            file_hashes = routes.CASE_STATES[case_id].get("evidence_file_hashes", [])
+        self.assertEqual(len(file_hashes), 2)
+
+    def test_split_report_verifies_all_segments(self) -> None:
+        """Report generation must verify every segment, not just the primary."""
+        case_id = self._create_case()
+
+        from app.reporter import ReportGenerator as _RealRG
+
+        class _FakeRG(_RealRG):
+            def generate(self, **kwargs):
+                report_dir = self.cases_root / case_id / "reports"
+                report_dir.mkdir(parents=True, exist_ok=True)
+                rp = report_dir / "report.html"
+                rp.write_text("<html>ok</html>", encoding="utf-8")
+                return rp
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_evidence, "ReportGenerator", _FakeRG),
+            patch.object(routes_evidence, "verify_hash", return_value=(True, "a" * 64)) as mock_verify,
+        ):
+            self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                data={
+                    "evidence_file": [
+                        (io.BytesIO(b"seg1"), "Disk.E01"),
+                        (io.BytesIO(b"seg2"), "Disk.E02"),
+                    ]
+                },
+                content_type="multipart/form-data",
+            )
+            report_resp = self.client.get(f"/api/cases/{case_id}/report")
+            self.assertEqual(report_resp.status_code, 200)
+            # verify_hash must be called once per segment.
+            self.assertEqual(mock_verify.call_count, 2)
+
+
+class TestEvidenceIntegrityTamperDetection(unittest.TestCase):
+    """Verify that tampered evidence is detected at report time."""
+
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory(prefix="aift-integrity-tamper-")
+        self.cases_root = Path(self.temp_dir.name) / "cases"
+        self.config_path = Path(self.temp_dir.name) / "config.yaml"
+        self.app = create_app(str(self.config_path))
+        self.app.testing = True
+        self.client = self.app.test_client()
+        self.client.environ_base["HTTP_X_CSRF_TOKEN"] = self.app.config["CSRF_TOKEN"]
+        routes.CASE_STATES.clear()
+        routes.PARSE_PROGRESS.clear()
+        routes.ANALYSIS_PROGRESS.clear()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _create_case(self) -> str:
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+        ):
+            resp = self.client.post("/api/cases", json={"case_name": "Tamper Test"})
+            self.assertEqual(resp.status_code, 201)
+            return resp.get_json()["case_id"]
+
+    def test_tampered_evidence_fails_verification(self) -> None:
+        """If evidence changes after intake, report verification must fail."""
+        case_id = self._create_case()
+        evidence = Path(self.temp_dir.name) / "disk.E01"
+        evidence.write_bytes(b"original-data")
+
+        from app.reporter import ReportGenerator as _RealRG
+
+        class _FakeRG(_RealRG):
+            def generate(self, **kwargs):
+                report_dir = self.cases_root / case_id / "reports"
+                report_dir.mkdir(parents=True, exist_ok=True)
+                rp = report_dir / "report.html"
+                rp.write_text("<html>ok</html>", encoding="utf-8")
+                return rp
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_evidence, "ReportGenerator", _FakeRG),
+            # Simulate tamper: verify_hash returns mismatch.
+            patch.object(routes_evidence, "verify_hash", return_value=(False, "c" * 64)),
+        ):
+            self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                json={"path": str(evidence)},
+            )
+            report_resp = self.client.get(f"/api/cases/{case_id}/report")
+            # Report still generates (with FAIL status), not a hard error.
+            self.assertEqual(report_resp.status_code, 200)
+
+            # Audit log must record the failure.
+            audit_path = self.cases_root / case_id / "audit.jsonl"
+            entries = [
+                json.loads(line)
+                for line in audit_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            hash_events = [e for e in entries if e.get("action") == "hash_verification"]
+            self.assertTrue(hash_events)
+            self.assertFalse(hash_events[-1]["details"]["match"])
+
+
 if __name__ == "__main__":
     unittest.main()

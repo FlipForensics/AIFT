@@ -116,8 +116,9 @@ class FakeAnalyzer:
         investigation_context: str,
         metadata: dict[str, object] | None,
         progress_callback: object | None = None,
+        cancel_check: object | None = None,
     ) -> dict[str, object]:
-        del investigation_context, metadata
+        del investigation_context, metadata, cancel_check
         FakeAnalyzer.last_artifact_keys = list(artifact_keys)
         per_artifact: list[dict[str, str]] = []
         for artifact in artifact_keys:
@@ -1554,7 +1555,7 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(csv_bundle_resp.status_code, 200)
             self.assertEqual(csv_bundle_resp.mimetype, "application/zip")
 
-    def test_report_hash_verification_uses_source_path_for_zip_evidence(self) -> None:
+    def test_report_hash_verification_uses_evidence_file_hashes_for_zip(self) -> None:
         zip_path = Path(self.temp_dir.name) / "sample.zip"
         with ZipFile(zip_path, "w") as archive:
             archive.writestr("sample.E01", b"demo")
@@ -1572,29 +1573,17 @@ class RoutesTests(unittest.TestCase):
             patch.object(
                 routes,
                 "compute_hashes",
-                return_value={
-                    "sha256": "a" * 64,
-                    "md5": "b" * 32,
-                    "size_bytes": 4,
-                },
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
             ),
             patch.object(
                 routes_handlers,
                 "compute_hashes",
-                return_value={
-                    "sha256": "a" * 64,
-                    "md5": "b" * 32,
-                    "size_bytes": 4,
-                },
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
             ),
             patch.object(
                 routes_evidence,
                 "compute_hashes",
-                return_value={
-                    "sha256": "a" * 64,
-                    "md5": "b" * 32,
-                    "size_bytes": 4,
-                },
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
             ),
             patch.object(routes, "verify_hash", return_value=(True, "a" * 64)),
             patch.object(routes_handlers, "verify_hash", return_value=(True, "a" * 64)),
@@ -1611,13 +1600,19 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(evidence_resp.status_code, 200)
             self.assertTrue(evidence_resp.get_json()["evidence_path"].lower().endswith(".e01"))
 
+            # Verify evidence_file_hashes was stored with the zip path.
+            with routes.STATE_LOCK:
+                file_hashes = routes.CASE_STATES[case_id].get("evidence_file_hashes", [])
+            self.assertEqual(len(file_hashes), 1)
+            self.assertEqual(file_hashes[0]["path"], str(zip_path))
+
             report_resp = self.client.get(f"/api/cases/{case_id}/report")
             self.assertEqual(report_resp.status_code, 200)
 
+            # verify_hash called with the zip path (from evidence_file_hashes).
             verify_hash_mock.assert_called_once()
-            called_path, called_hash = verify_hash_mock.call_args.args
-            self.assertEqual(Path(called_path), zip_path)
-            self.assertEqual(called_hash, "a" * 64)
+            called_path = verify_hash_mock.call_args.args[0]
+            self.assertEqual(str(called_path), str(zip_path))
 
             audit_path = self.cases_root / case_id / "audit.jsonl"
             audit_entries = [
@@ -1629,7 +1624,6 @@ class RoutesTests(unittest.TestCase):
             self.assertTrue(hash_events)
             details = hash_events[-1].get("details", {})
             self.assertEqual(details.get("expected_sha256"), "a" * 64)
-            self.assertEqual(len(str(details.get("computed_sha256", ""))), 64)
             self.assertTrue(details.get("match"))
 
     def test_extract_zip_without_image_returns_directory_target(self) -> None:
