@@ -225,6 +225,16 @@ main#wizard {
   color: var(--text-primary);
 }
 
+.step-indicator li.is-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.step-indicator li.is-disabled:hover {
+  background: inherit;
+  color: var(--text-secondary);
+}
+
 .step-indicator li:last-child {
   border-right: 0;
 }
@@ -234,6 +244,13 @@ main#wizard {
   background: var(--bg-card);
   color: var(--text-primary);
   border-bottom-color: var(--accent);
+  opacity: 1;
+  cursor: pointer;
+}
+
+.step-indicator li.is-visited {
+  opacity: 1;
+  color: var(--text-primary);
 }
 
 /* ==========================================================================

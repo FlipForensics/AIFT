@@ -223,6 +223,16 @@
       hint.hidden = false;
       hint.textContent = reason;
     });
+    el.indicators.forEach((i) => {
+      const t = i.dataset.stepTarget ? q(i.dataset.stepTarget) : null;
+      const n = t ? Number(t.dataset.step || 1) : 1;
+      const isActive = i.classList.contains("is-active");
+      const blocked = !isActive && !canGo(n);
+      i.classList.toggle("is-disabled", blocked);
+      i.classList.toggle("is-visited", !blocked && !isActive);
+      if (blocked) i.title = navBlockReason(n);
+      else i.removeAttribute("title");
+    });
   }
 
   function showStep(n) {
