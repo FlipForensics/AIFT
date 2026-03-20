@@ -648,7 +648,6 @@ tbody td:nth-child(3) {
    ========================================================================== */
 #analysis-stream,
 #executive-summary-card,
-#results-timeline,
 #artifact-findings,
 .summary-card {
   border: 1px solid var(--border);
@@ -657,8 +656,7 @@ tbody td:nth-child(3) {
 }
 
 #analysis-stream,
-#artifact-findings,
-#results-timeline {
+#artifact-findings {
   margin-top: var(--space-4);
 }
 
@@ -797,17 +795,6 @@ tbody td:nth-child(3) {
 
 #provider-name {
   color: var(--text-primary);
-}
-
-#timeline-events {
-  margin: 0;
-  padding-left: 1.3rem;
-}
-
-#timeline-events li {
-  margin: 0 0 0.4rem;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
 }
 
 /* ==========================================================================
@@ -961,7 +948,7 @@ tbody td:nth-child(3) {
   padding: 0.4rem 0;
   margin-bottom: var(--space-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 0;
   background: var(--bg-secondary);
   color: var(--accent);
   font-size: 0.82rem;
@@ -1209,7 +1196,6 @@ details > :not(summary) {
   #analysis-stream,
   #executive-summary-card,
   #artifact-findings,
-  #results-timeline,
   details,
   table {
     background: #ffffff !important;
