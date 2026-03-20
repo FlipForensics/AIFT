@@ -10,7 +10,9 @@ Sub-modules:
 - ``evidence``: Archive extraction, file upload, evidence resolution, CSV/hash.
 - ``artifacts``: Artifact option normalisation, profile CRUD, date validation.
 - ``tasks``: Background parse/analysis/chat runners and prompt helpers.
-- ``handlers``: Flask Blueprint with all route handler functions.
+- ``handlers``: Core blueprint (UI, cases, settings) and route registration.
+- ``analysis``: AI analysis routes.
+- ``chat``: Chat routes.
 """
 
 from __future__ import annotations
@@ -66,25 +68,27 @@ from .state import (  # noqa: F401
     success_response,
 )
 
-# Evidence helpers:
+# Evidence helpers and blueprint:
 from .evidence import (  # noqa: F401
     EWF_SEGMENT_RE,
     SPLIT_RAW_SEGMENT_RE,
     build_csv_map,
     collect_case_csv_paths,
+    evidence_bp,
     read_audit_entries,
     resolve_case_csv_output_dir,
     resolve_evidence_payload,
     resolve_hash_verification_path,
 )
 
-# Artifact / profile helpers:
+# Artifact / profile helpers and blueprint:
 from .artifacts import (  # noqa: F401
     BUILTIN_RECOMMENDED_PROFILE,
     PROFILE_DIRNAME,
     PROFILE_FILE_SUFFIX,
     PROFILE_NAME_RE,
     RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS,
+    artifact_bp,
     artifact_options_to_lists,
     compose_profile_response,
     extract_parse_progress,
@@ -126,5 +130,9 @@ from .handlers import (  # noqa: F401
     routes_bp,
     threading,
 )
+
+# Sub-blueprints (evidence_bp and artifact_bp already imported above):
+from .analysis import analysis_bp  # noqa: F401
+from .chat import chat_bp  # noqa: F401
 
 __all__ = ["register_routes"]

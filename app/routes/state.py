@@ -311,7 +311,7 @@ def _cleanup_progress_store(store: dict[str, dict[str, Any]], case_id: str) -> N
     """
     with STATE_LOCK:
         entry = store.get(case_id)
-        if entry is not None and entry.get("status") in {"completed", "failed", "error"}:
+        if entry is not None and entry.get("status") in TERMINAL_CASE_STATUSES:
             store.pop(case_id, None)
 
 
@@ -356,7 +356,7 @@ def stream_sse(store: dict[str, dict[str, Any]], case_id: str) -> Response:
                 for event in pending:
                     yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
 
-                if status in {"completed", "failed", "error"} and not pending:
+                if status in TERMINAL_CASE_STATUSES and not pending:
                     break
 
                 if not pending:

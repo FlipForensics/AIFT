@@ -1,12 +1,14 @@
-"""Evidence intake, archive extraction, and CSV/hash helpers for AIFT routes.
+"""Evidence intake, archive extraction, CSV/hash helpers, and route handlers.
 
 This module handles all evidence-related logic: uploading files, resolving
 paths, extracting ZIP/tar/7z archives, computing and verifying hashes,
-collecting parsed CSV paths, and reading audit log entries.
+collecting parsed CSV paths, reading audit log entries, and the Flask route
+handlers for evidence intake, report generation, and CSV bundle downloads.
 
 Attributes:
     EWF_SEGMENT_RE: Compiled regex for EWF split segment filenames.
     SPLIT_RAW_SEGMENT_RE: Compiled regex for split raw disk image segments.
+    evidence_bp: Flask Blueprint for evidence-related routes.
 """
 
 from __future__ import annotations
@@ -17,23 +19,36 @@ import re
 import shutil
 import tarfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-from zipfile import BadZipFile, ZipFile
+from zipfile import BadZipFile, ZipFile, ZIP_DEFLATED
 
 import py7zr
 
-from flask import request
+from flask import Blueprint, Response, request, send_file
 from werkzeug.utils import secure_filename
 
+from ..hasher import compute_hashes, verify_hash
+from ..parser import ForensicParser
+from ..reporter import ReportGenerator
+
 from .state import (
+    CASES_ROOT,
     PROJECT_ROOT,
+    STATE_LOCK,
+    cleanup_case_entries,
+    error_response,
+    get_case,
+    mark_case_status,
     safe_name,
+    success_response,
 )
 
 __all__ = [
     "EWF_SEGMENT_RE",
     "SPLIT_RAW_SEGMENT_RE",
+    "evidence_bp",
     "resolve_evidence_payload",
     "resolve_hash_verification_path",
     "resolve_case_csv_output_dir",
@@ -604,3 +619,238 @@ def read_audit_entries(case_dir: Path) -> list[dict[str, Any]]:
             if isinstance(parsed, dict):
                 entries.append(parsed)
     return entries
+
+
+# ---------------------------------------------------------------------------
+# Route handlers
+# ---------------------------------------------------------------------------
+
+evidence_bp = Blueprint("evidence", __name__)
+
+
+@evidence_bp.post("/api/cases/<case_id>/evidence")
+def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
+    """Ingest evidence for an existing case.
+
+    Args:
+        case_id: UUID of the case.
+
+    Returns:
+        JSON with evidence metadata, hashes, and available artifacts.
+    """
+    case = get_case(case_id)
+    if case is None:
+        return error_response(f"Case not found: {case_id}", 404)
+
+    with STATE_LOCK:
+        case_dir = case["case_dir"]
+        audit_logger = case["audit"]
+
+    try:
+        evidence_payload = resolve_evidence_payload(case_dir)
+        source_path = Path(evidence_payload["source_path"])
+        dissect_path = Path(evidence_payload["dissect_path"])
+
+        if source_path.is_file():
+            hashes = dict(compute_hashes(source_path))
+        else:
+            hashes = {"sha256": "N/A (directory)", "md5": "N/A (directory)", "size_bytes": 0}
+        hashes["filename"] = source_path.name
+
+        with ForensicParser(
+            evidence_path=dissect_path,
+            case_dir=case_dir,
+            audit_logger=audit_logger,
+        ) as parser:
+            metadata = parser.get_image_metadata()
+            available_artifacts = parser.get_available_artifacts()
+
+        audit_logger.log(
+            "evidence_intake",
+            {
+                "filename": source_path.name,
+                "source_mode": evidence_payload["mode"],
+                "source_path": evidence_payload["source_path"],
+                "stored_path": evidence_payload["stored_path"],
+                "uploaded_files": list(evidence_payload.get("uploaded_files", [])),
+                "dissect_path": str(dissect_path),
+                "sha256": hashes["sha256"],
+                "md5": hashes["md5"],
+                "file_size_bytes": hashes["size_bytes"],
+            },
+        )
+        audit_logger.log(
+            "image_opened",
+            {
+                "hostname": metadata.get("hostname", "Unknown"),
+                "os_version": metadata.get("os_version", "Unknown"),
+                "domain": metadata.get("domain", "Unknown"),
+                "available_artifacts": [
+                    str(item.get("key"))
+                    for item in available_artifacts
+                    if item.get("available")
+                ],
+            },
+        )
+
+        with STATE_LOCK:
+            case["evidence_mode"] = evidence_payload["mode"]
+            case["source_path"] = evidence_payload["source_path"]
+            case["stored_path"] = evidence_payload["stored_path"]
+            case["uploaded_files"] = list(evidence_payload.get("uploaded_files", []))
+            case["evidence_path"] = str(dissect_path)
+            case["evidence_hashes"] = hashes
+            case["image_metadata"] = metadata
+            case["available_artifacts"] = available_artifacts
+
+        return success_response(
+            {
+                "case_id": case_id,
+                "source_mode": evidence_payload["mode"],
+                "source_path": evidence_payload["source_path"],
+                "evidence_path": str(dissect_path),
+                "uploaded_files": list(evidence_payload.get("uploaded_files", [])),
+                "hashes": hashes,
+                "metadata": metadata,
+                "available_artifacts": available_artifacts,
+            }
+        )
+    except (ValueError, FileNotFoundError) as error:
+        return error_response(str(error), 400)
+    except Exception:
+        LOGGER.exception("Evidence intake failed for case %s", case_id)
+        return error_response(
+            "Evidence intake failed due to an unexpected error. "
+            "Confirm the evidence file is supported and try again.",
+            500,
+        )
+
+
+@evidence_bp.get("/api/cases/<case_id>/report")
+def download_report(case_id: str) -> Response | tuple[Response, int]:
+    """Generate and download the HTML forensic analysis report.
+
+    Args:
+        case_id: UUID of the case.
+
+    Returns:
+        The HTML report as an attachment, or error.
+    """
+    case = get_case(case_id)
+    if case is None:
+        return error_response(f"Case not found: {case_id}", 404)
+
+    with STATE_LOCK:
+        case_snapshot = dict(case)
+        audit_logger = case["audit"]
+
+    hashes = dict(case_snapshot.get("evidence_hashes", {}))
+    intake_sha256 = str(hashes.get("sha256", "")).strip()
+    verification_path = resolve_hash_verification_path(case_snapshot)
+
+    if intake_sha256.startswith("N/A"):
+        hash_ok = True
+        computed_sha256 = intake_sha256
+    elif verification_path is None or not intake_sha256:
+        return error_response("Evidence hash context is missing for this case.", 400)
+    elif not verification_path.exists():
+        return error_response("Evidence file is no longer available for hash verification.", 404)
+    else:
+        hash_ok, computed_sha256 = verify_hash(
+            verification_path, intake_sha256, return_computed=True,
+        )
+    audit_logger.log(
+        "hash_verification",
+        {
+            "expected_sha256": intake_sha256,
+            "computed_sha256": computed_sha256,
+            "match": hash_ok,
+            "verification_path": str(verification_path),
+        },
+    )
+
+    hashes["case_id"] = case_id
+    hashes["expected_sha256"] = intake_sha256
+    hashes["hash_verified"] = hash_ok
+
+    analysis_results = dict(case_snapshot.get("analysis_results", {}))
+    analysis_results.setdefault("case_id", case_id)
+    analysis_results.setdefault("case_name", str(case_snapshot.get("case_name", "")))
+    analysis_results.setdefault("per_artifact", [])
+    analysis_results.setdefault("summary", "")
+
+    case_dir = case_snapshot["case_dir"]
+    investigation_context = str(case_snapshot.get("investigation_context", ""))
+    if not investigation_context:
+        prompt_path = Path(case_dir) / "prompt.txt"
+        if prompt_path.exists():
+            investigation_context = prompt_path.read_text(encoding="utf-8")
+
+    report_generator = ReportGenerator(cases_root=CASES_ROOT)
+    report_path = report_generator.generate(
+        analysis_results=analysis_results,
+        image_metadata=dict(case_snapshot.get("image_metadata", {})),
+        evidence_hashes=hashes,
+        investigation_context=investigation_context,
+        audit_log_entries=read_audit_entries(Path(case_dir)),
+    )
+    audit_logger.log(
+        "report_generated",
+        {"report_filename": report_path.name, "hash_verified": hash_ok},
+    )
+    mark_case_status(case_id, "completed")
+    cleanup_case_entries(case_id)
+
+    return send_file(
+        report_path,
+        as_attachment=True,
+        download_name=report_path.name,
+        mimetype="text/html",
+    )
+
+
+@evidence_bp.get("/api/cases/<case_id>/csvs")
+def download_csv_bundle(case_id: str) -> Response | tuple[Response, int]:
+    """Download all parsed CSV files as a ZIP archive.
+
+    Args:
+        case_id: UUID of the case.
+
+    Returns:
+        ZIP archive as attachment, or 404 error.
+    """
+    case = get_case(case_id)
+    if case is None:
+        return error_response(f"Case not found: {case_id}", 404)
+
+    with STATE_LOCK:
+        case_snapshot = dict(case)
+
+    csv_paths = collect_case_csv_paths(case_snapshot)
+    if not csv_paths:
+        return error_response("No parsed CSV files available for this case.", 404)
+
+    reports_dir = Path(case_snapshot["case_dir"]) / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    zip_path = reports_dir / f"parsed_csvs_{timestamp}.zip"
+    used_names: set[str] = set()
+    with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as archive:
+        for csv_path in csv_paths:
+            base_name = csv_path.name
+            arcname = base_name
+            counter = 1
+            while arcname in used_names:
+                stem = Path(base_name).stem
+                suffix = Path(base_name).suffix
+                arcname = f"{stem}_{counter}{suffix}"
+                counter += 1
+            used_names.add(arcname)
+            archive.write(csv_path, arcname=arcname)
+
+    return send_file(
+        zip_path,
+        as_attachment=True,
+        download_name=f"{case_id}_parsed_csvs.zip",
+        mimetype="application/zip",
+    )

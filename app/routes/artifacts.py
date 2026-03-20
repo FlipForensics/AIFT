@@ -1,4 +1,4 @@
-"""Artifact option normalisation, profile management, and validation helpers.
+"""Artifact option normalisation, profile management, validation, and route handlers.
 
 This module handles:
 
@@ -8,6 +8,7 @@ This module handles:
   ``recommended`` profile.
 * Analysis date-range validation.
 * Parse-progress extraction and prompt sanitisation utilities.
+* Flask route handlers for starting/streaming parse operations and profile CRUD.
 
 Attributes:
     PROFILE_NAME_RE: Regex for validating artifact profile names.
@@ -16,24 +17,40 @@ Attributes:
     PROFILE_FILE_SUFFIX: File extension for profile files.
     RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS: Artifacts excluded from the
         recommended profile.
+    artifact_bp: Flask Blueprint for artifact and parse routes.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 import re
 from typing import Any
 
+from flask import Blueprint, Response, current_app, jsonify, request
+
 from ..parser import ARTIFACT_REGISTRY
 from .state import (
     MODE_PARSE_AND_AI,
     MODE_PARSE_ONLY,
-    safe_name,
+    PARSE_PROGRESS,
+    STATE_LOCK,
+    emit_progress,
+    error_response,
+    get_case,
+    new_progress,
     safe_int,
+    safe_name,
+    stream_sse,
+    success_response,
 )
+
+# NOTE: .tasks imports are deferred to avoid circular import
+# (tasks.py imports from artifacts.py). See _get_task_runners().
 
 __all__ = [
     "PROFILE_NAME_RE",
@@ -41,6 +58,7 @@ __all__ = [
     "PROFILE_DIRNAME",
     "PROFILE_FILE_SUFFIX",
     "RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS",
+    "artifact_bp",
     "normalize_artifact_mode",
     "normalize_artifact_options",
     "artifact_options_to_lists",
@@ -536,3 +554,178 @@ def compose_profile_response(profiles_root: Path) -> list[dict[str, Any]]:
         }
         for profile in load_profiles_from_directory(profiles_root)
     ]
+
+
+# ---------------------------------------------------------------------------
+# Route handlers
+# ---------------------------------------------------------------------------
+
+artifact_bp = Blueprint("artifacts", __name__)
+
+
+@artifact_bp.post("/api/cases/<case_id>/parse")
+def start_parse(case_id: str) -> tuple[Response, int]:
+    """Start background parsing of selected forensic artifacts.
+
+    Args:
+        case_id: UUID of the case.
+
+    Returns:
+        ``(Response, 202)`` confirming start, or error.
+    """
+    case = get_case(case_id)
+    if case is None:
+        return error_response(f"Case not found: {case_id}", 404)
+    with STATE_LOCK:
+        has_evidence = bool(str(case.get("evidence_path", "")).strip())
+    if not has_evidence:
+        return error_response("No evidence loaded for this case.", 400)
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        artifact_options, parse_artifacts, analysis_artifacts = extract_parse_selection_payload(payload)
+    except ValueError as error:
+        return error_response(str(error), 400)
+
+    if not parse_artifacts:
+        return error_response("Provide at least one artifact key to parse.", 400)
+    try:
+        analysis_date_range = validate_analysis_date_range(payload.get("analysis_date_range"))
+    except ValueError as error:
+        return error_response(str(error), 400)
+
+    with STATE_LOCK:
+        parse_state = PARSE_PROGRESS.setdefault(case_id, new_progress())
+        if parse_state.get("status") == "running":
+            return error_response("Parsing is already running for this case.", 409)
+        PARSE_PROGRESS[case_id] = new_progress(status="running")
+        case["status"] = "running"
+        case["selected_artifacts"] = list(parse_artifacts)
+        case["analysis_artifacts"] = list(analysis_artifacts)
+        case["artifact_options"] = list(artifact_options)
+        case["analysis_date_range"] = analysis_date_range
+
+    parse_started_event: dict[str, Any] = {
+        "type": "parse_started",
+        "artifacts": parse_artifacts,
+        "analysis_artifacts": analysis_artifacts,
+        "artifact_options": artifact_options,
+        "total_artifacts": len(parse_artifacts),
+    }
+    if analysis_date_range is not None:
+        parse_started_event["analysis_date_range"] = analysis_date_range
+    emit_progress(PARSE_PROGRESS, case_id, parse_started_event)
+    config_snapshot = copy.deepcopy(current_app.config.get("AIFT_CONFIG", {}))
+    from .tasks import run_task_with_case_log_context, run_parse  # deferred to avoid circular import
+    threading.Thread(
+        target=run_task_with_case_log_context,
+        args=(case_id, run_parse, case_id, parse_artifacts, analysis_artifacts, artifact_options, config_snapshot),
+        daemon=True,
+    ).start()
+
+    response_payload: dict[str, Any] = {
+        "status": "started",
+        "case_id": case_id,
+        "artifacts": parse_artifacts,
+        "ai_artifacts": analysis_artifacts,
+        "artifact_options": artifact_options,
+    }
+    if analysis_date_range is not None:
+        response_payload["analysis_date_range"] = analysis_date_range
+    response_payload["success"] = True
+    return jsonify(response_payload), 202
+
+
+@artifact_bp.get("/api/cases/<case_id>/parse/progress")
+def stream_parse_progress(case_id: str) -> Response | tuple[Response, int]:
+    """Stream parsing progress events via SSE.
+
+    Args:
+        case_id: UUID of the case.
+
+    Returns:
+        SSE Response, or 404 error.
+    """
+    if get_case(case_id) is None:
+        return error_response(f"Case not found: {case_id}", 404)
+    return stream_sse(PARSE_PROGRESS, case_id)
+
+
+@artifact_bp.get("/api/artifact-profiles")
+def list_artifact_profiles() -> Response:
+    """List all available artifact profiles.
+
+    Returns:
+        JSON response with the ``profiles`` list.
+    """
+    config_path = Path(str(current_app.config.get("AIFT_CONFIG_PATH", "config.yaml")))
+    profiles_root = resolve_profiles_root(config_path)
+    return success_response({"profiles": compose_profile_response(profiles_root)})
+
+
+@artifact_bp.post("/api/artifact-profiles")
+def save_artifact_profile() -> Response | tuple[Response, int]:
+    """Create or update a user-defined artifact profile.
+
+    Returns:
+        JSON with saved profile and updated profiles list, or error.
+    """
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return error_response("Profile payload must be a JSON object.", 400)
+
+    try:
+        profile_name = normalize_profile_name(payload.get("name"))
+    except ValueError as error:
+        return error_response(str(error), 400)
+
+    try:
+        artifact_options = normalize_artifact_options(payload.get("artifact_options"))
+    except ValueError as error:
+        return error_response(str(error), 400)
+    if not artifact_options:
+        return error_response("Profile must include at least one artifact option.", 400)
+
+    config_path = Path(str(current_app.config.get("AIFT_CONFIG_PATH", "config.yaml")))
+    profiles_root = resolve_profiles_root(config_path)
+
+    try:
+        profiles = load_profiles_from_directory(profiles_root)
+        profile_key = profile_name.lower()
+        existing = next(
+            (
+                profile
+                for profile in profiles
+                if str(profile.get("name", "")).strip().lower() == profile_key
+            ),
+            None,
+        )
+        if existing is not None and bool(existing.get("builtin", False)):
+            return error_response("`recommended` is a built-in profile and cannot be overwritten.", 400)
+
+        if existing is not None:
+            target_path = Path(existing.get("path"))
+        else:
+            target_path = profile_path_for_new_name(profiles_root, profile_name)
+
+        response_profile = {
+            "name": profile_name,
+            "builtin": False,
+            "artifact_options": artifact_options,
+        }
+        write_profile_file(target_path, response_profile)
+    except OSError:
+        LOGGER.exception("Failed to save artifact profile '%s'", profile_name)
+        return error_response(
+            "Failed to save the profile due to a filesystem error. "
+            "Check directory permissions and retry.",
+            500,
+        )
+
+    return success_response(
+        {
+            "status": "saved",
+            "profile": response_profile,
+            "profiles": compose_profile_response(profiles_root),
+        }
+    )

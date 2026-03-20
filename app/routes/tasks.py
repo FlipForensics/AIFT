@@ -32,11 +32,9 @@ from ..case_logging import case_log_context
 from ..chat import ChatManager
 from ..parser import ForensicParser
 from .state import (
-    LOGGER as _ROUTES_LOGGER,
     PROJECT_ROOT,
     CHAT_HISTORY_MAX_PAIRS,
     DEFAULT_FORENSIC_SYSTEM_PROMPT,
-    MODE_PARSE_AND_AI,
     ANALYSIS_PROGRESS,
     CHAT_PROGRESS,
     PARSE_PROGRESS,
@@ -44,14 +42,12 @@ from .state import (
     emit_progress,
     get_case,
     mark_case_status,
-    new_progress,
     safe_int,
     set_progress_status,
 )
 from .artifacts import (
     extract_parse_progress,
     sanitize_prompt,
-    normalize_artifact_mode,
 )
 from .evidence import (
     build_csv_map,
