@@ -770,7 +770,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(len(fake_provider.attachments_calls[0]), 1)
         self.assertEqual(fake_provider.attachments_calls[0][0]["path"], str(expected_path))
         self.assertTrue(dedup_exists)
-        self.assertEqual(projected_header, "ts,name,command,username")
+        self.assertEqual(projected_header, "row_ref,ts,name,command,username")
         self.assertEqual(fake_provider.attachments_calls[0][0]["mime_type"], "text/csv")
 
     def test_prepare_artifact_data_deduplicates_rows_and_writes_deduplicated_csv(self) -> None:
@@ -897,7 +897,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertNotIn("key", dedup_header)
         self.assertEqual(
             dedup_header,
-            ["ts", "name", "command", "username", "_dedup_comment"],
+            ["row_ref", "ts", "name", "command", "username", "_dedup_comment"],
         )
         self.assertEqual(len(dedup_rows), 2)
 
@@ -1006,7 +1006,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("row_ref,ts,name", filled_prompt)
         self.assertNotIn("row_ref,ts,name,command,username", filled_prompt)
         self.assertIn("AI column projection applied: ts, name.", filled_prompt)
-        self.assertEqual(projected_header, "ts,name")
+        self.assertEqual(projected_header, "row_ref,ts,name")
 
     def test_load_artifact_ai_column_projection_config_logs_warning_on_yaml_error(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
@@ -2750,6 +2750,90 @@ class TestValidateCitationsStandalone(unittest.TestCase):
             validate_citations("art", "At 2099-12-31T00:00:00Z event.", csv_path, 20, audit_log_fn=audit_fn)
         self.assertGreater(len(audit_calls), 0)
         self.assertEqual(audit_calls[0][0], "citation_validation")
+
+
+class TestCitationRowRefAfterFiltering(unittest.TestCase):
+    """Regression tests: row_ref differs from physical row after filtering/dedup."""
+
+    def test_valid_row_ref_after_filtering(self) -> None:
+        """Row refs 3 and 5 survive filtering; physical rows are 1 and 2."""
+        from app.analyzer.citations import validate_citations
+        with TemporaryDirectory(prefix="aift-cite-") as tmp_dir:
+            csv_path = Path(tmp_dir) / "filtered.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["row_ref", "ts", "name"])
+                # Physical row 1, but row_ref=3
+                writer.writerow(["3", "2026-01-15T09:00:00Z", "alpha"])
+                # Physical row 2, but row_ref=5
+                writer.writerow(["5", "2026-01-15T10:00:00Z", "beta"])
+            # AI cites row 5 — should be valid via row_ref column
+            warnings = validate_citations("art", "See row 5 for details.", csv_path, 20)
+            row_warnings = [w for w in warnings if "row" in w.lower()]
+            self.assertEqual(len(row_warnings), 0, f"Unexpected warnings: {row_warnings}")
+
+    def test_invalid_row_ref_after_filtering(self) -> None:
+        """Row ref 2 was filtered out; citing it should produce a warning."""
+        from app.analyzer.citations import validate_citations
+        with TemporaryDirectory(prefix="aift-cite-") as tmp_dir:
+            csv_path = Path(tmp_dir) / "filtered.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["row_ref", "ts", "name"])
+                writer.writerow(["3", "2026-01-15T09:00:00Z", "alpha"])
+                writer.writerow(["5", "2026-01-15T10:00:00Z", "beta"])
+            # AI cites row 2 — was filtered out, should warn
+            warnings = validate_citations("art", "See row 2 for details.", csv_path, 20)
+            row_warnings = [w for w in warnings if "row" in w.lower()]
+            self.assertGreaterEqual(len(row_warnings), 1)
+
+    def test_physical_row_number_invalid_when_row_ref_present(self) -> None:
+        """Physical row 1 exists but row_ref=3; citing row 1 should warn."""
+        from app.analyzer.citations import validate_citations
+        with TemporaryDirectory(prefix="aift-cite-") as tmp_dir:
+            csv_path = Path(tmp_dir) / "filtered.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["row_ref", "ts", "name"])
+                writer.writerow(["3", "2026-01-15T09:00:00Z", "alpha"])
+            # AI cites row 1 (physical row) but row_ref is 3
+            warnings = validate_citations("art", "See row 1 for details.", csv_path, 20)
+            row_warnings = [w for w in warnings if "row" in w.lower()]
+            self.assertGreaterEqual(len(row_warnings), 1)
+
+    def test_row_ref_after_deduplication(self) -> None:
+        """After dedup, row_refs are non-contiguous; validation uses them."""
+        from app.analyzer.citations import validate_citations
+        with TemporaryDirectory(prefix="aift-cite-") as tmp_dir:
+            csv_path = Path(tmp_dir) / "deduped.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["row_ref", "ts", "name"])
+                writer.writerow(["1", "2026-01-15T09:00:00Z", "alpha"])
+                writer.writerow(["4", "2026-01-15T10:00:00Z", "beta"])
+                writer.writerow(["7", "2026-01-15T11:00:00Z", "gamma"])
+            # Row refs 1, 4, 7 are valid; row 2 is not
+            w1 = validate_citations("art", "See row 4 for details.", csv_path, 20)
+            self.assertEqual([w for w in w1 if "row" in w.lower()], [])
+            w2 = validate_citations("art", "See row 2 for details.", csv_path, 20)
+            self.assertGreaterEqual(len([w for w in w2 if "row" in w.lower()]), 1)
+
+    def test_write_analysis_csv_includes_row_ref(self) -> None:
+        """write_analysis_input_csv preserves _row_ref as row_ref column."""
+        from app.analyzer.data_prep import write_analysis_input_csv
+        with TemporaryDirectory(prefix="aift-prep-") as tmp_dir:
+            source = Path(tmp_dir) / "source.csv"
+            source.write_text("ts,name\na,b\n", encoding="utf-8")
+            rows = [
+                {"_row_ref": "3", "ts": "2026-01-15", "name": "alpha"},
+                {"_row_ref": "7", "ts": "2026-01-16", "name": "beta"},
+            ]
+            out_path = write_analysis_input_csv(source, rows, ["ts", "name"], case_dir=Path(tmp_dir))
+            content = out_path.read_text(encoding="utf-8")
+            lines = content.strip().split("\n")
+            self.assertTrue(lines[0].startswith("row_ref,"), f"Header: {lines[0]}")
+            self.assertIn("3,", lines[1])
+            self.assertIn("7,", lines[2])
 
 
 ###############################################################################

@@ -197,8 +197,14 @@ def validate_citations(
             reader = csv.DictReader(fh)
             csv_columns = [str(c) for c in (reader.fieldnames or []) if c not in (None, "")]
             ts_columns = [c for c in csv_columns if looks_like_timestamp_column(c)]
+            has_row_ref_col = "row_ref" in csv_columns
             for row_number, raw_row in enumerate(reader, start=1):
-                csv_row_refs.add(str(row_number))
+                if has_row_ref_col:
+                    ref_val = stringify_value(raw_row.get("row_ref"))
+                    if ref_val:
+                        csv_row_refs.add(ref_val)
+                else:
+                    csv_row_refs.add(str(row_number))
                 for col in ts_columns:
                     val = stringify_value(raw_row.get(col))
                     if val:

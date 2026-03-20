@@ -416,11 +416,19 @@ def write_analysis_input_csv(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / source_csv_path.name
 
+    write_columns = list(columns)
+    include_row_ref = "_row_ref" not in write_columns and any("_row_ref" in r for r in rows)
+    if include_row_ref:
+        write_columns = ["row_ref", *write_columns]
+
     with output_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+        writer = csv.DictWriter(handle, fieldnames=write_columns, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
-            writer.writerow({column: row.get(column, "") for column in columns})
+            out: dict[str, str] = {column: row.get(column, "") for column in columns}
+            if include_row_ref:
+                out["row_ref"] = row.get("_row_ref", "")
+            writer.writerow(out)
 
     return output_path
 
