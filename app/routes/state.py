@@ -398,6 +398,9 @@ def get_case(case_id: str) -> dict[str, Any] | None:
 def mark_case_status(case_id: str, status: str) -> None:
     """Update the in-memory status of a case. No-op if case missing.
 
+    When transitioning to a terminal status, records the monotonic timestamp
+    in ``_terminal_since`` so cleanup can apply a TTL grace period.
+
     Args:
         case_id: UUID of the case.
         status: New status string.
@@ -407,6 +410,8 @@ def mark_case_status(case_id: str, status: str) -> None:
         case = CASE_STATES.get(case_id)
         if case is not None:
             case["status"] = normalized
+            if normalized in TERMINAL_CASE_STATUSES and "_terminal_since" not in case:
+                case["_terminal_since"] = time.monotonic()
 
 
 def cleanup_case_entries(case_id: str) -> None:
@@ -464,28 +469,38 @@ def _evict_orphaned_progress(now: float) -> None:
 
 
 def cleanup_terminal_cases(exclude_case_id: str | None = None) -> None:
-    """Remove in-memory state for terminal or TTL-expired cases.
+    """Remove in-memory state for TTL-expired cases.
+
+    Terminal cases (completed, failed, error) are only evicted once their
+    ``_terminal_since`` timestamp exceeds ``CASE_TTL_SECONDS``, so that
+    post-analysis actions (chat, report, download) continue to work.
+    Non-terminal cases are evicted if their progress entries exceed the TTL.
+
+    Only in-memory state is removed; case data on disk is never deleted.
 
     Args:
         exclude_case_id: Optional case ID to exempt from cleanup.
     """
     now = time.monotonic()
     with STATE_LOCK:
-        terminal_case_ids = []
+        evict_case_ids = []
         for case_id, case in CASE_STATES.items():
             if case_id == exclude_case_id:
                 continue
             is_terminal = normalize_case_status(case.get("status")) in TERMINAL_CASE_STATUSES
-            is_expired = _is_case_expired(case_id, now)
-            if is_terminal or is_expired:
-                terminal_case_ids.append(case_id)
-        for case_id in terminal_case_ids:
+            if is_terminal:
+                terminal_since = case.get("_terminal_since", 0.0)
+                if terminal_since and (now - terminal_since) > CASE_TTL_SECONDS:
+                    evict_case_ids.append(case_id)
+            elif _is_case_expired(case_id, now):
+                evict_case_ids.append(case_id)
+        for case_id in evict_case_ids:
             CASE_STATES.pop(case_id, None)
             PARSE_PROGRESS.pop(case_id, None)
             ANALYSIS_PROGRESS.pop(case_id, None)
             CHAT_PROGRESS.pop(case_id, None)
         _evict_orphaned_progress(now)
-    for case_id in terminal_case_ids:
+    for case_id in evict_case_ids:
         unregister_case_log_handler(case_id)
 
 

@@ -387,23 +387,25 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("parse_completed", payload)
             self.assertNotIn('"type":"idle"', payload)
 
-    def test_create_case_cleans_up_terminal_case_entries(self) -> None:
+    def test_create_case_preserves_recent_terminal_cases(self) -> None:
+        """Creating a new case must NOT evict recently-completed cases."""
         with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
             with routes.STATE_LOCK:
-                routes.CASE_STATES["terminal-completed"] = {"status": "completed"}
+                routes.CASE_STATES["terminal-completed"] = {
+                    "status": "completed",
+                    "_terminal_since": time.monotonic(),
+                }
                 routes.PARSE_PROGRESS["terminal-completed"] = routes.new_progress(status="completed")
                 routes.ANALYSIS_PROGRESS["terminal-completed"] = routes.new_progress(status="completed")
                 routes.CHAT_PROGRESS["terminal-completed"] = routes.new_progress(status="completed")
 
-                routes.CASE_STATES["terminal-failed"] = {"status": "failed"}
+                routes.CASE_STATES["terminal-failed"] = {
+                    "status": "failed",
+                    "_terminal_since": time.monotonic(),
+                }
                 routes.PARSE_PROGRESS["terminal-failed"] = routes.new_progress(status="failed")
                 routes.ANALYSIS_PROGRESS["terminal-failed"] = routes.new_progress(status="idle")
                 routes.CHAT_PROGRESS["terminal-failed"] = routes.new_progress(status="failed")
-
-                routes.CASE_STATES["terminal-error"] = {"status": "error"}
-                routes.PARSE_PROGRESS["terminal-error"] = routes.new_progress(status="error")
-                routes.ANALYSIS_PROGRESS["terminal-error"] = routes.new_progress(status="idle")
-                routes.CHAT_PROGRESS["terminal-error"] = routes.new_progress(status="error")
 
                 routes.CASE_STATES["active-case"] = {"status": "running"}
                 routes.PARSE_PROGRESS["active-case"] = routes.new_progress(status="running")
@@ -414,26 +416,109 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(create_resp.status_code, 201)
             new_case_id = create_resp.get_json()["case_id"]
 
-            self.assertNotIn("terminal-completed", routes.CASE_STATES)
-            self.assertNotIn("terminal-completed", routes.PARSE_PROGRESS)
-            self.assertNotIn("terminal-completed", routes.ANALYSIS_PROGRESS)
-            self.assertNotIn("terminal-completed", routes.CHAT_PROGRESS)
-
-            self.assertNotIn("terminal-failed", routes.CASE_STATES)
-            self.assertNotIn("terminal-failed", routes.PARSE_PROGRESS)
-            self.assertNotIn("terminal-failed", routes.ANALYSIS_PROGRESS)
-            self.assertNotIn("terminal-failed", routes.CHAT_PROGRESS)
-
-            self.assertNotIn("terminal-error", routes.CASE_STATES)
-            self.assertNotIn("terminal-error", routes.PARSE_PROGRESS)
-            self.assertNotIn("terminal-error", routes.ANALYSIS_PROGRESS)
-            self.assertNotIn("terminal-error", routes.CHAT_PROGRESS)
-
+            # Recent terminal cases must survive
+            self.assertIn("terminal-completed", routes.CASE_STATES)
+            self.assertIn("terminal-failed", routes.CASE_STATES)
             self.assertIn("active-case", routes.CASE_STATES)
             self.assertIn(new_case_id, routes.CASE_STATES)
             self.assertIn(new_case_id, routes.PARSE_PROGRESS)
             self.assertIn(new_case_id, routes.ANALYSIS_PROGRESS)
             self.assertIn(new_case_id, routes.CHAT_PROGRESS)
+
+    def test_create_case_cleans_up_expired_terminal_cases(self) -> None:
+        """Terminal cases whose TTL has expired are evicted on new case creation."""
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            expired_time = time.monotonic() - routes_state.CASE_TTL_SECONDS - 1
+            with routes.STATE_LOCK:
+                routes.CASE_STATES["expired-completed"] = {
+                    "status": "completed",
+                    "_terminal_since": expired_time,
+                }
+                routes.PARSE_PROGRESS["expired-completed"] = routes.new_progress(status="completed")
+
+                routes.CASE_STATES["expired-error"] = {
+                    "status": "error",
+                    "_terminal_since": expired_time,
+                }
+                routes.PARSE_PROGRESS["expired-error"] = routes.new_progress(status="error")
+
+                routes.CASE_STATES["recent-completed"] = {
+                    "status": "completed",
+                    "_terminal_since": time.monotonic(),
+                }
+                routes.PARSE_PROGRESS["recent-completed"] = routes.new_progress(status="completed")
+
+            create_resp = self.client.post("/api/cases", json={"case_name": "Expire Test"})
+            self.assertEqual(create_resp.status_code, 201)
+
+            self.assertNotIn("expired-completed", routes.CASE_STATES)
+            self.assertNotIn("expired-completed", routes.PARSE_PROGRESS)
+            self.assertNotIn("expired-error", routes.CASE_STATES)
+            self.assertNotIn("expired-error", routes.PARSE_PROGRESS)
+            # Recent terminal case must survive
+            self.assertIn("recent-completed", routes.CASE_STATES)
+
+    def test_completed_case_usable_after_new_case_created(self) -> None:
+        """Complete case 1, create case 2, verify case 1 still serves chat/report/csv."""
+        evidence_path = Path(self.temp_dir.name) / "lifecycle.E01"
+        evidence_path.write_bytes(b"demo")
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes, "ReportGenerator", FakeReportGenerator),
+            patch.object(routes_handlers, "ReportGenerator", FakeReportGenerator),
+            patch.object(routes_evidence, "ReportGenerator", FakeReportGenerator),
+            patch.object(
+                routes, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch.object(
+                routes_handlers, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch.object(
+                routes_evidence, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch.object(routes, "verify_hash", return_value=(True, "a" * 64)),
+            patch.object(routes_handlers, "verify_hash", return_value=(True, "a" * 64)),
+            patch.object(routes_evidence, "verify_hash", return_value=(True, "a" * 64)),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+        ):
+            # --- Case 1: full workflow to completion ---
+            resp1 = self.client.post("/api/cases", json={"case_name": "Case One"})
+            self.assertEqual(resp1.status_code, 201)
+            case1_id = resp1.get_json()["case_id"]
+
+            self.client.post(f"/api/cases/{case1_id}/evidence", json={"path": str(evidence_path)})
+            self.client.post(f"/api/cases/{case1_id}/parse", json={"artifacts": ["runkeys"]})
+            self.client.post(f"/api/cases/{case1_id}/analyze", json={"prompt": "Investigate"})
+
+            self.assertEqual(routes.CASE_STATES[case1_id]["status"], "completed")
+
+            # --- Case 2: creating it must NOT strand case 1 ---
+            resp2 = self.client.post("/api/cases", json={"case_name": "Case Two"})
+            self.assertEqual(resp2.status_code, 201)
+
+            # Case 1 must still be in memory
+            self.assertIn(case1_id, routes.CASE_STATES)
+
+            # Post-analysis endpoints must still work for case 1
+            report_resp = self.client.get(f"/api/cases/{case1_id}/report")
+            self.assertEqual(report_resp.status_code, 200)
+
+            csv_resp = self.client.get(f"/api/cases/{case1_id}/csvs")
+            self.assertEqual(csv_resp.status_code, 200)
+
+            history_resp = self.client.get(f"/api/cases/{case1_id}/chat/history")
+            self.assertEqual(history_resp.status_code, 200)
 
     def test_evidence_upload_includes_split_ewf_segments(self) -> None:
         class CapturingParser(FakeParser):
@@ -2401,16 +2486,103 @@ class StateHelperTests(unittest.TestCase):
         self.assertEqual(result, ["valid.key"])
 
     def test_cleanup_terminal_cases_excludes_specified(self) -> None:
+        """Excluded case survives cleanup even when TTL-expired."""
         routes_state.CASE_STATES.clear()
         routes_state.PARSE_PROGRESS.clear()
         routes_state.ANALYSIS_PROGRESS.clear()
         routes_state.CHAT_PROGRESS.clear()
-        routes_state.CASE_STATES["keep-me"] = {"status": "completed"}
-        routes_state.CASE_STATES["remove-me"] = {"status": "completed"}
+        expired_time = time.monotonic() - routes_state.CASE_TTL_SECONDS - 1
+        routes_state.CASE_STATES["keep-me"] = {
+            "status": "completed", "_terminal_since": expired_time,
+        }
+        routes_state.CASE_STATES["remove-me"] = {
+            "status": "completed", "_terminal_since": expired_time,
+        }
         routes_state.cleanup_terminal_cases(exclude_case_id="keep-me")
         self.assertIn("keep-me", routes_state.CASE_STATES)
         self.assertNotIn("remove-me", routes_state.CASE_STATES)
         routes_state.CASE_STATES.clear()
+
+    def test_cleanup_terminal_cases_preserves_recent(self) -> None:
+        """Recently-completed cases survive cleanup."""
+        routes_state.CASE_STATES.clear()
+        routes_state.PARSE_PROGRESS.clear()
+        routes_state.ANALYSIS_PROGRESS.clear()
+        routes_state.CHAT_PROGRESS.clear()
+        routes_state.CASE_STATES["recent"] = {
+            "status": "completed", "_terminal_since": time.monotonic(),
+        }
+        routes_state.cleanup_terminal_cases()
+        self.assertIn("recent", routes_state.CASE_STATES)
+        routes_state.CASE_STATES.clear()
+
+    def test_mark_case_status_sets_terminal_since(self) -> None:
+        """Transitioning to terminal status records _terminal_since."""
+        routes_state.CASE_STATES["ts-test"] = {"status": "active"}
+        before = time.monotonic()
+        routes_state.mark_case_status("ts-test", "completed")
+        after = time.monotonic()
+        terminal_since = routes_state.CASE_STATES["ts-test"]["_terminal_since"]
+        self.assertGreaterEqual(terminal_since, before)
+        self.assertLessEqual(terminal_since, after)
+        # Second call should not overwrite
+        routes_state.mark_case_status("ts-test", "completed")
+        self.assertEqual(routes_state.CASE_STATES["ts-test"]["_terminal_since"], terminal_since)
+        routes_state.CASE_STATES.clear()
+
+    def test_cleanup_never_deletes_case_from_disk(self) -> None:
+        """Cleanup only removes in-memory state, never disk data."""
+        with TemporaryDirectory(prefix="aift-cleanup-disk-") as tmpdir:
+            case_dir = Path(tmpdir) / "cases" / "disk-test"
+            case_dir.mkdir(parents=True)
+            (case_dir / "audit.jsonl").write_text("{}\n", encoding="utf-8")
+            (case_dir / "parsed").mkdir()
+            (case_dir / "parsed" / "runkeys.csv").write_text("col\nval\n", encoding="utf-8")
+
+            expired_time = time.monotonic() - routes_state.CASE_TTL_SECONDS - 1
+            routes_state.CASE_STATES.clear()
+            routes_state.PARSE_PROGRESS.clear()
+            routes_state.ANALYSIS_PROGRESS.clear()
+            routes_state.CHAT_PROGRESS.clear()
+            routes_state.CASE_STATES["disk-test"] = {
+                "status": "completed",
+                "case_dir": str(case_dir),
+                "_terminal_since": expired_time,
+            }
+            routes_state.PARSE_PROGRESS["disk-test"] = routes_state.new_progress(status="completed")
+
+            routes_state.cleanup_terminal_cases()
+
+            # Memory evicted
+            self.assertNotIn("disk-test", routes_state.CASE_STATES)
+            # Disk intact
+            self.assertTrue(case_dir.exists())
+            self.assertTrue((case_dir / "audit.jsonl").exists())
+            self.assertTrue((case_dir / "parsed" / "runkeys.csv").exists())
+            routes_state.CASE_STATES.clear()
+
+    def test_cleanup_case_entries_never_deletes_disk(self) -> None:
+        """Explicit cleanup_case_entries only removes in-memory state."""
+        with TemporaryDirectory(prefix="aift-entry-disk-") as tmpdir:
+            case_dir = Path(tmpdir) / "cases" / "entry-disk-test"
+            case_dir.mkdir(parents=True)
+            (case_dir / "audit.jsonl").write_text("{}\n", encoding="utf-8")
+            (case_dir / "reports").mkdir()
+            (case_dir / "reports" / "report.html").write_text("<html/>", encoding="utf-8")
+
+            routes_state.CASE_STATES["entry-disk-test"] = {
+                "status": "completed",
+                "case_dir": str(case_dir),
+            }
+            routes_state.PARSE_PROGRESS["entry-disk-test"] = routes_state.new_progress()
+            routes_state.ANALYSIS_PROGRESS["entry-disk-test"] = routes_state.new_progress()
+            routes_state.CHAT_PROGRESS["entry-disk-test"] = routes_state.new_progress()
+
+            routes_state.cleanup_case_entries("entry-disk-test")
+
+            self.assertNotIn("entry-disk-test", routes_state.CASE_STATES)
+            self.assertTrue(case_dir.exists())
+            self.assertTrue((case_dir / "reports" / "report.html").exists())
 
 
 class EvidenceHelperTests(unittest.TestCase):
