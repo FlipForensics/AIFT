@@ -84,6 +84,8 @@ __all__ = [
     "stream_sse",
     "get_case",
     "mark_case_status",
+    "cancel_progress",
+    "is_cancelled",
     "cleanup_case_entries",
     "cleanup_terminal_cases",
     "mask_sensitive",
@@ -278,6 +280,49 @@ def set_progress_status(
         state = store.setdefault(case_id, new_progress())
         state["status"] = status
         state["error"] = error
+
+
+def cancel_progress(
+    store: dict[str, dict[str, Any]],
+    case_id: str,
+) -> bool:
+    """Mark a running progress entry as cancelled.
+
+    Thread-safe: acquires ``STATE_LOCK``.
+
+    Args:
+        store: One of the progress dicts.
+        case_id: UUID of the case.
+
+    Returns:
+        ``True`` if the entry was running and is now cancelled, ``False`` otherwise.
+    """
+    with STATE_LOCK:
+        state = store.get(case_id)
+        if state is None or state.get("status") != "running":
+            return False
+        state["status"] = "cancelled"
+        return True
+
+
+def is_cancelled(
+    store: dict[str, dict[str, Any]],
+    case_id: str,
+) -> bool:
+    """Check whether a progress entry has been cancelled.
+
+    Thread-safe: acquires ``STATE_LOCK``.
+
+    Args:
+        store: One of the progress dicts.
+        case_id: UUID of the case.
+
+    Returns:
+        ``True`` if the entry status is ``"cancelled"``.
+    """
+    with STATE_LOCK:
+        state = store.get(case_id)
+        return state is not None and state.get("status") == "cancelled"
 
 
 def emit_progress(

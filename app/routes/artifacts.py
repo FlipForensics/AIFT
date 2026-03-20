@@ -39,6 +39,7 @@ from .state import (
     MODE_PARSE_ONLY,
     PARSE_PROGRESS,
     STATE_LOCK,
+    cancel_progress,
     emit_progress,
     error_response,
     get_case,
@@ -651,6 +652,24 @@ def stream_parse_progress(case_id: str) -> Response | tuple[Response, int]:
     if get_case(case_id) is None:
         return error_response(f"Case not found: {case_id}", 404)
     return stream_sse(PARSE_PROGRESS, case_id)
+
+
+@artifact_bp.post("/api/cases/<case_id>/parse/cancel")
+def cancel_parse(case_id: str) -> tuple[Response, int]:
+    """Cancel a running parse operation for a case.
+
+    Args:
+        case_id: UUID of the case.
+
+    Returns:
+        ``(Response, 200)`` confirming cancellation, or error.
+    """
+    if get_case(case_id) is None:
+        return error_response(f"Case not found: {case_id}", 404)
+    cancelled = cancel_progress(PARSE_PROGRESS, case_id)
+    if not cancelled:
+        return error_response("No running parse to cancel.", 409)
+    return success_response({"status": "cancelling", "case_id": case_id})
 
 
 @artifact_bp.get("/api/artifact-profiles")

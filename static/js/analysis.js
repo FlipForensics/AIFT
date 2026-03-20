@@ -343,15 +343,20 @@
       st.analysis.abort = null;
     }
     closeAnalysisSse();
-    if (!st.analysis.run) return;
+    const wasRunning = st.analysis.run;
+    if (!wasRunning) return;
     st.analysis.run = false;
     st.analysis.done = false;
-    st.analysis.fail = true;
+    st.analysis.fail = false;
     A.stopTimer("analysis");
     if (el.runBtn) el.runBtn.disabled = false;
     if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
     A.setMsg(el.analysisMsg, "Analysis cancelled.", "info");
     A.updateNav();
+    const caseId = A.activeCaseId();
+    if (caseId) {
+      fetch(`/api/cases/${caseId}/analyze/cancel`, { method: "POST" }).catch(() => {});
+    }
   }
 
   function resetAnalysisState() {

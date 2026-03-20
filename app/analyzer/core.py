@@ -66,7 +66,11 @@ except Exception as error:
     )
     ARTIFACT_REGISTRY: dict[str, dict[str, str]] = {}
 
-__all__ = ["ForensicAnalyzer"]
+__all__ = ["AnalysisCancelledError", "ForensicAnalyzer"]
+
+
+class AnalysisCancelledError(Exception):
+    """Raised when analysis is cancelled by the user."""
 
 
 class ForensicAnalyzer:
@@ -968,6 +972,7 @@ class ForensicAnalyzer:
         investigation_context: str,
         metadata: Mapping[str, Any] | None,
         progress_callback: Any | None = None,
+        cancel_check: Any | None = None,
     ) -> dict[str, Any]:
         """Run the complete analysis pipeline: per-artifact then summary.
 
@@ -976,9 +981,14 @@ class ForensicAnalyzer:
             investigation_context: The user's investigation context.
             metadata: Optional metadata mapping.
             progress_callback: Optional callable for streaming progress.
+            cancel_check: Optional callable returning ``True`` when the
+                analysis should be aborted early.
 
         Returns:
             A dict with ``per_artifact``, ``summary``, and ``model_info``.
+
+        Raises:
+            AnalysisCancelledError: If *cancel_check* returns ``True``.
         """
         if isinstance(self.ai_provider, UnavailableProvider):
             raise AIProviderError(self.ai_provider._error_message)
@@ -987,6 +997,8 @@ class ForensicAnalyzer:
         self._configure_explicit_analysis_date_range(metadata)
         per_artifact_results: list[dict[str, Any]] = []
         for artifact_key in artifact_keys:
+            if cancel_check is not None and cancel_check():
+                raise AnalysisCancelledError("Analysis cancelled by user.")
             result = self.analyze_artifact(
                 artifact_key=str(artifact_key),
                 investigation_context=investigation_context,

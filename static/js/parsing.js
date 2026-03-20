@@ -242,14 +242,19 @@
       st.parse.abort = null;
     }
     closeParseSse();
-    if (!st.parse.run) return;
+    const wasRunning = st.parse.run;
+    if (!wasRunning) return;
     st.parse.run = false;
     st.parse.done = false;
-    st.parse.fail = true;
+    st.parse.fail = false;
     A.stopTimer("parse");
     A.setMsg(el.parseErr, "Parsing cancelled.", "info");
     A.updateParseButton();
     A.updateNav();
+    const caseId = A.activeCaseId();
+    if (caseId) {
+      fetch(`/api/cases/${caseId}/parse/cancel`, { method: "POST" }).catch(() => {});
+    }
   }
 
   function resetParseState() {

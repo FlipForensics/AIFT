@@ -18,6 +18,7 @@ from flask import Blueprint, Response, current_app, request
 from .state import (
     STATE_LOCK,
     ANALYSIS_PROGRESS,
+    cancel_progress,
     error_response,
     success_response,
     get_case,
@@ -133,3 +134,21 @@ def stream_analysis_progress(case_id: str) -> Response | tuple[Response, int]:
     if get_case(case_id) is None:
         return error_response(f"Case not found: {case_id}", 404)
     return stream_sse(ANALYSIS_PROGRESS, case_id)
+
+
+@analysis_bp.post("/api/cases/<case_id>/analyze/cancel")
+def cancel_analysis_route(case_id: str) -> tuple[Response, int]:
+    """Cancel a running analysis operation for a case.
+
+    Args:
+        case_id: UUID of the case.
+
+    Returns:
+        ``(Response, 200)`` confirming cancellation, or error.
+    """
+    if get_case(case_id) is None:
+        return error_response(f"Case not found: {case_id}", 404)
+    cancelled = cancel_progress(ANALYSIS_PROGRESS, case_id)
+    if not cancelled:
+        return error_response("No running analysis to cancel.", 409)
+    return success_response({"status": "cancelling", "case_id": case_id})

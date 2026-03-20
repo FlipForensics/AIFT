@@ -28,6 +28,7 @@ from typing import Any
 
 from ..ai_providers import AIProviderError, create_provider
 from ..analyzer import ForensicAnalyzer
+from ..analyzer.core import AnalysisCancelledError
 from ..case_logging import case_log_context
 from ..chat import ChatManager
 from ..parser import ForensicParser
@@ -41,6 +42,7 @@ from .state import (
     STATE_LOCK,
     emit_progress,
     get_case,
+    is_cancelled,
     mark_case_status,
     safe_int,
     set_progress_status,
@@ -372,6 +374,13 @@ def run_parse(
             total = len(parse_artifacts)
 
             for index, artifact in enumerate(parse_artifacts, start=1):
+                if is_cancelled(PARSE_PROGRESS, case_id):
+                    LOGGER.info("Parsing cancelled for case %s before artifact %s", case_id, artifact)
+                    mark_case_status(case_id, "cancelled")
+                    emit_progress(PARSE_PROGRESS, case_id, {
+                        "type": "parse_failed", "error": "Parsing cancelled by user.",
+                    })
+                    return
                 emit_progress(
                     PARSE_PROGRESS, case_id,
                     {"type": "artifact_started", "artifact_key": artifact, "index": index, "total": total},
@@ -546,6 +555,7 @@ def run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> 
             investigation_context=prompt,
             metadata=metadata,
             progress_callback=_analysis_progress,
+            cancel_check=lambda: is_cancelled(ANALYSIS_PROGRESS, case_id),
         )
         analysis_results_path = Path(case_dir) / "analysis_results.json"
         with analysis_results_path.open("w", encoding="utf-8") as analysis_results_file:
@@ -567,6 +577,12 @@ def run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> 
             "per_artifact": list(output.get("per_artifact", [])),
         })
         mark_case_status(case_id, "completed")
+    except AnalysisCancelledError:
+        LOGGER.info("Analysis cancelled for case %s", case_id)
+        mark_case_status(case_id, "cancelled")
+        emit_progress(ANALYSIS_PROGRESS, case_id, {
+            "type": "analysis_failed", "error": "Analysis cancelled by user.",
+        })
     except Exception:
         LOGGER.exception("Background analysis failed for case %s", case_id)
         user_message = (
