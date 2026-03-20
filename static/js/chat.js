@@ -401,8 +401,16 @@
         appendDataRetrievedIndicator(pending.bubble, files);
       }
       finalizePendingChatMessage();
-      st.chat.historyLoadedCaseId = caseId;
       finalizeChatStream();
+      // Re-trigger history load now that the stream is done.  If the
+      // initial load was skipped because the user sent a message while
+      // it was in flight, historyLoadedCaseId was never set and this
+      // call will fetch & render the full history (which now includes
+      // the just-completed exchange).  If history was already loaded
+      // successfully, this is a no-op (early-exit on matching id).
+      loadChatHistory().catch((e) =>
+        A.setMsg(el.resultsMsg, `Unable to load chat history: ${e.message}`, "error")
+      );
       return;
     }
     if (type === "error") {
