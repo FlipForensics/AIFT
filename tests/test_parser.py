@@ -626,6 +626,84 @@ class ParserTests(unittest.TestCase):
         self.assertTrue(callback.call_count >= 2)
 
 
+    def test_evtx_schema_expansion_preserves_later_fields(self) -> None:
+        """EVTX records with expanding schemas must not lose extra columns.
+
+        Record 1 has fields A and B; record 2 has A, B, and C.
+        The final CSV must contain column C with the correct value,
+        and earlier rows must have an empty string for C.
+        """
+
+        class EvtxTarget:
+            def evtx(self) -> list[FakeRecord]:
+                return [
+                    FakeRecord({"channel": "Security", "A": "a1", "B": "b1"}),
+                    FakeRecord({"channel": "Security", "A": "a2", "B": "b2", "C": "c2"}),
+                ]
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(EvtxTarget(), Path(temp_dir), audit)
+            result = parser.parse_artifact("evtx")
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["record_count"], 2)
+
+            csv_path = Path(temp_dir) / "parsed" / "evtx_Security.csv"
+            self.assertTrue(csv_path.exists())
+
+            with csv_path.open("r", newline="", encoding="utf-8") as fh:
+                rows = list(csv.DictReader(fh))
+
+        self.assertEqual(len(rows), 2)
+        # Column C must be present in headers
+        self.assertIn("C", rows[0])
+        self.assertIn("C", rows[1])
+        # First row should have empty C, second row has the value
+        self.assertEqual(rows[0]["C"], "")
+        self.assertEqual(rows[1]["C"], "c2")
+        # Original fields still intact
+        self.assertEqual(rows[0]["A"], "a1")
+        self.assertEqual(rows[1]["A"], "a2")
+
+    def test_evtx_schema_expansion_across_channels(self) -> None:
+        """Schema expansion works independently per channel group."""
+
+        class EvtxTarget:
+            def evtx(self) -> list[FakeRecord]:
+                return [
+                    FakeRecord({"channel": "Security", "X": "1"}),
+                    FakeRecord({"channel": "System", "X": "2", "Y": "3"}),
+                    FakeRecord({"channel": "Security", "X": "4", "Z": "5"}),
+                ]
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(EvtxTarget(), Path(temp_dir), audit)
+            result = parser.parse_artifact("evtx")
+
+            self.assertTrue(result["success"])
+
+            sec_csv = Path(temp_dir) / "parsed" / "evtx_Security.csv"
+            sys_csv = Path(temp_dir) / "parsed" / "evtx_System.csv"
+
+            with sec_csv.open("r", newline="", encoding="utf-8") as fh:
+                sec_rows = list(csv.DictReader(fh))
+            with sys_csv.open("r", newline="", encoding="utf-8") as fh:
+                sys_rows = list(csv.DictReader(fh))
+
+        # Security: first row missing Z, second has it
+        self.assertEqual(len(sec_rows), 2)
+        self.assertIn("Z", sec_rows[0])
+        self.assertEqual(sec_rows[0]["Z"], "")
+        self.assertEqual(sec_rows[1]["Z"], "5")
+
+        # System should NOT have Z column (different channel)
+        self.assertEqual(len(sys_rows), 1)
+        self.assertNotIn("Z", sys_rows[0])
+        self.assertIn("Y", sys_rows[0])
+
+
 class RecordToDictTests(unittest.TestCase):
     """Tests for ForensicParser._record_to_dict with various value types."""
 

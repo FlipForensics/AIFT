@@ -493,12 +493,27 @@ class ForensicParser:
                 if writer_state["fieldnames"] is None:
                     fieldnames = [str(key) for key in record_dict.keys()]
                     writer_state["fieldnames"] = fieldnames
+                    writer_state["fieldnames_set"] = set(fieldnames)
                     writer_state["writer"] = csv.DictWriter(
                         writer_state["handle"],
                         fieldnames=fieldnames,
                         extrasaction="ignore",
                     )
                     writer_state["writer"].writeheader()
+                else:
+                    new_keys = [
+                        str(k) for k in record_dict.keys()
+                        if str(k) not in writer_state["fieldnames_set"]
+                    ]
+                    if new_keys:
+                        writer_state["fieldnames"].extend(new_keys)
+                        writer_state["fieldnames_set"].update(new_keys)
+                        writer_state["headers_expanded"] = True
+                        writer_state["writer"] = csv.DictWriter(
+                            writer_state["handle"],
+                            fieldnames=writer_state["fieldnames"],
+                            extrasaction="ignore",
+                        )
 
                 fieldnames = writer_state["fieldnames"]
                 row = {
@@ -515,6 +530,12 @@ class ForensicParser:
             for writer_state in writers.values():
                 writer_state["handle"].close()
 
+        for writer_state in writers.values():
+            if writer_state["headers_expanded"] and writer_state["records_in_file"] > 0:
+                self._rewrite_csv_with_expanded_headers(
+                    writer_state["path"], writer_state["fieldnames"],
+                )
+
         if progress_callback is not None:
             self._emit_progress(progress_callback, artifact_key, record_count)
 
@@ -530,7 +551,8 @@ class ForensicParser:
 
         Returns:
             Dictionary containing ``path``, ``handle``, ``writer``,
-            ``fieldnames``, ``records_in_file``, and ``part``.
+            ``fieldnames``, ``fieldnames_set``, ``headers_expanded``,
+            ``records_in_file``, and ``part``.
         """
         artifact_stub = self._sanitize_filename(artifact_key)
         group_stub = self._sanitize_filename(group_name)
@@ -543,6 +565,8 @@ class ForensicParser:
             "handle": handle,
             "writer": None,
             "fieldnames": None,
+            "fieldnames_set": None,
+            "headers_expanded": False,
             "records_in_file": 0,
             "part": part,
         }
