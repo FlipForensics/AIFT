@@ -49,7 +49,7 @@ from ..case_logging import (
     push_case_log_context,
     register_case_log_handler,
 )
-from ..config import load_config, save_config
+from ..config import load_config, save_config, validate_config
 from ..hasher import compute_hashes, verify_hash  # noqa: F401 -- re-exported
 from ..parser import ARTIFACT_REGISTRY, ForensicParser  # noqa: F401 -- re-exported
 from ..reporter import ReportGenerator  # noqa: F401 -- re-exported
@@ -285,6 +285,13 @@ def update_settings() -> Response | tuple[Response, int]:
     config_path = Path(str(current_app.config.get("AIFT_CONFIG_PATH", "config.yaml")))
     current_config = load_config(config_path, use_env_overrides=False)
     changed_keys = deep_merge(current_config, payload)
+
+    validation_errors = validate_config(current_config)
+    if validation_errors:
+        return error_response(
+            f"Invalid settings: {'; '.join(validation_errors)}", 400
+        )
+
     save_config(current_config, config_path)
 
     refreshed = load_config(config_path)

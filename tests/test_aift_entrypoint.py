@@ -293,7 +293,36 @@ class TestMainCallsAssertVersion(unittest.TestCase):
         self.assertIn("create_app", call_order)
 
 
-class TestMainDebugAndReloaderDisabled(unittest.TestCase):
+class TestMainInvalidConfig(unittest.TestCase):
+    """Tests for main() when the persisted config is invalid."""
+
+    def test_main_exits_with_code_1_on_invalid_config(self) -> None:
+        """A bad config.yaml should produce SystemExit(1) with a clear message."""
+        from app.config import ConfigurationError
+
+        config_error = ConfigurationError(["server.port: must be an integer between 1 and 65535, got 'bad'"])
+
+        with (
+            patch.object(aift, "assert_supported_python_version"),
+            patch.dict("sys.modules", {
+                "app": MagicMock(create_app=MagicMock()),
+                "app.config": MagicMock(
+                    load_config=MagicMock(side_effect=config_error),
+                    ConfigurationError=ConfigurationError,
+                ),
+            }),
+            patch("builtins.print") as mock_print,
+        ):
+            with self.assertRaises(SystemExit) as ctx:
+                aift.main()
+
+            self.assertEqual(ctx.exception.code, 1)
+            printed = mock_print.call_args[0][0]
+            self.assertIn("server.port", printed)
+            self.assertIn("Cannot start AIFT", printed)
+
+
+
     """Ensure the Flask app always runs with debug and reloader off."""
 
     def test_debug_false(self) -> None:

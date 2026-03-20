@@ -9,6 +9,7 @@ from unittest.mock import patch
 import yaml
 
 from app.config import (
+    ConfigurationError,
     DEFAULT_CONFIG,
     KNOWN_AI_PROVIDERS,
     LOGO_FILE_CANDIDATES,
@@ -691,6 +692,61 @@ class SaveConfigTests(unittest.TestCase):
             save_config({"note": "unicode test: \u00e9\u00e0\u00fc\u00f1"}, config_path)
             content = config_path.read_text(encoding="utf-8")
             self.assertIn("unicode test", content)
+
+
+class LoadConfigValidationEnforcementTests(unittest.TestCase):
+    """Regression tests: load_config must reject invalid persisted configs."""
+
+    def test_load_config_raises_on_invalid_port(self) -> None:
+        """A persisted config with an out-of-range port must raise ConfigurationError."""
+        with TemporaryDirectory(prefix="aift-config-test-") as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                yaml.safe_dump({"server": {"port": "not-a-number"}}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ConfigurationError) as ctx:
+                load_config(config_path, use_env_overrides=False)
+            self.assertTrue(any("server.port" in e for e in ctx.exception.errors))
+
+    def test_load_config_raises_on_invalid_provider(self) -> None:
+        """A persisted config with an unknown AI provider must raise ConfigurationError."""
+        with TemporaryDirectory(prefix="aift-config-test-") as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                yaml.safe_dump({"ai": {"provider": "doesnotexist"}}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ConfigurationError) as ctx:
+                load_config(config_path, use_env_overrides=False)
+            self.assertTrue(any("ai.provider" in e for e in ctx.exception.errors))
+
+    def test_load_config_error_contains_all_issues(self) -> None:
+        """ConfigurationError should list every validation failure."""
+        with TemporaryDirectory(prefix="aift-config-test-") as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                yaml.safe_dump({
+                    "server": {"port": -1, "host": "", "max_upload_mb": 0},
+                    "ai": {"provider": "bad"},
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ConfigurationError) as ctx:
+                load_config(config_path, use_env_overrides=False)
+            self.assertGreaterEqual(len(ctx.exception.errors), 4)
+
+    def test_valid_config_still_loads_successfully(self) -> None:
+        """Ensure valid configs are not rejected by the new strictness."""
+        with TemporaryDirectory(prefix="aift-config-test-") as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                yaml.safe_dump({"server": {"port": 8080}, "ai": {"provider": "openai"}}),
+                encoding="utf-8",
+            )
+            config = load_config(config_path, use_env_overrides=False)
+            self.assertEqual(config["server"]["port"], 8080)
+            self.assertEqual(config["ai"]["provider"], "openai")
 
 
 if __name__ == "__main__":

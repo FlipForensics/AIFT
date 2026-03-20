@@ -34,9 +34,18 @@ def main() -> None:
     assert_supported_python_version()
 
     from app import create_app
-    from app.config import load_config
+    from app.config import ConfigurationError, load_config
 
-    config = load_config()
+    try:
+        config = load_config()
+    except ConfigurationError as exc:
+        print(
+            f"ERROR: Cannot start AIFT — invalid configuration:\n"
+            + "\n".join(f"  - {e}" for e in exc.errors),
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+
     server_config = config.get("server", {})
     host = server_config.get("host", "127.0.0.1")
     port = int(server_config.get("port", 5000))

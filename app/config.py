@@ -36,6 +36,7 @@ __all__ = [
     "get_default_config",
     "apply_env_overrides",
     "validate_config",
+    "ConfigurationError",
     "PROJECT_ROOT",
     "DEFAULT_CONFIG",
     "KNOWN_AI_PROVIDERS",
@@ -43,6 +44,20 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+
+class ConfigurationError(Exception):
+    """Raised when the configuration fails validation.
+
+    Attributes:
+        errors: List of human-readable validation error strings.
+    """
+
+    def __init__(self, errors: list[str]) -> None:
+        self.errors = errors
+        joined = "; ".join(errors)
+        super().__init__(f"Invalid configuration: {joined}")
+
 
 KNOWN_AI_PROVIDERS = ("claude", "openai", "kimi", "local")
 
@@ -297,9 +312,11 @@ def load_config(path: str | Path | None = None, use_env_overrides: bool = True) 
     if use_env_overrides:
         apply_env_overrides(config)
 
-    warnings = validate_config(config)
-    for warning in warnings:
-        logger.warning("Config validation: %s", warning)
+    errors = validate_config(config)
+    if errors:
+        for error in errors:
+            logger.error("Config validation: %s", error)
+        raise ConfigurationError(errors)
 
     return config
 

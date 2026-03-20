@@ -2064,6 +2064,48 @@ class RoutesTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 500)
         self.assertIn("Unexpected error", resp.get_json()["error"])
 
+    def test_settings_update_rejects_invalid_port(self) -> None:
+        """Invalid settings must be rejected with 400 and NOT persisted."""
+        original = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
+        original_port = original.get("server", {}).get("port", 5000)
+
+        resp = self.client.post(
+            "/api/settings",
+            json={"server": {"port": "not-a-number"}},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("server.port", resp.get_json()["error"])
+
+        # Config on disk must be unchanged.
+        persisted = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
+        self.assertEqual(persisted.get("server", {}).get("port", 5000), original_port)
+
+    def test_settings_update_rejects_invalid_provider(self) -> None:
+        """An unknown AI provider must be rejected with 400."""
+        resp = self.client.post(
+            "/api/settings",
+            json={"ai": {"provider": "doesnotexist"}},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("ai.provider", resp.get_json()["error"])
+
+    def test_settings_update_preserves_valid_after_invalid_attempt(self) -> None:
+        """After a rejected update, a valid update should still work."""
+        # First: invalid
+        resp = self.client.post(
+            "/api/settings",
+            json={"server": {"port": -1}},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+        # Then: valid
+        resp = self.client.post(
+            "/api/settings",
+            json={"server": {"port": 9999}},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["server"]["port"], 9999)
+
     def test_settings_test_connection_empty_reply(self) -> None:
         class EmptyReplyProvider:
             def analyze(self, system_prompt: str, user_prompt: str, max_tokens: int = 256) -> str:
