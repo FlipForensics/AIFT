@@ -894,6 +894,22 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
     hashes["hash_verified"] = hash_ok
 
     analysis_results = dict(case_snapshot.get("analysis_results", {}))
+
+    # Require that a real analysis has been completed before generating a
+    # report.  Without this guard, an empty "successful" report could be
+    # produced and the case would be incorrectly transitioned to completed.
+    has_per_artifact = bool(analysis_results.get("per_artifact") or analysis_results.get("per_artifact_findings"))
+    has_summary = bool(
+        str(analysis_results.get("summary", "")).strip()
+        or str(analysis_results.get("executive_summary", "")).strip()
+    )
+    if not has_per_artifact and not has_summary:
+        return error_response(
+            "Analysis has not been completed for this case. "
+            "Run analysis before generating a report.",
+            400,
+        )
+
     analysis_results.setdefault("case_id", case_id)
     analysis_results.setdefault("case_name", str(case_snapshot.get("case_name", "")))
     analysis_results.setdefault("per_artifact", [])

@@ -825,6 +825,9 @@ class TestEvidenceIntegrityArchive(unittest.TestCase):
             patch.object(routes_evidence, "verify_hash", return_value=(True, "a" * 64)) as mock_verify,
         ):
             self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(zip_path)})
+            # Inject minimal analysis results so the report guard passes.
+            with routes.STATE_LOCK:
+                routes.CASE_STATES[case_id]["analysis_results"] = {"summary": "test", "per_artifact": []}
             report_resp = self.client.get(f"/api/cases/{case_id}/report")
             self.assertEqual(report_resp.status_code, 200)
             mock_verify.assert_called_once()
@@ -925,6 +928,9 @@ class TestEvidenceIntegritySplitSegments(unittest.TestCase):
                 },
                 content_type="multipart/form-data",
             )
+            # Inject minimal analysis results so the report guard passes.
+            with routes.STATE_LOCK:
+                routes.CASE_STATES[case_id]["analysis_results"] = {"summary": "test", "per_artifact": []}
             report_resp = self.client.get(f"/api/cases/{case_id}/report")
             self.assertEqual(report_resp.status_code, 200)
             # verify_hash must be called once per segment.
@@ -987,6 +993,9 @@ class TestEvidenceIntegrityTamperDetection(unittest.TestCase):
                 f"/api/cases/{case_id}/evidence",
                 json={"path": str(evidence)},
             )
+            # Inject minimal analysis results so the report guard passes.
+            with routes.STATE_LOCK:
+                routes.CASE_STATES[case_id]["analysis_results"] = {"summary": "test", "per_artifact": []}
             report_resp = self.client.get(f"/api/cases/{case_id}/report")
             # Report still generates (with FAIL status), not a hard error.
             self.assertEqual(report_resp.status_code, 200)

@@ -1606,6 +1606,10 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(len(file_hashes), 1)
             self.assertEqual(file_hashes[0]["path"], str(zip_path))
 
+            # Inject minimal analysis results so the report guard passes.
+            with routes.STATE_LOCK:
+                routes.CASE_STATES[case_id]["analysis_results"] = {"summary": "test", "per_artifact": []}
+
             report_resp = self.client.get(f"/api/cases/{case_id}/report")
             self.assertEqual(report_resp.status_code, 200)
 
@@ -1977,6 +1981,58 @@ class RoutesTests(unittest.TestCase):
     def test_report_nonexistent_case(self) -> None:
         resp = self.client.get("/api/cases/nonexistent-id/report")
         self.assertEqual(resp.status_code, 404)
+
+    def test_report_rejected_without_analysis(self) -> None:
+        """Report generation must fail when no analysis has been run."""
+        evidence_path = Path(self.temp_dir.name) / "no-analysis.E01"
+        evidence_path.write_bytes(b"demo")
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(
+                routes, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch.object(
+                routes_handlers, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch.object(
+                routes_evidence, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+        ):
+            create_resp = self.client.post("/api/cases", json={"case_name": "No Analysis"})
+            self.assertEqual(create_resp.status_code, 201)
+            case_id = create_resp.get_json()["case_id"]
+
+            # Upload evidence and parse, but skip analysis.
+            evidence_resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                json={"path": str(evidence_path)},
+            )
+            self.assertEqual(evidence_resp.status_code, 200)
+
+            parse_resp = self.client.post(
+                f"/api/cases/{case_id}/parse",
+                json={"artifacts": ["runkeys"]},
+            )
+            self.assertEqual(parse_resp.status_code, 202)
+
+            # Attempt report without analysis — must be rejected.
+            report_resp = self.client.get(f"/api/cases/{case_id}/report")
+            self.assertEqual(report_resp.status_code, 400)
+            body = report_resp.get_json()
+            self.assertIn("Analysis has not been completed", body["error"])
+
+            # Case must NOT be transitioned to completed.
+            self.assertNotEqual(routes.CASE_STATES[case_id]["status"], "completed")
 
     def test_csv_bundle_nonexistent_case(self) -> None:
         resp = self.client.get("/api/cases/nonexistent-id/csvs")
