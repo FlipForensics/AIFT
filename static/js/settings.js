@@ -47,13 +47,10 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && !el.settingsPanel.hidden) closeSettings();
     });
-    document.addEventListener("mousedown", (e) => {
-      if (el.settingsPanel.hidden) return;
-      const t = e.target;
-      if (!(t instanceof Node)) return;
-      if (el.settingsPanel.contains(t) || el.settingsBtn.contains(t) || (el.settingsLink && el.settingsLink.contains(t))) return;
-      closeSettings();
-    });
+    const backdrop = q("settings-backdrop");
+    if (backdrop) {
+      backdrop.addEventListener("click", () => closeSettings());
+    }
     syncProviderFields();
     showSettingsTab(st.settingsTab || "basic");
   }
@@ -70,17 +67,64 @@
     b.addEventListener("click", async () => testConnection());
   }
 
+  /** Returns all focusable elements inside the settings panel. */
+  function getFocusableElements() {
+    if (!el.settingsPanel) return [];
+    return Array.from(
+      el.settingsPanel.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+    );
+  }
+
+  /** Traps Tab focus within the settings modal. */
+  function handleFocusTrap(e) {
+    if (e.key !== "Tab") return;
+    const focusable = getFocusableElements();
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey) {
+      if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+    } else {
+      if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  }
+
+  /** Sets inert on main page content so background is non-interactive. */
+  function setBackgroundInert(inert) {
+    const main = document.querySelector("main#wizard");
+    const header = document.querySelector(".app-header");
+    const footer = document.querySelector(".app-footer");
+    [main, header, footer].forEach((node) => {
+      if (!node) return;
+      if (inert) node.setAttribute("inert", "");
+      else node.removeAttribute("inert");
+    });
+  }
+
   function openSettings() {
     if (!el.settingsPanel || !el.settingsBtn) return;
+    const backdrop = q("settings-backdrop");
+    if (backdrop) backdrop.hidden = false;
     el.settingsPanel.hidden = false;
     el.settingsBtn.setAttribute("aria-expanded", "true");
+    setBackgroundInert(true);
     showSettingsTab(st.settingsTab || "basic");
+    // Move focus into the dialog
+    const focusable = getFocusableElements();
+    if (focusable.length) focusable[0].focus();
+    el.settingsPanel.addEventListener("keydown", handleFocusTrap);
     loadSettings().catch((e) => A.setMsg(el.settingsMsg, `Unable to refresh settings: ${e.message}`, "error"));
   }
 
   function closeSettings() {
     if (!el.settingsPanel || !el.settingsBtn) return;
+    el.settingsPanel.removeEventListener("keydown", handleFocusTrap);
     el.settingsPanel.hidden = true;
+    const backdrop = q("settings-backdrop");
+    if (backdrop) backdrop.hidden = true;
+    setBackgroundInert(false);
     el.settingsBtn.setAttribute("aria-expanded", "false");
     el.settingsBtn.focus();
   }

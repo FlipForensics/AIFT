@@ -1007,6 +1007,13 @@ details > :not(summary) {
 /* ==========================================================================
    Settings Modal
    ========================================================================== */
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 60%);
+  z-index: 999;
+}
+
 #settings-panel {
   position: fixed;
   top: 8vh;
@@ -1018,7 +1025,6 @@ details > :not(summary) {
   background: var(--bg-secondary);
   padding: var(--space-5);
   z-index: 1000;
-  box-shadow: 0 0 0 100vmax rgb(0 0 0 / 60%);
 }
 
 #settings-form {

@@ -451,7 +451,8 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
     <div class="app-footer-inner">©Flip Forensics <span class="mono">v{{ tool_version }}</span></div>
   </footer>
 
-  <aside id="settings-panel" hidden aria-labelledby="settings-title">
+  <div id="settings-backdrop" class="settings-backdrop" hidden></div>
+  <div id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
     <h2 id="settings-title">Settings</h2>
     <form id="settings-form">
       <div class="settings-tabs" role="tablist" aria-label="Settings sections">
@@ -619,6 +620,6 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
         <button id="save-settings" type="submit">Save Settings</button>
       </div>
     </form>
-  </aside>
+  </div>
 </body>
 </html>
