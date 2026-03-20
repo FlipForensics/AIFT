@@ -424,6 +424,35 @@ class TestResolveUploadedDissectPath(unittest.TestCase):
         with self.assertRaises(ValueError, msg="archive"):
             routes_evidence._resolve_uploaded_dissect_path(paths)
 
+    def test_multiple_segment_groups_raises(self) -> None:
+        paths = [
+            self._touch("DiskA.E01"),
+            self._touch("DiskA.E02"),
+            self._touch("DiskB.E01"),
+            self._touch("DiskB.E02"),
+        ]
+        with self.assertRaises(ValueError, msg="Ambiguous upload"):
+            routes_evidence._resolve_uploaded_dissect_path(paths)
+
+    def test_multiple_segment_groups_error_lists_names(self) -> None:
+        paths = [
+            self._touch("Alpha.E01"),
+            self._touch("Beta.E01"),
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            routes_evidence._resolve_uploaded_dissect_path(paths)
+        self.assertIn("alpha", str(ctx.exception))
+        self.assertIn("beta", str(ctx.exception))
+
+    def test_single_segment_group_still_succeeds(self) -> None:
+        paths = [
+            self._touch("Disk.E01"),
+            self._touch("Disk.E02"),
+            self._touch("Disk.E03"),
+        ]
+        result = routes_evidence._resolve_uploaded_dissect_path(paths)
+        self.assertTrue(result.name.endswith(".E01"))
+
     def test_empty_list_raises(self) -> None:
         with self.assertRaises(ValueError):
             routes_evidence._resolve_uploaded_dissect_path([])

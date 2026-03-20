@@ -352,17 +352,15 @@ def _resolve_uploaded_dissect_path(uploaded_paths: list[Path]) -> Path:
         segment_groups.setdefault(base_name, []).append((segment_number, path))
 
     if segment_groups:
-        ordered_groups = sorted(
-            segment_groups.values(),
-            key=lambda group: (
-                0 if any(segment <= 1 for segment, _ in group) else 1,
-                -len(group),
-                min(segment for segment, _ in group),
-                min(path.name.lower() for _, path in group),
-            ),
-        )
-        chosen_group = ordered_groups[0]
-        return min(chosen_group, key=lambda item: item[0])[1]
+        if len(segment_groups) > 1:
+            group_names = sorted(segment_groups.keys())
+            raise ValueError(
+                "Ambiguous upload: multiple segment groups detected "
+                f"({', '.join(group_names)}). "
+                "Upload only one split segment set at a time."
+            )
+        only_group = next(iter(segment_groups.values()))
+        return min(only_group, key=lambda item: item[0])[1]
 
     return uploaded_paths[0]
 
