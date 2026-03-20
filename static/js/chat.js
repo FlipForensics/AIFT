@@ -116,7 +116,8 @@
     if (!caseId || !el.chatThread || st.chat.run) return;
     if (st.chat.historyLoadedCaseId === caseId) return;
     const history = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/chat/history`, { method: "GET" });
-    if (caseId !== A.activeCaseId()) return;
+    // Discard stale history if the case changed or a send started while we were fetching.
+    if (caseId !== A.activeCaseId() || st.chat.run) return;
     const messages = Array.isArray(history) ? history : (Array.isArray(history?.messages) ? history.messages : []);
     renderChatHistory(messages);
     st.chat.historyLoadedCaseId = caseId;
