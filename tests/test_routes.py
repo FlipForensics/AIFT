@@ -266,12 +266,13 @@ class RoutesTests(unittest.TestCase):
             report_resp = self.client.get(f"/api/cases/{case_id}/report")
             self.assertEqual(report_resp.status_code, 200)
             self.assertEqual(report_resp.mimetype, "text/html")
-            self.assertNotIn(case_id, routes.CASE_STATES)
-            self.assertNotIn(case_id, routes.PARSE_PROGRESS)
-            self.assertNotIn(case_id, routes.ANALYSIS_PROGRESS)
-            self.assertNotIn(case_id, routes.CHAT_PROGRESS)
+            # Case must remain accessible after report download so that
+            # CSV downloads and chat still work on the Results screen.
+            self.assertIn(case_id, routes.CASE_STATES)
+            self.assertEqual(routes.CASE_STATES[case_id]["status"], "completed")
 
-    def test_case_completion_cleans_global_case_entries(self) -> None:
+    def test_case_persists_after_report_download(self) -> None:
+        """Report download must NOT destroy the active case so CSV and chat still work."""
         evidence_path = Path(self.temp_dir.name) / "cleanup-check.E01"
         evidence_path.write_bytes(b"demo")
 
@@ -342,22 +343,22 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(analyze_resp.status_code, 202)
 
             self.assertIn(case_id, routes.CASE_STATES)
-            self.assertIn(case_id, routes.PARSE_PROGRESS)
-            self.assertIn(case_id, routes.ANALYSIS_PROGRESS)
-            # CHAT_PROGRESS is cleared by evidence intake (no chat was started).
-            self.assertNotIn(case_id, routes.CHAT_PROGRESS)
 
             report_resp = self.client.get(f"/api/cases/{case_id}/report")
             self.assertEqual(report_resp.status_code, 200)
 
-            for store_name, store in (
-                ("CASE_STATES", routes.CASE_STATES),
-                ("PARSE_PROGRESS", routes.PARSE_PROGRESS),
-                ("ANALYSIS_PROGRESS", routes.ANALYSIS_PROGRESS),
-                ("CHAT_PROGRESS", routes.CHAT_PROGRESS),
-            ):
-                with self.subTest(store=store_name):
-                    self.assertNotIn(case_id, store)
+            # Case must still be in memory after report download.
+            self.assertIn(case_id, routes.CASE_STATES)
+            self.assertEqual(routes.CASE_STATES[case_id]["status"], "completed")
+
+            # CSV download must still work after report download.
+            csv_resp = self.client.get(f"/api/cases/{case_id}/csvs")
+            self.assertEqual(csv_resp.status_code, 200)
+            self.assertEqual(csv_resp.mimetype, "application/zip")
+
+            # Chat history endpoint must still work after report download.
+            history_resp = self.client.get(f"/api/cases/{case_id}/chat/history")
+            self.assertEqual(history_resp.status_code, 200)
 
     def test_parse_progress_sse_waits_before_emitting_idle(self) -> None:
         with (

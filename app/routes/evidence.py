@@ -40,7 +40,6 @@ from .state import (
     PARSE_PROGRESS,
     PROJECT_ROOT,
     STATE_LOCK,
-    cleanup_case_entries,
     error_response,
     get_case,
     mark_case_status,
@@ -841,7 +840,6 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
         {"report_filename": report_path.name, "hash_verified": hash_ok},
     )
     mark_case_status(case_id, "completed")
-    cleanup_case_entries(case_id)
 
     return send_file(
         report_path,
