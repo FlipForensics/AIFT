@@ -303,7 +303,11 @@ def emit_progress(
 
 
 def _cleanup_progress_store(store: dict[str, dict[str, Any]], case_id: str) -> None:
-    """Remove a finished case's entry from a specific progress store.
+    """Mark a finished case's progress entry as drained rather than removing it.
+
+    Terminal entries are retained so that reconnecting SSE clients receive a
+    proper completion signal instead of a misleading "Case not found" error.
+    Actual removal is handled later by ``cleanup_terminal_cases``.
 
     Args:
         store: One of the progress dicts.
@@ -312,7 +316,7 @@ def _cleanup_progress_store(store: dict[str, dict[str, Any]], case_id: str) -> N
     with STATE_LOCK:
         entry = store.get(case_id)
         if entry is not None and entry.get("status") in TERMINAL_CASE_STATUSES:
-            store.pop(case_id, None)
+            entry["_drained"] = True
 
 
 def stream_sse(store: dict[str, dict[str, Any]], case_id: str) -> Response:
@@ -335,14 +339,23 @@ def stream_sse(store: dict[str, dict[str, Any]], case_id: str) -> Response:
                 with STATE_LOCK:
                     state = store.get(case_id)
                     if state is None:
-                        missing = {"type": "error", "message": "Case not found."}
-                        status = "failed"
-                        pending: list[dict[str, Any]] = [missing]
-                    else:
-                        status = str(state.get("status", "idle"))
-                        events = list(state.get("events", []))
-                        pending = events[last:]
-                        last = len(events)
+                        # Progress entry absent — check whether the case
+                        # itself still exists.  If it does, the progress was
+                        # already drained/cleaned; tell the client the
+                        # operation finished rather than emitting a
+                        # misleading "Case not found" error.
+                        case_exists = case_id in CASE_STATES
+                        if case_exists:
+                            synthetic = {"type": "complete", "message": "Already completed."}
+                        else:
+                            synthetic = {"type": "error", "message": "Case not found."}
+                        yield f"data: {json.dumps(synthetic, separators=(',', ':'))}\n\n"
+                        break
+
+                    status = str(state.get("status", "idle"))
+                    events = list(state.get("events", []))
+                    pending: list[dict[str, Any]] = events[last:]
+                    last = len(events)
 
                 if not pending and status == "idle":
                     if time.monotonic() < initial_idle_deadline:

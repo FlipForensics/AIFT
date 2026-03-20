@@ -1448,8 +1448,10 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual([entry["role"] for entry in history], ["user", "assistant"])
             self.assertEqual(history[0]["content"], user_message)
             self.assertEqual(history[1]["content"], "Chat response from test provider.")
-            # After the SSE stream ends, the progress entry is cleaned up.
-            self.assertNotIn(case_id, routes.CHAT_PROGRESS)
+            # After the SSE stream ends, the progress entry is marked drained
+            # but retained so reconnecting clients get a proper completion signal.
+            self.assertIn(case_id, routes.CHAT_PROGRESS)
+            self.assertTrue(routes.CHAT_PROGRESS[case_id].get("_drained"))
 
             clear_history_resp = self.client.delete(f"/api/cases/{case_id}/chat/history")
             self.assertEqual(clear_history_resp.status_code, 200)
@@ -2583,6 +2585,56 @@ class StateHelperTests(unittest.TestCase):
             self.assertNotIn("entry-disk-test", routes_state.CASE_STATES)
             self.assertTrue(case_dir.exists())
             self.assertTrue((case_dir / "reports" / "report.html").exists())
+
+
+    def test_cleanup_progress_store_marks_drained_not_removed(self) -> None:
+        """_cleanup_progress_store marks terminal entries as drained, not removed."""
+        store: dict[str, dict] = {
+            "case1": routes_state.new_progress(status="completed"),
+        }
+        routes_state._cleanup_progress_store(store, "case1")
+        self.assertIn("case1", store, "Terminal entry should still be in store")
+        self.assertTrue(store["case1"].get("_drained"))
+
+    def test_cleanup_progress_store_ignores_non_terminal(self) -> None:
+        """_cleanup_progress_store does nothing for non-terminal entries."""
+        store: dict[str, dict] = {
+            "case1": routes_state.new_progress(status="running"),
+        }
+        routes_state._cleanup_progress_store(store, "case1")
+        self.assertIn("case1", store)
+        self.assertNotIn("_drained", store["case1"])
+
+    def test_stream_sse_reconnect_after_completion_emits_complete(self) -> None:
+        """Reconnecting to SSE after progress is cleaned up emits 'complete', not 'error'."""
+        from flask import Flask
+        app = Flask(__name__)
+        case_id = "reconnect-case"
+        store: dict[str, dict] = {}
+        # Case exists in CASE_STATES but progress store is empty (already drained/cleaned).
+        with routes_state.STATE_LOCK:
+            routes_state.CASE_STATES[case_id] = {"status": "completed"}
+        try:
+            with app.test_request_context():
+                resp = routes_state.stream_sse(store, case_id)
+                data = resp.get_data(as_text=True)
+                self.assertIn('"type":"complete"', data)
+                self.assertIn("Already completed", data)
+                self.assertNotIn("Case not found", data)
+        finally:
+            with routes_state.STATE_LOCK:
+                routes_state.CASE_STATES.pop(case_id, None)
+
+    def test_stream_sse_truly_missing_case_emits_error(self) -> None:
+        """SSE for a case absent from both progress and CASE_STATES emits 'error'."""
+        from flask import Flask
+        app = Flask(__name__)
+        store: dict[str, dict] = {}
+        with app.test_request_context():
+            resp = routes_state.stream_sse(store, "truly-missing")
+            data = resp.get_data(as_text=True)
+            self.assertIn("Case not found", data)
+            self.assertNotIn('"type":"complete"', data)
 
 
 class EvidenceHelperTests(unittest.TestCase):
