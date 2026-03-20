@@ -739,6 +739,9 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
 
         # Remove stale on-disk artifacts so disk fallbacks cannot
         # resurrect results from prior evidence.
+        parsed_dir = case_dir / "parsed"
+        if parsed_dir.is_dir():
+            shutil.rmtree(parsed_dir, ignore_errors=True)
         for stale_file in ("analysis_results.json", "prompt.txt", "chat_history.jsonl"):
             stale_path = case_dir / stale_file
             if stale_path.exists():

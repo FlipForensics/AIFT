@@ -2415,6 +2415,77 @@ class RoutesTests(unittest.TestCase):
                 self.assertTrue(case.get("artifact_csv_paths"))
 
 
+    def test_replace_evidence_clears_stale_csvs_on_disk(self) -> None:
+        """After evidence replacement, /csvs must not return old parsed CSVs."""
+        evidence_a = Path(self.temp_dir.name) / "csv_a.E01"
+        evidence_a.write_bytes(b"aaa")
+        evidence_b = Path(self.temp_dir.name) / "csv_b.E01"
+        evidence_b.write_bytes(b"bbb")
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(
+                routes, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
+            ),
+            patch.object(
+                routes_handlers, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
+            ),
+            patch.object(
+                routes_evidence, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
+            ),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+        ):
+            # Create case, load evidence A, parse it.
+            create_resp = self.client.post("/api/cases", json={"case_name": "Stale CSV"})
+            case_id = create_resp.get_json()["case_id"]
+
+            self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_a)})
+            self.client.post(f"/api/cases/{case_id}/parse", json={"artifacts": ["runkeys"]})
+
+            # CSVs should be available after parsing evidence A.
+            csv_resp = self.client.get(f"/api/cases/{case_id}/csvs")
+            self.assertEqual(csv_resp.status_code, 200)
+            self.assertEqual(csv_resp.mimetype, "application/zip")
+
+            # Replace evidence with B (no reparse yet).
+            ev_resp = self.client.post(
+                f"/api/cases/{case_id}/evidence", json={"path": str(evidence_b)},
+            )
+            self.assertEqual(ev_resp.status_code, 200)
+
+            # /csvs must NOT return stale CSVs from evidence A.
+            csv_resp = self.client.get(f"/api/cases/{case_id}/csvs")
+            self.assertEqual(csv_resp.status_code, 404)
+            self.assertIn("No parsed CSV", csv_resp.get_json()["error"])
+
+            # Stale parsed directory should be gone.
+            with routes.STATE_LOCK:
+                case = routes.CASE_STATES[case_id]
+                parsed_dir = Path(case["case_dir"]) / "parsed"
+            self.assertFalse(parsed_dir.exists())
+
+            # Reparse evidence B.
+            parse_resp = self.client.post(
+                f"/api/cases/{case_id}/parse", json={"artifacts": ["runkeys"]},
+            )
+            self.assertEqual(parse_resp.status_code, 202)
+
+            # /csvs should now return CSVs from the new parse.
+            csv_resp = self.client.get(f"/api/cases/{case_id}/csvs")
+            self.assertEqual(csv_resp.status_code, 200)
+            self.assertEqual(csv_resp.mimetype, "application/zip")
+
+
 class StateHelperTests(unittest.TestCase):
     """Tests for helper functions in app.routes.state."""
 
