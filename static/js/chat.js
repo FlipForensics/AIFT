@@ -13,6 +13,9 @@
   const A = window.AIFT;
   const { st, el } = A;
 
+  /** Number of messages to render per page (initial load + each "load more"). */
+  const CHAT_PAGE_SIZE = 50;
+
   // ── Results step wiring ────────────────────────────────────────────────────
 
   function setupResults() {
@@ -129,22 +132,98 @@
         return (role === "user" || role === "assistant") && !!content;
       })
       : [];
+    // Store full history for pagination; track how many are displayed.
+    st.chat.allMessages = messages;
+    st.chat.displayedCount = 0;
     if (!messages.length) {
       renderChatEmptyState();
       syncChatControls();
       return;
     }
-    messages.forEach((entry) => {
+    // Render only the last page initially.
+    const startIndex = Math.max(0, messages.length - CHAT_PAGE_SIZE);
+    renderMessagesSlice(startIndex, messages.length);
+    if (startIndex > 0) insertLoadEarlierButton();
+    scrollChatToBottom();
+    syncChatControls();
+  }
+
+  /**
+   * Render a slice of st.chat.allMessages into the chat thread.
+   *
+   * Messages are inserted *before* any existing chat-message rows so that
+   * earlier messages appear above later ones when paging backwards.
+   *
+   * Args:
+   *   from: Start index (inclusive) in allMessages.
+   *   to:   End index (exclusive) in allMessages.
+   */
+  function renderMessagesSlice(from, to) {
+    if (!el.chatThread) return;
+    const messages = st.chat.allMessages;
+    if (!messages || !messages.length) return;
+    // Find the first existing chat-message row to insert before (for "load earlier").
+    const firstRow = el.chatThread.querySelector(".chat-message-row");
+    for (let i = from; i < to; i++) {
+      const entry = messages[i];
       const role = strRole(entry.role);
       const content = String(entry.content || "");
       let retrieved = [];
       if (role === "assistant" && A.isObj(entry.metadata) && Array.isArray(entry.metadata.data_retrieved)) {
         retrieved = entry.metadata.data_retrieved.map((item) => String(item || "").trim()).filter(Boolean);
       }
-      appendChatMessage(role, content, { dataRetrieved: retrieved });
-    });
-    scrollChatToBottom();
-    syncChatControls();
+      const nodes = buildChatMessageNodes(role, content, { dataRetrieved: retrieved });
+      if (firstRow) {
+        el.chatThread.insertBefore(nodes.row, firstRow);
+      } else {
+        el.chatThread.appendChild(nodes.row);
+      }
+    }
+    st.chat.displayedCount = (st.chat.displayedCount || 0) + (to - from);
+  }
+
+  /**
+   * Insert the "Load earlier messages" button at the top of the chat thread.
+   */
+  function insertLoadEarlierButton() {
+    if (!el.chatThread || el.chatThread.querySelector(".chat-load-earlier")) return;
+    const btn = document.createElement("button");
+    btn.className = "chat-load-earlier";
+    btn.type = "button";
+    btn.textContent = "Load earlier messages";
+    btn.addEventListener("click", () => loadEarlierMessages());
+    el.chatThread.insertBefore(btn, el.chatThread.firstChild);
+  }
+
+  /**
+   * Remove the "Load earlier messages" button from the chat thread.
+   */
+  function removeLoadEarlierButton() {
+    if (!el.chatThread) return;
+    const btn = el.chatThread.querySelector(".chat-load-earlier");
+    if (btn) btn.remove();
+  }
+
+  /**
+   * Load the next page of earlier messages into the chat thread.
+   */
+  function loadEarlierMessages() {
+    const messages = st.chat.allMessages;
+    if (!messages || !messages.length) return;
+    const displayed = st.chat.displayedCount || 0;
+    const totalAvailable = messages.length;
+    if (displayed >= totalAvailable) return;
+    // Calculate the slice to prepend.
+    const currentStart = totalAvailable - displayed;
+    const newStart = Math.max(0, currentStart - CHAT_PAGE_SIZE);
+    // Remember scroll position so we can preserve the user's view.
+    const prevScrollHeight = el.chatThread.scrollHeight;
+    removeLoadEarlierButton();
+    renderMessagesSlice(newStart, currentStart);
+    if (newStart > 0) insertLoadEarlierButton();
+    // Restore scroll position so the view doesn't jump.
+    const addedHeight = el.chatThread.scrollHeight - prevScrollHeight;
+    el.chatThread.scrollTop += addedHeight;
   }
 
   function renderChatEmptyState() {
@@ -164,10 +243,14 @@
 
   // ── Chat message rendering ─────────────────────────────────────────────────
 
-  function appendChatMessage(role, content, opts = {}) {
-    if (!el.chatThread) return null;
+  /**
+   * Build chat message DOM nodes without inserting them into the thread.
+   *
+   * Returns:
+   *   Object with row, bubble, contentNode, typingNode properties.
+   */
+  function buildChatMessageNodes(role, content, opts = {}) {
     const normalizedRole = strRole(role);
-    removeChatEmptyState();
 
     const row = document.createElement("div");
     row.className = `chat-message-row ${normalizedRole === "user" ? "chat-message-user" : "chat-message-ai"}`;
@@ -195,10 +278,17 @@
     }
 
     row.appendChild(bubble);
-    el.chatThread.appendChild(row);
+    return { row, bubble, contentNode, typingNode };
+  }
+
+  function appendChatMessage(role, content, opts = {}) {
+    if (!el.chatThread) return null;
+    removeChatEmptyState();
+    const nodes = buildChatMessageNodes(role, content, opts);
+    el.chatThread.appendChild(nodes.row);
     scrollChatToBottom();
     syncChatControls();
-    return { row, bubble, contentNode, typingNode };
+    return nodes;
   }
 
   function renderChatMessageText(container, text) {
@@ -386,6 +476,8 @@
     st.chat.seq = -1;
     st.chat.pending = null;
     st.chat.historyLoadedCaseId = "";
+    st.chat.allMessages = [];
+    st.chat.displayedCount = 0;
     if (el.chatInput) { el.chatInput.disabled = false; el.chatInput.value = ""; }
     if (el.chatSend) el.chatSend.disabled = false;
     if (el.chatPanel) el.chatPanel.hidden = true;

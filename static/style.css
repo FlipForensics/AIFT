@@ -979,6 +979,24 @@ tbody td:nth-child(3) {
   letter-spacing: 0.01em;
 }
 
+.chat-load-earlier {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0;
+  margin-bottom: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  color: var(--accent);
+  font-size: 0.82rem;
+  cursor: pointer;
+  text-align: center;
+}
+
+.chat-load-earlier:hover {
+  background: var(--bg-primary);
+}
+
 /* ==========================================================================
    Collapsible Sections
    ========================================================================== */
