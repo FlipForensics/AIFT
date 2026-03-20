@@ -33,7 +33,8 @@ import re
 import traceback
 from types import TracebackType
 from time import perf_counter
-from typing import Any, Callable
+import logging
+from typing import Any, Callable, Iterable
 
 from dissect.target import Target
 from dissect.target.exceptions import PluginError, UnsupportedPluginError
@@ -41,6 +42,8 @@ from dissect.target.exceptions import PluginError, UnsupportedPluginError
 from .registry import ARTIFACT_REGISTRY
 
 __all__ = ["ForensicParser"]
+
+logger = logging.getLogger(__name__)
 
 UNKNOWN_VALUE = "Unknown"
 EVTX_MAX_RECORDS_PER_FILE = 500_000
@@ -186,8 +189,18 @@ class ForensicParser:
             return function() if callable(function) else function
 
         current: Any = self.target
-        for namespace in function_name.split("."):
-            current = getattr(current, namespace)
+        parts = function_name.split(".")
+        try:
+            for namespace in parts:
+                current = getattr(current, namespace)
+        except Exception:
+            logger.warning(
+                "Failed to resolve nested function '%s' (stopped at '%s')",
+                function_name,
+                namespace,
+                exc_info=True,
+            )
+            raise
 
         return current() if callable(current) else current
 
@@ -338,7 +351,7 @@ class ForensicParser:
 
     def _write_records_to_csv(
         self,
-        records: Any,
+        records: Iterable[Any],
         csv_output_path: Path,
         progress_callback: Callable[..., None] | None,
         artifact_key: str,
@@ -622,7 +635,10 @@ class ForensicParser:
         if isinstance(value, (datetime, date, time)):
             return value.isoformat()
         if isinstance(value, (bytes, bytearray, memoryview)):
-            return bytes(value).hex()
+            raw = bytes(value)
+            if len(raw) > 512:
+                return raw[:512].hex() + "..."
+            return raw.hex()
         return str(value)
 
     @staticmethod
