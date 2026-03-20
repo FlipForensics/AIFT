@@ -58,8 +58,8 @@
     if (el.cancelAnalysis) el.cancelAnalysis.hidden = false;
 
     try {
-      await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/analyze`, { method: "POST", json: { prompt: A.val(el.prompt) }, signal: abortCtrl.signal });
       A.startTimer("analysis");
+      await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/analyze`, { method: "POST", json: { prompt: A.val(el.prompt) }, signal: abortCtrl.signal });
       startAnalysisSse();
       A.showStep(4);
     } catch (e) {

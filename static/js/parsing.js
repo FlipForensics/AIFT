@@ -43,8 +43,8 @@
     try {
       const parsePayload = { artifacts: arts, ai_artifacts: aiArtifacts, artifact_options: artifactOptions };
       if (dateRangeValidation.range) parsePayload.analysis_date_range = dateRangeValidation.range;
-      await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/parse`, { method: "POST", json: parsePayload, signal: abortCtrl.signal });
       A.startTimer("parse");
+      await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/parse`, { method: "POST", json: parsePayload, signal: abortCtrl.signal });
       startParseSse();
       A.showStep(3);
     } catch (e) {
