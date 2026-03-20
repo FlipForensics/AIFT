@@ -1324,10 +1324,10 @@ class TestClaudeProvider(unittest.TestCase):
         self.assertEqual(first_result, "Claude fallback result")
         self.assertEqual(second_result, "Claude fallback result second")
         self.assertEqual(mock_client.messages.create.call_count, 3)
-        self.assertEqual(
-            mock_client.messages.create.call_args_list[1].kwargs["messages"][0]["content"],
-            "user",
-        )
+        fallback_prompt = mock_client.messages.create.call_args_list[1].kwargs["messages"][0]["content"]
+        self.assertIn("File attachments were unavailable", fallback_prompt)
+        self.assertIn("--- BEGIN ATTACHMENT: runkeys.csv ---", fallback_prompt)
+        self.assertIn("ts,name", fallback_prompt)
 
     @patch("anthropic.Anthropic")
     def test_analyze_retries_with_stream_for_long_requests(
@@ -2007,6 +2007,14 @@ class TestKimiProvider(unittest.TestCase):
         self.assertEqual(mock_client.files.create.call_count, 1)
         self.assertEqual(mock_client.responses.create.call_count, 1)
         self.assertGreaterEqual(mock_client.chat.completions.create.call_count, 2)
+        first_prompt = mock_client.chat.completions.create.call_args_list[0].kwargs["messages"][1]["content"]
+        second_prompt = mock_client.chat.completions.create.call_args_list[1].kwargs["messages"][1]["content"]
+        self.assertIn("File attachments were unavailable", first_prompt)
+        self.assertIn("--- BEGIN ATTACHMENT: runkeys.csv ---", first_prompt)
+        self.assertIn("ts,name", first_prompt)
+        self.assertIn("File attachments were unavailable", second_prompt)
+        self.assertIn("--- BEGIN ATTACHMENT: runkeys.csv ---", second_prompt)
+        self.assertIn("ts,name", second_prompt)
 
     @patch("openai.OpenAI")
     def test_analyze_connection_error(self, mock_openai_cls: MagicMock) -> None:
@@ -2762,14 +2770,23 @@ class TestLocalProviderBuildChatCompletionPrompt(unittest.TestCase):
             self.assertIn("--- BEGIN ATTACHMENT: data.csv ---", result)
 
     @patch("openai.OpenAI")
-    def test_returns_original_prompt_when_attach_disabled(self, mock_openai_cls: MagicMock) -> None:
-        provider = LocalProvider(
-            base_url="http://localhost:11434/v1",
-            model="test",
-            attach_csv_as_file=False,
-        )
-        result = provider._build_chat_completion_prompt("prompt", [{"path": "/x"}])
-        self.assertEqual(result, "prompt")
+    def test_inlines_attachments_even_when_attach_flag_disabled(self, mock_openai_cls: MagicMock) -> None:
+        """When attach_csv_as_file=False, attachments must still be inlined."""
+        with TemporaryDirectory(prefix="aift-test-") as tmp:
+            path = Path(tmp) / "data.csv"
+            path.write_text("a,b\n1,2\n")
+
+            provider = LocalProvider(
+                base_url="http://localhost:11434/v1",
+                model="test",
+                attach_csv_as_file=False,
+            )
+            result = provider._build_chat_completion_prompt(
+                "prompt",
+                [{"path": str(path), "name": "data.csv", "mime_type": "text/csv"}],
+            )
+            self.assertIn("--- BEGIN ATTACHMENT: data.csv ---", result)
+            self.assertIn("a,b", result)
 
 
 # ---------------------------------------------------------------------------
@@ -3223,6 +3240,215 @@ class TestUploadAndRequestViaResponsesAPI(unittest.TestCase):
         file_tuple = upload_kwargs["file"]
         self.assertEqual(file_tuple[0], "data.txt")
         self.assertEqual(file_tuple[2], "text/plain")
+
+
+# ---------------------------------------------------------------------------
+# Attachment fallback regression tests
+# ---------------------------------------------------------------------------
+
+
+class TestAttachmentFallbackRegression(unittest.TestCase):
+    """Regression tests ensuring attachment content is always delivered to the
+    model, even when file-attachment mode is disabled or rejected."""
+
+    @patch("anthropic.Anthropic")
+    def test_claude_attach_csv_as_file_false_still_inlines(
+        self,
+        mock_anthropic_cls: MagicMock,
+    ) -> None:
+        """Claude with attach_csv_as_file=False must inline attachment data."""
+        mock_client = MagicMock()
+        mock_anthropic_cls.return_value = mock_client
+        mock_client.messages.create.return_value = _make_anthropic_response("result")
+
+        with TemporaryDirectory(prefix="aift-test-") as tmp:
+            csv_path = Path(tmp) / "evidence.csv"
+            csv_path.write_text("ts,name\n2026-01-15,EntryA\n", encoding="utf-8")
+
+            provider = ClaudeProvider(
+                api_key="sk-test", model="claude-sonnet-4-20250514", attach_csv_as_file=False
+            )
+            result = provider.analyze_with_attachments(
+                "system",
+                "user",
+                attachments=[{"path": str(csv_path), "name": "evidence.csv", "mime_type": "text/csv"}],
+            )
+
+        self.assertEqual(result, "result")
+        prompt = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+        self.assertIn("--- BEGIN ATTACHMENT: evidence.csv ---", prompt)
+        self.assertIn("ts,name", prompt)
+
+    @patch("openai.OpenAI")
+    def test_openai_attach_csv_as_file_false_still_inlines(
+        self,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        """OpenAI with attach_csv_as_file=False must inline attachment data."""
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_client.chat.completions.create.return_value = _make_openai_response("result")
+
+        with TemporaryDirectory(prefix="aift-test-") as tmp:
+            csv_path = Path(tmp) / "evidence.csv"
+            csv_path.write_text("ts,name\n2026-01-15,EntryA\n", encoding="utf-8")
+
+            provider = OpenAIProvider(
+                api_key="sk-test", model="gpt-4o", attach_csv_as_file=False
+            )
+            result = provider.analyze_with_attachments(
+                "system",
+                "user",
+                attachments=[{"path": str(csv_path), "name": "evidence.csv", "mime_type": "text/csv"}],
+            )
+
+        self.assertEqual(result, "result")
+        prompt = mock_client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+        self.assertIn("--- BEGIN ATTACHMENT: evidence.csv ---", prompt)
+        self.assertIn("ts,name", prompt)
+
+    @patch("openai.OpenAI")
+    def test_kimi_attach_csv_as_file_false_still_inlines(
+        self,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        """Kimi with attach_csv_as_file=False must inline attachment data."""
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_client.chat.completions.create.return_value = _make_openai_response("result")
+
+        with TemporaryDirectory(prefix="aift-test-") as tmp:
+            csv_path = Path(tmp) / "evidence.csv"
+            csv_path.write_text("ts,name\n2026-01-15,EntryA\n", encoding="utf-8")
+
+            provider = KimiProvider(
+                api_key="sk-test", attach_csv_as_file=False
+            )
+            result = provider.analyze_with_attachments(
+                "system",
+                "user",
+                attachments=[{"path": str(csv_path), "name": "evidence.csv", "mime_type": "text/csv"}],
+            )
+
+        self.assertEqual(result, "result")
+        prompt = mock_client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+        self.assertIn("--- BEGIN ATTACHMENT: evidence.csv ---", prompt)
+        self.assertIn("ts,name", prompt)
+
+    @patch("openai.OpenAI")
+    def test_local_attach_csv_as_file_false_still_inlines(
+        self,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        """Local with attach_csv_as_file=False must inline attachment data."""
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_client.chat.completions.create.return_value = _make_openai_response("result")
+
+        with TemporaryDirectory(prefix="aift-test-") as tmp:
+            csv_path = Path(tmp) / "evidence.csv"
+            csv_path.write_text("ts,name\n2026-01-15,EntryA\n", encoding="utf-8")
+
+            provider = LocalProvider(
+                base_url="http://localhost:11434/v1",
+                model="test",
+                attach_csv_as_file=False,
+            )
+            result = provider.analyze_with_attachments(
+                "system",
+                "user",
+                attachments=[{"path": str(csv_path), "name": "evidence.csv", "mime_type": "text/csv"}],
+            )
+
+        self.assertEqual(result, "result")
+        prompt = mock_client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+        self.assertIn("--- BEGIN ATTACHMENT: evidence.csv ---", prompt)
+        self.assertIn("ts,name", prompt)
+
+    @patch("openai.OpenAI")
+    def test_openai_upload_rejection_still_inlines(
+        self,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        """When OpenAI rejects file upload, fallback must inline content."""
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_client.files.create.return_value = SimpleNamespace(id="file-x")
+        mock_client.responses.create.side_effect = RuntimeError("unsupported file format")
+        mock_client.chat.completions.create.return_value = _make_openai_response("fallback result")
+
+        with TemporaryDirectory(prefix="aift-test-") as tmp:
+            csv_path = Path(tmp) / "data.csv"
+            csv_path.write_text("col1,col2\nval1,val2\n", encoding="utf-8")
+
+            provider = OpenAIProvider(api_key="sk-test", model="gpt-4o")
+            result = provider.analyze_with_attachments(
+                "system",
+                "user",
+                attachments=[{"path": str(csv_path), "name": "data.csv", "mime_type": "text/csv"}],
+            )
+
+        self.assertEqual(result, "fallback result")
+        prompt = mock_client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+        self.assertIn("--- BEGIN ATTACHMENT: data.csv ---", prompt)
+        self.assertIn("col1,col2", prompt)
+
+    @patch("anthropic.Anthropic")
+    def test_claude_upload_rejection_still_inlines(
+        self,
+        mock_anthropic_cls: MagicMock,
+    ) -> None:
+        """When Claude rejects attachment content blocks, fallback must inline."""
+        mock_client = MagicMock()
+        mock_anthropic_cls.return_value = mock_client
+        mock_client.messages.create.side_effect = [
+            RuntimeError("unsupported document input"),
+            _make_anthropic_response("fallback result"),
+        ]
+
+        with TemporaryDirectory(prefix="aift-test-") as tmp:
+            csv_path = Path(tmp) / "data.csv"
+            csv_path.write_text("col1,col2\nval1,val2\n", encoding="utf-8")
+
+            provider = ClaudeProvider(api_key="sk-test", model="claude-sonnet-4-20250514")
+            result = provider.analyze_with_attachments(
+                "system",
+                "user",
+                attachments=[{"path": str(csv_path), "name": "data.csv", "mime_type": "text/csv"}],
+            )
+
+        self.assertEqual(result, "fallback result")
+        fallback_prompt = mock_client.messages.create.call_args_list[1].kwargs["messages"][0]["content"]
+        self.assertIn("--- BEGIN ATTACHMENT: data.csv ---", fallback_prompt)
+        self.assertIn("col1,col2", fallback_prompt)
+
+    @patch("openai.OpenAI")
+    def test_kimi_upload_rejection_still_inlines(
+        self,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        """When Kimi rejects file upload, fallback must inline content."""
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_client.files.create.return_value = SimpleNamespace(id="file-x")
+        mock_client.responses.create.side_effect = RuntimeError("404 not found")
+        mock_client.chat.completions.create.return_value = _make_openai_response("fallback result")
+
+        with TemporaryDirectory(prefix="aift-test-") as tmp:
+            csv_path = Path(tmp) / "data.csv"
+            csv_path.write_text("col1,col2\nval1,val2\n", encoding="utf-8")
+
+            provider = KimiProvider(api_key="sk-test")
+            result = provider.analyze_with_attachments(
+                "system",
+                "user",
+                attachments=[{"path": str(csv_path), "name": "data.csv", "mime_type": "text/csv"}],
+            )
+
+        self.assertEqual(result, "fallback result")
+        prompt = mock_client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+        self.assertIn("--- BEGIN ATTACHMENT: data.csv ---", prompt)
+        self.assertIn("col1,col2", prompt)
 
 
 if __name__ == "__main__":

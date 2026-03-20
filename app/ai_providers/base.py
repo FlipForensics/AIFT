@@ -229,7 +229,8 @@ class AIProvider(ABC):
         """Analyze with optional file attachments.
 
         Providers that support file uploads override this method. The default
-        implementation ignores attachments and delegates to ``analyze``.
+        implementation inlines attachment content into the prompt so the model
+        always receives the evidence data, then delegates to ``analyze``.
 
         Args:
             system_prompt: The system-level instruction text.
@@ -244,9 +245,20 @@ class AIProvider(ABC):
         Raises:
             AIProviderError: If the request fails.
         """
+        from .utils import _inline_attachment_data_into_prompt
+
+        effective_prompt = user_prompt
+        if attachments:
+            effective_prompt, inlined = _inline_attachment_data_into_prompt(
+                user_prompt=user_prompt,
+                attachments=attachments,
+            )
+            if inlined:
+                logger.info("Base provider inlined attachment data into prompt.")
+
         return self.analyze(
             system_prompt=system_prompt,
-            user_prompt=user_prompt,
+            user_prompt=effective_prompt,
             max_tokens=max_tokens,
         )
 

@@ -35,6 +35,7 @@ from .base import (
 from .utils import (
     _extract_openai_delta_text,
     _extract_openai_text,
+    _inline_attachment_data_into_prompt,
     upload_and_request_via_responses_api,
 )
 
@@ -324,12 +325,21 @@ class KimiProvider(AIProvider):
         if attachment_response:
             return attachment_response
 
+        prompt_for_completion = user_prompt
+        if attachments:
+            prompt_for_completion, inlined = _inline_attachment_data_into_prompt(
+                user_prompt=user_prompt,
+                attachments=attachments,
+            )
+            if inlined:
+                logger.info("Kimi attachment fallback inlined attachment data into prompt.")
+
         response = self.client.chat.completions.create(
             model=self.model,
             max_tokens=max_tokens,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": prompt_for_completion},
             ],
         )
         text = _extract_openai_text(response)

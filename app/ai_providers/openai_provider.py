@@ -306,7 +306,7 @@ class OpenAIProvider(AIProvider):
             return attachment_response
 
         prompt_for_completion = user_prompt
-        if attachments and self.attach_csv_as_file:
+        if attachments:
             prompt_for_completion, inlined_attachment_data = _inline_attachment_data_into_prompt(
                 user_prompt=user_prompt,
                 attachments=attachments,

@@ -29,7 +29,11 @@ from .base import (
     _run_with_rate_limit_retries,
     _T,
 )
-from .utils import _extract_anthropic_stream_text, _extract_anthropic_text
+from .utils import (
+    _extract_anthropic_stream_text,
+    _extract_anthropic_text,
+    _inline_attachment_data_into_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -226,9 +230,18 @@ class ClaudeProvider(AIProvider):
             if attachment_response:
                 return attachment_response
 
+            effective_prompt = user_prompt
+            if attachments:
+                effective_prompt, inlined = _inline_attachment_data_into_prompt(
+                    user_prompt=user_prompt,
+                    attachments=attachments,
+                )
+                if inlined:
+                    logger.info("Claude attachment fallback inlined attachment data into prompt.")
+
             response = self._create_message_with_stream_fallback(
                 system_prompt=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
+                messages=[{"role": "user", "content": effective_prompt}],
                 max_tokens=max_tokens,
             )
             text = _extract_anthropic_text(response)
