@@ -3404,5 +3404,141 @@ class TestRunAnalysisUnavailableProvider(unittest.TestCase):
             )
 
 
+class TestAnalysisRerunClearsStaleResults(unittest.TestCase):
+    """Regression: a failed re-analysis must not leave prior findings available."""
+
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory(prefix="aift-stale-analysis-")
+        self.cases_root = Path(self.temp_dir.name) / "cases"
+        self.config_path = Path(self.temp_dir.name) / "config.yaml"
+        self.app = create_app(str(self.config_path))
+        self.app.testing = True
+        self.csrf_token = self.app.config["CSRF_TOKEN"]
+        self.client = self.app.test_client()
+        self.client.environ_base["HTTP_X_CSRF_TOKEN"] = self.csrf_token
+        routes.CASE_STATES.clear()
+        routes.PARSE_PROGRESS.clear()
+        routes.ANALYSIS_PROGRESS.clear()
+        routes.CHAT_PROGRESS.clear()
+        unregister_all_case_log_handlers()
+        FakeAnalyzer.last_artifact_keys = []
+
+    def tearDown(self) -> None:
+        unregister_all_case_log_handlers()
+        self.temp_dir.cleanup()
+
+    def test_failed_reanalysis_clears_stale_results(self) -> None:
+        """Run analysis successfully, then force failure on rerun.
+
+        After the failed rerun, prior findings must not be available
+        via chat or report/download routes.
+        """
+        evidence_path = Path(self.temp_dir.name) / "stale.E01"
+        evidence_path.write_bytes(b"demo")
+
+        call_count = 0
+
+        class FailOnSecondAnalyzer(FakeAnalyzer):
+            """Succeeds on first call, raises on second."""
+
+            def run_full_analysis(
+                self,
+                artifact_keys: list[str],
+                investigation_context: str,
+                metadata: dict[str, object] | None,
+                progress_callback: object | None = None,
+                cancel_check: object | None = None,
+            ) -> dict[str, object]:
+                nonlocal call_count
+                call_count += 1
+                if call_count >= 2:
+                    raise RuntimeError("Simulated provider failure")
+                return super().run_full_analysis(
+                    artifact_keys, investigation_context, metadata,
+                    progress_callback, cancel_check,
+                )
+
+        hash_rv = {"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4}
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes, "ForensicAnalyzer", FailOnSecondAnalyzer),
+            patch.object(routes_tasks, "ForensicAnalyzer", FailOnSecondAnalyzer),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+            patch.object(routes, "compute_hashes", return_value=hash_rv),
+            patch.object(routes_handlers, "compute_hashes", return_value=hash_rv),
+            patch.object(routes_evidence, "compute_hashes", return_value=hash_rv),
+        ):
+            # Create case, load evidence, parse.
+            create_resp = self.client.post(
+                "/api/cases", json={"case_name": "Stale Analysis Test"},
+            )
+            self.assertEqual(create_resp.status_code, 201)
+            case_id = create_resp.get_json()["case_id"]
+
+            ev_resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                json={"path": str(evidence_path)},
+            )
+            self.assertEqual(ev_resp.status_code, 200)
+
+            parse_resp = self.client.post(
+                f"/api/cases/{case_id}/parse",
+                json={"artifacts": ["runkeys"]},
+            )
+            self.assertEqual(parse_resp.status_code, 202)
+
+            # --- First analysis: succeeds ---
+            resp1 = self.client.post(
+                f"/api/cases/{case_id}/analyze",
+                json={"prompt": "first run"},
+            )
+            self.assertEqual(resp1.status_code, 202)
+
+            # Verify results exist after successful analysis.
+            case = routes_state.CASE_STATES[case_id]
+            self.assertTrue(
+                isinstance(case.get("analysis_results"), dict)
+                and case["analysis_results"].get("per_artifact"),
+                "First analysis should produce results",
+            )
+            results_path = self.cases_root / case_id / "analysis_results.json"
+            self.assertTrue(results_path.exists(), "Results file should exist after first run")
+
+            # --- Second analysis: fails ---
+            resp2 = self.client.post(
+                f"/api/cases/{case_id}/analyze",
+                json={"prompt": "second run"},
+            )
+            self.assertEqual(resp2.status_code, 202)
+
+            # In-memory results must be empty.
+            in_memory = case.get("analysis_results")
+            self.assertFalse(
+                isinstance(in_memory, dict) and in_memory.get("per_artifact"),
+                "Stale in-memory analysis_results must be cleared after failed rerun",
+            )
+
+            # On-disk results must be removed.
+            self.assertFalse(
+                results_path.exists(),
+                "Stale analysis_results.json must be removed after failed rerun",
+            )
+
+            # Chat route must refuse (no results available).
+            chat_resp = self.client.post(
+                f"/api/cases/{case_id}/chat",
+                json={"message": "What did you find?"},
+            )
+            self.assertIn(chat_resp.status_code, (400, 404))
+            chat_body = chat_resp.get_json()
+            self.assertFalse(chat_body.get("success"))
+
+
 if __name__ == "__main__":
     unittest.main()

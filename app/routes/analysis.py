@@ -92,7 +92,16 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
         ANALYSIS_PROGRESS[case_id] = new_progress(status="running")
         case["status"] = "running"
         case["investigation_context"] = prompt
+        # Invalidate prior analysis outputs so a subsequent failure cannot
+        # leave stale results accessible via chat/report/download routes.
+        case["analysis_results"] = {}
         analysis_artifacts_snapshot = list(case.get("analysis_artifacts", []))
+
+    # Remove the on-disk results file outside the lock to avoid holding
+    # the lock during I/O.
+    stale_results_path = Path(case_dir) / "analysis_results.json"
+    if stale_results_path.exists():
+        stale_results_path.unlink(missing_ok=True)
 
     audit_logger.log("prompt_submitted", prompt_details)
 

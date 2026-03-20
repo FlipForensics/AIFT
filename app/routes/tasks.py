@@ -447,6 +447,24 @@ def run_parse(
 # Background task: analysis
 # ---------------------------------------------------------------------------
 
+def _purge_stale_analysis(case: dict[str, Any], case_dir: str) -> None:
+    """Clear in-memory and on-disk analysis results after a failed run.
+
+    This prevents stale findings from a prior successful analysis from
+    being served via chat, report, or download routes after a re-analysis
+    fails or is cancelled.
+
+    Args:
+        case: The in-memory case state dictionary.
+        case_dir: Path string to the case directory.
+    """
+    with STATE_LOCK:
+        case["analysis_results"] = {}
+    results_path = Path(case_dir) / "analysis_results.json"
+    if results_path.exists():
+        results_path.unlink(missing_ok=True)
+
+
 def run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> None:
     """Execute background AI-powered forensic analysis.
 
@@ -579,12 +597,14 @@ def run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> 
         mark_case_status(case_id, "completed")
     except AnalysisCancelledError:
         LOGGER.info("Analysis cancelled for case %s", case_id)
+        _purge_stale_analysis(case, case_dir)
         mark_case_status(case_id, "cancelled")
         emit_progress(ANALYSIS_PROGRESS, case_id, {
             "type": "analysis_failed", "error": "Analysis cancelled by user.",
         })
     except Exception:
         LOGGER.exception("Background analysis failed for case %s", case_id)
+        _purge_stale_analysis(case, case_dir)
         user_message = (
             "Analysis failed due to an internal error. "
             "Verify provider settings and retry."
