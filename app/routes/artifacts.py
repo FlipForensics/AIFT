@@ -564,6 +564,20 @@ def compose_profile_response(profiles_root: Path) -> list[dict[str, Any]]:
 artifact_bp = Blueprint("artifacts", __name__)
 
 
+def _purge_stale_downstream_case_files(case_dir: Path) -> None:
+    """Remove stale analysis/chat artifacts before a new parse run.
+
+    Args:
+        case_dir: Path to the case directory.
+    """
+    for stale_name in ("analysis_results.json", "prompt.txt", "chat_history.jsonl"):
+        stale_path = case_dir / stale_name
+        try:
+            stale_path.unlink(missing_ok=True)
+        except OSError:
+            LOGGER.warning("Failed to remove stale case artifact: %s", stale_path, exc_info=True)
+
+
 @artifact_bp.post("/api/cases/<case_id>/parse")
 def start_parse(case_id: str) -> tuple[Response, int]:
     """Start background parsing of selected forensic artifacts.
@@ -601,6 +615,7 @@ def start_parse(case_id: str) -> tuple[Response, int]:
         parse_state = PARSE_PROGRESS.setdefault(case_id, new_progress())
         if parse_state.get("status") == "running":
             return error_response("Parsing is already running for this case.", 409)
+        case_dir = Path(case["case_dir"])
         PARSE_PROGRESS[case_id] = new_progress(status="running")
         case["status"] = "running"
         case["selected_artifacts"] = list(parse_artifacts)
@@ -614,6 +629,9 @@ def start_parse(case_id: str) -> tuple[Response, int]:
         case["artifact_csv_paths"] = {}
         case["analysis_results"] = {}
         case["csv_output_dir"] = ""
+        case["investigation_context"] = ""
+
+    _purge_stale_downstream_case_files(case_dir)
 
     parse_started_event: dict[str, Any] = {
         "type": "parse_started",

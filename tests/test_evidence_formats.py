@@ -936,6 +936,81 @@ class TestEvidenceIntegritySplitSegments(unittest.TestCase):
             # verify_hash must be called once per segment.
             self.assertEqual(mock_verify.call_count, 2)
 
+    def test_split_path_hashes_all_segments(self) -> None:
+        """Path intake for E01+E02 must hash every sibling segment on disk."""
+        case_id = self._create_case()
+        disk_e01 = Path(self.temp_dir.name) / "Disk.E01"
+        disk_e02 = Path(self.temp_dir.name) / "Disk.E02"
+        disk_e01.write_bytes(b"seg1")
+        disk_e02.write_bytes(b"seg2")
+        call_count = {"n": 0}
+
+        def _fake_compute(filepath, progress_callback=None):
+            del filepath, progress_callback
+            call_count["n"] += 1
+            return {"sha256": f"{call_count['n']:0>64x}", "md5": f"{call_count['n']:0>32x}", "size_bytes": 4}
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "compute_hashes", side_effect=_fake_compute),
+        ):
+            resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                json={"path": str(disk_e01)},
+            )
+            self.assertEqual(resp.status_code, 200)
+
+        self.assertEqual(call_count["n"], 2)
+        with routes.STATE_LOCK:
+            file_hashes = routes.CASE_STATES[case_id].get("evidence_file_hashes", [])
+        self.assertEqual(len(file_hashes), 2)
+        self.assertEqual(
+            {entry["path"] for entry in file_hashes},
+            {str(disk_e01), str(disk_e02)},
+        )
+
+    def test_split_path_report_verifies_all_segments(self) -> None:
+        """Path intake report verification must cover every sibling segment."""
+        case_id = self._create_case()
+        disk_e01 = Path(self.temp_dir.name) / "Disk.E01"
+        disk_e02 = Path(self.temp_dir.name) / "Disk.E02"
+        disk_e01.write_bytes(b"seg1")
+        disk_e02.write_bytes(b"seg2")
+
+        from app.reporter import ReportGenerator as _RealRG
+
+        class _FakeRG(_RealRG):
+            def generate(self, **kwargs):
+                report_dir = self.cases_root / case_id / "reports"
+                report_dir.mkdir(parents=True, exist_ok=True)
+                rp = report_dir / "report.html"
+                rp.write_text("<html>ok</html>", encoding="utf-8")
+                return rp
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_evidence, "ReportGenerator", _FakeRG),
+            patch.object(routes_evidence, "verify_hash", return_value=(True, "a" * 64)) as mock_verify,
+        ):
+            self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                json={"path": str(disk_e01)},
+            )
+            with routes.STATE_LOCK:
+                routes.CASE_STATES[case_id]["analysis_results"] = {"summary": "test", "per_artifact": []}
+            report_resp = self.client.get(f"/api/cases/{case_id}/report")
+            self.assertEqual(report_resp.status_code, 200)
+            self.assertEqual(mock_verify.call_count, 2)
+            self.assertEqual(
+                {str(call.args[0]) for call in mock_verify.call_args_list},
+                {str(disk_e01), str(disk_e02)},
+            )
+
 
 class TestEvidenceIntegrityTamperDetection(unittest.TestCase):
     """Verify that tampered evidence is detected at report time."""

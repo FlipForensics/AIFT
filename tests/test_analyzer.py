@@ -3712,6 +3712,23 @@ class TestSplitArtifactCsvHandling(unittest.TestCase):
             basenames = {p.name for p in result}
             self.assertEqual(basenames, {"evtx_Application.csv", "evtx_Security.csv", "evtx_System.csv"})
 
+    def test_resolve_all_artifact_csv_paths_fallback_ignores_generated_combined_csv(self) -> None:
+        """Fallback split discovery must ignore generated *_combined.csv files."""
+        with TemporaryDirectory(prefix="aift-split-") as tmp_dir:
+            parsed_dir = Path(tmp_dir) / "parsed"
+            parsed_dir.mkdir()
+            csv1 = parsed_dir / "evtx_Security.csv"
+            csv2 = parsed_dir / "evtx_System.csv"
+            combined = parsed_dir / "evtx_combined.csv"
+            for f in (csv1, csv2, combined):
+                f.write_text("ts,msg\n", encoding="utf-8")
+            fake_provider = FakeProvider()
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(case_dir=tmp_dir)
+            result = analyzer._resolve_all_artifact_csv_paths("evtx")
+            self.assertEqual(len(result), 2)
+            self.assertEqual({p.name for p in result}, {"evtx_Security.csv", "evtx_System.csv"})
+
     def test_resolve_all_artifact_csv_paths_fallback_single(self) -> None:
         """_resolve_all_artifact_csv_paths returns single CSV from case_dir/parsed."""
         with TemporaryDirectory(prefix="aift-single-") as tmp_dir:

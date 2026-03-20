@@ -3491,6 +3491,18 @@ class TestParseRerunClearsStaleState(unittest.TestCase):
             case = routes_state.CASE_STATES[case_id]
             self.assertTrue(len(case.get("parse_results", [])) > 0, "First parse should produce results")
             self.assertTrue(len(case.get("artifact_csv_paths", {})) > 0, "First parse should produce csv map")
+            case_dir = Path(case["case_dir"])
+            (case_dir / "analysis_results.json").write_text(
+                json.dumps({"summary": "stale", "per_artifact": []}),
+                encoding="utf-8",
+            )
+            (case_dir / "prompt.txt").write_text("stale prompt", encoding="utf-8")
+            (case_dir / "chat_history.jsonl").write_text(
+                json.dumps({"role": "user", "content": "stale"}) + "\n",
+                encoding="utf-8",
+            )
+            with routes_state.STATE_LOCK:
+                case["investigation_context"] = "stale prompt"
 
         # Now reparse with a failing parser.
         with (
@@ -3510,6 +3522,18 @@ class TestParseRerunClearsStaleState(unittest.TestCase):
             self.assertEqual(case.get("parse_results"), [], "Stale parse_results should be cleared")
             self.assertEqual(case.get("artifact_csv_paths"), {}, "Stale artifact_csv_paths should be cleared")
             self.assertEqual(case.get("analysis_results"), {}, "Stale analysis_results should be cleared")
+            self.assertEqual(case.get("investigation_context"), "", "Stale prompt should be cleared")
+            case_dir = Path(case["case_dir"])
+            self.assertFalse((case_dir / "analysis_results.json").exists())
+            self.assertFalse((case_dir / "prompt.txt").exists())
+            self.assertFalse((case_dir / "chat_history.jsonl").exists())
+
+            chat_resp = self.client.post(
+                f"/api/cases/{case_id}/chat",
+                json={"message": "What did you find?"},
+            )
+            self.assertEqual(chat_resp.status_code, 400)
+            self.assertIn("No analysis results available", chat_resp.get_json()["error"])
 
 
 class TestRunAnalysisUnavailableProvider(unittest.TestCase):

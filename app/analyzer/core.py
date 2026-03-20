@@ -509,7 +509,12 @@ class ForensicAnalyzer:
                 }
                 for file_stub in file_stubs:
                     direct_csv_path = parsed_dir / f"{file_stub}.csv"
-                    prefixed_paths = sorted(parsed_dir.glob(f"{file_stub}_*.csv"))
+                    combined_csv_path = parsed_dir / f"{file_stub}_combined.csv"
+                    prefixed_paths = sorted(
+                        path
+                        for path in parsed_dir.glob(f"{file_stub}_*.csv")
+                        if path != combined_csv_path
+                    )
                     if direct_csv_path.exists() and prefixed_paths:
                         return sorted([direct_csv_path] + prefixed_paths)
                     if prefixed_paths:

@@ -319,6 +319,63 @@ def _unique_destination(path: Path) -> Path:
         counter += 1
 
 
+def _segment_identity(path_or_name: Path | str) -> tuple[str, str, int] | None:
+    """Parse split-image segment identity from a filename.
+
+    Args:
+        path_or_name: Path or filename to inspect.
+
+    Returns:
+        ``(kind, base_name, segment_number)`` for known split-image naming
+        schemes, or ``None`` if the name is not a recognized segment.
+    """
+    name = Path(path_or_name).name if isinstance(path_or_name, Path) else str(path_or_name)
+    for kind, pattern in (("ewf", EWF_SEGMENT_RE), ("raw", SPLIT_RAW_SEGMENT_RE)):
+        match = pattern.match(name)
+        if match is not None:
+            return kind, match.group("base").lower(), int(match.group("segment"))
+    return None
+
+
+def _collect_segment_group_paths(source_path: Path) -> list[Path]:
+    """Collect all sibling segment paths for a split-image source file.
+
+    Args:
+        source_path: Candidate source evidence file.
+
+    Returns:
+        Sorted list of sibling segment paths for the same split-image set, or
+        an empty list when the path is not a recognized split-image segment.
+    """
+    if not source_path.is_file():
+        return []
+
+    identity = _segment_identity(source_path)
+    if identity is None:
+        return []
+
+    kind, base_name, _segment_number = identity
+    segment_paths: list[tuple[int, Path]] = []
+    try:
+        siblings = source_path.parent.iterdir()
+    except OSError:
+        return [source_path]
+
+    for sibling in siblings:
+        if not sibling.is_file():
+            continue
+        sibling_identity = _segment_identity(sibling)
+        if sibling_identity is None:
+            continue
+        sibling_kind, sibling_base_name, sibling_segment_number = sibling_identity
+        if sibling_kind == kind and sibling_base_name == base_name:
+            segment_paths.append((sibling_segment_number, sibling))
+
+    if not segment_paths:
+        return [source_path]
+    return [path for _segment_number, path in sorted(segment_paths, key=lambda item: item[0])]
+
+
 def _resolve_uploaded_dissect_path(uploaded_paths: list[Path]) -> Path:
     """Determine the primary Dissect target path from uploaded files.
 
@@ -345,18 +402,17 @@ def _resolve_uploaded_dissect_path(uploaded_paths: list[Path]) -> Path:
     if archive_paths and len(uploaded_paths) > 1:
         raise ValueError("Upload either one archive file or raw evidence segments, not both.")
 
-    segment_groups: dict[str, list[tuple[int, Path]]] = {}
+    segment_groups: dict[tuple[str, str], list[tuple[int, Path]]] = {}
     for path in uploaded_paths:
-        match = EWF_SEGMENT_RE.match(path.name) or SPLIT_RAW_SEGMENT_RE.match(path.name)
-        if not match:
+        identity = _segment_identity(path)
+        if identity is None:
             continue
-        base_name = match.group("base").lower()
-        segment_number = int(match.group("segment"))
-        segment_groups.setdefault(base_name, []).append((segment_number, path))
+        kind, base_name, segment_number = identity
+        segment_groups.setdefault((kind, base_name), []).append((segment_number, path))
 
     if segment_groups:
         if len(segment_groups) > 1:
-            group_names = sorted(segment_groups.keys())
+            group_names = sorted({base_name for _kind, base_name in segment_groups})
             raise ValueError(
                 "Ambiguous upload: multiple segment groups detected "
                 f"({', '.join(group_names)}). "
@@ -474,12 +530,14 @@ def resolve_evidence_payload(case_dir: Path) -> dict[str, Any]:
         dissect_path = extractor(source_path, extract_dir)
 
     # Determine the files to hash for integrity verification.
-    # For split-image uploads all segments are included; for archives and
-    # single files only the source file is hashed; directories get N/A.
+    # Archives are intentionally verified as the original container file.
+    # Split-image uploads hash all uploaded segments, and path-based split
+    # images hash all matching sibling segments on disk. Directories get N/A.
     if source_path.is_file() and len(uploaded_paths) > 1:
         evidence_files_to_hash = sorted(set(str(p) for p in uploaded_paths))
     elif source_path.is_file():
-        evidence_files_to_hash = [str(source_path)]
+        segment_paths = _collect_segment_group_paths(source_path)
+        evidence_files_to_hash = [str(path) for path in segment_paths] if segment_paths else [str(source_path)]
     else:
         evidence_files_to_hash = []
 
