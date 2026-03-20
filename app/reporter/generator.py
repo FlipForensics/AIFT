@@ -544,17 +544,21 @@ class ReportGenerator:
 
             details_value = mapping.get("details")
             if isinstance(details_value, Mapping):
-                details_text = json.dumps(details_value, sort_keys=True, separators=(",", ": "))
+                details_text = json.dumps(details_value, sort_keys=True, indent=2)
+                details_is_structured = True
             elif isinstance(details_value, Sequence) and not isinstance(details_value, (str, bytes, bytearray)):
-                details_text = json.dumps(list(details_value), separators=(",", ": "))
+                details_text = json.dumps(list(details_value), indent=2)
+                details_is_structured = True
             else:
                 details_text = self._stringify(details_value, default="")
+                details_is_structured = False
 
             normalized.append(
                 {
                     "timestamp": self._stringify(mapping.get("timestamp"), default="N/A"),
                     "action": self._stringify(mapping.get("action"), default="unknown"),
                     "details": details_text,
+                    "details_is_structured": details_is_structured,
                     "tool_version": self._stringify(mapping.get("tool_version"), default=""),
                 }
             )

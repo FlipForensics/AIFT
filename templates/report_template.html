@@ -389,6 +389,20 @@
       background: rgba(159, 177, 199, 0.05);
     }
 
+    .audit-details-pre {
+      margin: 0;
+      padding: 8px 10px;
+      background: rgba(11, 16, 24, 0.55);
+      border: 1px solid rgba(159, 177, 199, 0.15);
+      border-radius: 6px;
+      font-family: "Consolas", "SFMono-Regular", "Liberation Mono", Menlo, monospace;
+      font-size: 0.88em;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.45;
+      color: var(--text);
+    }
+
     .empty-value {
       color: var(--muted);
       font-style: italic;
@@ -633,7 +647,13 @@
                   <tr>
                     <td class="mono">{{ entry.timestamp }}</td>
                     <td>{{ entry.action }}</td>
-                    <td class="mono">{{ entry.details }}</td>
+                    <td>
+                      {% if entry.details_is_structured %}
+                        <pre class="audit-details-pre">{{ entry.details }}</pre>
+                      {% else %}
+                        <span class="mono">{{ entry.details }}</span>
+                      {% endif %}
+                    </td>
                   </tr>
                 {% endfor %}
               </tbody>

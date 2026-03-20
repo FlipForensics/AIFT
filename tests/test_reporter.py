@@ -838,12 +838,33 @@ class TestNormalizeAuditEntries(unittest.TestCase):
         entries = [{"timestamp": "t", "action": "a", "details": {"key": "val"}}]
         result = self.gen._normalize_audit_entries(entries)
         self.assertIn('"key"', result[0]["details"])
+        self.assertTrue(result[0]["details_is_structured"])
+
+    def test_mapping_details_pretty_printed(self) -> None:
+        """Structured audit details must be pretty-printed with indentation."""
+        entries = [{"timestamp": "t", "action": "a", "details": {"alpha": 1, "beta": "two"}}]
+        result = self.gen._normalize_audit_entries(entries)
+        details = result[0]["details"]
+        self.assertIn("\n", details, "Pretty-printed JSON must contain newlines")
+        self.assertIn("  ", details, "Pretty-printed JSON must contain indentation")
+        parsed = json.loads(details)
+        self.assertEqual(parsed["alpha"], 1)
+        self.assertEqual(parsed["beta"], "two")
+        self.assertTrue(result[0]["details_is_structured"])
 
     def test_sequence_details_serialized_to_json(self) -> None:
         entries = [{"timestamp": "t", "action": "a", "details": ["a", "b"]}]
         result = self.gen._normalize_audit_entries(entries)
         parsed = json.loads(result[0]["details"])
         self.assertEqual(parsed, ["a", "b"])
+        self.assertTrue(result[0]["details_is_structured"])
+
+    def test_string_details_not_structured(self) -> None:
+        """Plain string details should not be marked as structured."""
+        entries = [{"timestamp": "t", "action": "a", "details": "simple text"}]
+        result = self.gen._normalize_audit_entries(entries)
+        self.assertEqual(result[0]["details"], "simple text")
+        self.assertFalse(result[0]["details_is_structured"])
 
     def test_non_coercible_entries_skipped(self) -> None:
         entries = [42, None, True]
@@ -856,7 +877,53 @@ class TestNormalizeAuditEntries(unittest.TestCase):
         self.assertEqual(result[0]["timestamp"], "N/A")
         self.assertEqual(result[0]["action"], "unknown")
         self.assertEqual(result[0]["details"], "")
+        self.assertFalse(result[0]["details_is_structured"])
         self.assertEqual(result[0]["tool_version"], "")
+
+
+class TestAuditDetailsRenderedReadable(unittest.TestCase):
+    """Verify structured audit details render as pretty-printed JSON in <pre> blocks."""
+
+    def test_structured_audit_details_use_pre_in_html(self) -> None:
+        """Structured (dict/list) audit details must appear in a <pre> block, not inline."""
+        with TemporaryDirectory(prefix="aift-audit-render-") as temp_dir:
+            cases_root = Path(temp_dir) / "cases"
+            gen = _create_report_generator(cases_root)
+            audit_entries = [
+                {
+                    "timestamp": "2026-01-15T10:00:00Z",
+                    "action": "parse_completed",
+                    "details": {"artifact": "evtx", "records": 1234, "status": "success"},
+                },
+                {
+                    "timestamp": "2026-01-15T11:00:00Z",
+                    "action": "upload",
+                    "details": "evidence.E01",
+                },
+            ]
+            report_path = gen.generate(
+                analysis_results={
+                    "case_id": "audit-render-test",
+                    "case_name": "Audit Render Test",
+                    "summary": "Test summary.",
+                    "per_artifact": [],
+                },
+                image_metadata={"hostname": "host1"},
+                evidence_hashes={"filename": "test.E01", "hash_verified": True},
+                investigation_context="Testing audit rendering.",
+                audit_log_entries=audit_entries,
+            )
+            html = report_path.read_text(encoding="utf-8")
+
+        # Structured details rendered inside <pre> with the styling class
+        self.assertIn('class="audit-details-pre"', html)
+        # Pretty-printed JSON has newlines and indentation (quotes are HTML-escaped as &#34;)
+        self.assertIn("&#34;artifact&#34;", html)
+        self.assertIn("&#34;records&#34;", html)
+        # Plain string details should NOT be in a <pre> block — use <span> instead
+        self.assertIn("evidence.E01", html)
+        # The plain detail should be in a mono span, not a pre
+        self.assertRegex(html, r'<span class="mono">evidence\.E01</span>')
 
 
 class TestResolveConfidence(unittest.TestCase):
