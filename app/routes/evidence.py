@@ -550,7 +550,11 @@ def collect_case_csv_paths(case: dict[str, Any]) -> list[Path]:
     csv_map = case.get("artifact_csv_paths")
     if isinstance(csv_map, dict):
         for csv_path in csv_map.values():
-            _add_path(csv_path)
+            if isinstance(csv_path, list):
+                for p in csv_path:
+                    _add_path(p)
+            else:
+                _add_path(csv_path)
 
     parse_results = case.get("parse_results")
     if isinstance(parse_results, list):
@@ -570,27 +574,37 @@ def collect_case_csv_paths(case: dict[str, Any]) -> list[Path]:
     return sorted(path for path in parsed_dir.glob("*.csv") if path.is_file())
 
 
-def build_csv_map(parse_results: list[dict[str, Any]]) -> dict[str, str]:
+def build_csv_map(parse_results: list[dict[str, Any]]) -> dict[str, str | list[str]]:
     """Build a mapping of artifact keys to their parsed CSV file paths.
+
+    Split artifacts (e.g. EVTX) that produce multiple CSV files are
+    represented as a ``list[str]`` value.  Single-file artifacts remain
+    a plain ``str`` so existing callers are unaffected.
 
     Args:
         parse_results: List of per-artifact parse result dicts.
 
     Returns:
-        Dict mapping artifact key strings to CSV path strings.
+        Dict mapping artifact key strings to a single CSV path string
+        or a list of CSV path strings for split artifacts.
     """
-    mapping: dict[str, str] = {}
+    mapping: dict[str, str | list[str]] = {}
     for result in parse_results:
         artifact = str(result.get("artifact_key", "")).strip()
         if not artifact or not result.get("success"):
             continue
+        csv_paths = result.get("csv_paths")
+        if isinstance(csv_paths, list) and csv_paths:
+            non_empty = [str(p) for p in csv_paths if str(p).strip()]
+            if len(non_empty) > 1:
+                mapping[artifact] = non_empty
+                continue
+            if non_empty:
+                mapping[artifact] = non_empty[0]
+                continue
         csv_path = str(result.get("csv_path", "")).strip()
         if csv_path:
             mapping[artifact] = csv_path
-            continue
-        csv_paths = result.get("csv_paths")
-        if isinstance(csv_paths, list) and csv_paths:
-            mapping[artifact] = str(csv_paths[0])
     return mapping
 
 

@@ -2174,10 +2174,54 @@ class EvidenceHelperTests(unittest.TestCase):
         self.assertEqual(mapping["runkeys"], "/path/runkeys.csv")
         self.assertNotIn("tasks", mapping)
         self.assertNotIn("amcache", mapping)
-        self.assertEqual(mapping["multi"], "/path/multi_1.csv")
+        self.assertEqual(mapping["multi"], ["/path/multi_1.csv", "/path/multi_2.csv"])
 
     def test_build_csv_map_empty_results(self) -> None:
         self.assertEqual(routes_evidence.build_csv_map([]), {})
+
+    def test_build_csv_map_single_csv_paths_collapses_to_string(self) -> None:
+        """A csv_paths list with exactly one entry should collapse to a plain string."""
+        results = [
+            {"artifact_key": "evtx", "success": True, "csv_paths": ["/path/evtx_Security.csv"]},
+        ]
+        mapping = routes_evidence.build_csv_map(results)
+        self.assertEqual(mapping["evtx"], "/path/evtx_Security.csv")
+
+    def test_build_csv_map_split_artifact_preserves_all_paths(self) -> None:
+        """Split artifacts with multiple csv_paths are stored as a list."""
+        results = [
+            {"artifact_key": "evtx", "success": True, "csv_paths": [
+                "/path/evtx_Security.csv", "/path/evtx_System.csv", "/path/evtx_Application.csv",
+            ]},
+        ]
+        mapping = routes_evidence.build_csv_map(results)
+        self.assertIsInstance(mapping["evtx"], list)
+        self.assertEqual(len(mapping["evtx"]), 3)
+
+    def test_build_csv_map_csv_path_preferred_over_empty_csv_paths(self) -> None:
+        """When csv_paths is empty, csv_path should still be used."""
+        results = [
+            {"artifact_key": "runkeys", "success": True, "csv_path": "/path/runkeys.csv", "csv_paths": []},
+        ]
+        mapping = routes_evidence.build_csv_map(results)
+        self.assertEqual(mapping["runkeys"], "/path/runkeys.csv")
+
+    def test_collect_case_csv_paths_handles_list_values(self) -> None:
+        """collect_case_csv_paths should collect all paths from list-valued entries."""
+        with TemporaryDirectory() as tmpdir:
+            csv1 = Path(tmpdir) / "evtx_Security.csv"
+            csv2 = Path(tmpdir) / "evtx_System.csv"
+            csv1.write_text("col\n1\n", encoding="utf-8")
+            csv2.write_text("col\n2\n", encoding="utf-8")
+            case = {
+                "case_dir": tmpdir,
+                "artifact_csv_paths": {"evtx": [str(csv1), str(csv2)]},
+                "parse_results": [],
+            }
+            result = routes_evidence.collect_case_csv_paths(case)
+            resolved = {p.name for p in result}
+            self.assertIn("evtx_Security.csv", resolved)
+            self.assertIn("evtx_System.csv", resolved)
 
     def test_read_audit_entries_missing_file(self) -> None:
         with TemporaryDirectory() as tmpdir:

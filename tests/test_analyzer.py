@@ -3281,11 +3281,12 @@ class TestRegisterArtifactPathEntry(unittest.TestCase):
         self.assertEqual(analyzer.artifact_csv_paths["art1"], Path("/path.csv"))
 
     def test_mapping_with_csv_paths_list(self) -> None:
+        """Split artifacts with multiple csv_paths preserve all paths."""
         fake_provider = FakeProvider()
         with patch("app.analyzer.core.create_provider", return_value=fake_provider):
             analyzer = ForensicAnalyzer()
         analyzer._register_artifact_path_entry("art1", {"csv_paths": ["/first.csv", "/second.csv"]})
-        self.assertEqual(analyzer.artifact_csv_paths["art1"], Path("/first.csv"))
+        self.assertEqual(analyzer.artifact_csv_paths["art1"], [Path("/first.csv"), Path("/second.csv")])
 
     def test_string_value(self) -> None:
         fake_provider = FakeProvider()
@@ -3307,6 +3308,150 @@ class TestRegisterArtifactPathEntry(unittest.TestCase):
             analyzer = ForensicAnalyzer()
         analyzer._register_artifact_path_entry(None, "/path.csv")
         self.assertEqual(len(analyzer.artifact_csv_paths), 0)
+
+    def test_single_csv_paths_list_collapses(self) -> None:
+        """A csv_paths list with one entry should collapse to a single Path."""
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._register_artifact_path_entry("art1", {"csv_paths": ["/only.csv"]})
+        self.assertEqual(analyzer.artifact_csv_paths["art1"], Path("/only.csv"))
+
+
+class TestSplitArtifactCsvHandling(unittest.TestCase):
+    """Tests for multi-CSV (split artifact) handling in the analyzer."""
+
+    def test_init_accepts_list_of_paths(self) -> None:
+        """ForensicAnalyzer.__init__ stores list[Path] for multi-path artifacts."""
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer(
+                artifact_csv_paths={"evtx": ["/a.csv", "/b.csv"]},
+            )
+        self.assertIsInstance(analyzer.artifact_csv_paths["evtx"], list)
+        self.assertEqual(len(analyzer.artifact_csv_paths["evtx"]), 2)
+
+    def test_init_single_path_stays_path(self) -> None:
+        """Single-file artifacts remain a plain Path after init."""
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer(
+                artifact_csv_paths={"runkeys": "/runkeys.csv"},
+            )
+        self.assertIsInstance(analyzer.artifact_csv_paths["runkeys"], Path)
+
+    def test_resolve_artifact_csv_path_returns_first_for_list(self) -> None:
+        """_resolve_artifact_csv_path returns the first path for split artifacts."""
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer(
+                artifact_csv_paths={"evtx": ["/first.csv", "/second.csv"]},
+            )
+        result = analyzer._resolve_artifact_csv_path("evtx")
+        self.assertEqual(result, Path("/first.csv"))
+
+    def test_resolve_all_artifact_csv_paths_returns_full_list(self) -> None:
+        """_resolve_all_artifact_csv_paths returns all paths for split artifacts."""
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer(
+                artifact_csv_paths={"evtx": ["/a.csv", "/b.csv", "/c.csv"]},
+            )
+        result = analyzer._resolve_all_artifact_csv_paths("evtx")
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result[0], Path("/a.csv"))
+        self.assertEqual(result[2], Path("/c.csv"))
+
+    def test_resolve_all_artifact_csv_paths_single_file(self) -> None:
+        """_resolve_all_artifact_csv_paths wraps single Path in a list."""
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer(
+                artifact_csv_paths={"runkeys": "/runkeys.csv"},
+            )
+        result = analyzer._resolve_all_artifact_csv_paths("runkeys")
+        self.assertEqual(result, [Path("/runkeys.csv")])
+
+    def test_combine_csv_files(self) -> None:
+        """_combine_csv_files merges multiple CSVs into one with all rows."""
+        with TemporaryDirectory() as tmpdir:
+            csv1 = Path(tmpdir) / "evtx_Security.csv"
+            csv2 = Path(tmpdir) / "evtx_System.csv"
+            csv1.write_text("ts,msg\n2025-01-01,logon\n2025-01-02,logoff\n", encoding="utf-8")
+            csv2.write_text("ts,msg\n2025-02-01,start\n", encoding="utf-8")
+
+            fake_provider = FakeProvider()
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(
+                    artifact_csv_paths={"evtx": [str(csv1), str(csv2)]},
+                )
+            combined = analyzer._combine_csv_files("evtx", [csv1, csv2])
+            self.assertTrue(combined.exists())
+            lines = combined.read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(lines[0], "ts,msg")
+            self.assertEqual(len(lines), 4)  # header + 3 data rows
+
+    def test_combine_csv_files_superset_headers(self) -> None:
+        """_combine_csv_files handles CSVs with different column sets."""
+        with TemporaryDirectory() as tmpdir:
+            csv1 = Path(tmpdir) / "evtx_a.csv"
+            csv2 = Path(tmpdir) / "evtx_b.csv"
+            csv1.write_text("ts,msg\n2025-01-01,logon\n", encoding="utf-8")
+            csv2.write_text("ts,msg,extra\n2025-02-01,start,val\n", encoding="utf-8")
+
+            fake_provider = FakeProvider()
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer()
+            combined = analyzer._combine_csv_files("evtx", [csv1, csv2])
+            lines = combined.read_text(encoding="utf-8").strip().splitlines()
+            self.assertIn("extra", lines[0])
+            self.assertEqual(len(lines), 3)  # header + 2 data rows
+
+    def test_register_from_metadata_preserves_multi_paths(self) -> None:
+        """_register_artifact_paths_from_metadata stores list for multi-path entries."""
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._register_artifact_paths_from_metadata({
+            "artifact_csv_paths": {"evtx": ["/a.csv", "/b.csv"]},
+        })
+        self.assertIsInstance(analyzer.artifact_csv_paths["evtx"], list)
+        self.assertEqual(len(analyzer.artifact_csv_paths["evtx"]), 2)
+
+    def test_analyze_artifact_uses_all_split_csvs(self) -> None:
+        """analyze_artifact combines split CSVs before sending to the AI."""
+        with TemporaryDirectory() as tmpdir:
+            prompts_dir = Path(tmpdir) / "prompts"
+            prompts_dir.mkdir()
+            (prompts_dir / "artifact_analysis.md").write_text(
+                "Key={{artifact_key}}\nData:\n{{data_csv}}\n", encoding="utf-8",
+            )
+            (prompts_dir / "artifact_analysis_small_context.md").write_text(
+                "Key={{artifact_key}}\nData:\n{{data_csv}}\n", encoding="utf-8",
+            )
+            (prompts_dir / "system_prompt.md").write_text("SYS", encoding="utf-8")
+            (prompts_dir / "summary_prompt.md").write_text("SUM", encoding="utf-8")
+
+            csv1 = Path(tmpdir) / "evtx_Security.csv"
+            csv2 = Path(tmpdir) / "evtx_System.csv"
+            csv1.write_text("ts,msg\n2025-01-01,logon\n", encoding="utf-8")
+            csv2.write_text("ts,msg\n2025-02-01,start\n", encoding="utf-8")
+
+            fake_provider = FakeProvider(responses=["AI analysis of split artifact"])
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(
+                    case_dir=tmpdir,
+                    artifact_csv_paths={"evtx": [str(csv1), str(csv2)]},
+                    prompts_dir=prompts_dir,
+                )
+                analyzer.ai_provider = fake_provider
+            result = analyzer.analyze_artifact("evtx", "test investigation")
+            self.assertTrue(result.get("analysis"))
+            self.assertNotIn("Analysis failed", result["analysis"])
+            # Verify data from both CSVs was present in the prompt
+            prompt_sent = fake_provider.calls[0]["user_prompt"]
+            self.assertIn("2025-01-01", prompt_sent)
+            self.assertIn("2025-02-01", prompt_sent)
 
 
 class TestConfigureExplicitAnalysisDateRange(unittest.TestCase):

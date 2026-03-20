@@ -132,10 +132,13 @@ class ForensicAnalyzer:
         self.logger = LOGGER
         self.config = dict(config) if isinstance(config, Mapping) else {}
         self.audit_logger = audit_logger
-        self.artifact_csv_paths = {
-            str(artifact_key): Path(csv_path)
-            for artifact_key, csv_path in (artifact_csv_paths or {}).items()
-        }
+        self.artifact_csv_paths: dict[str, Path | list[Path]] = {}
+        for artifact_key, csv_path in (artifact_csv_paths or {}).items():
+            key = str(artifact_key)
+            if isinstance(csv_path, list):
+                self.artifact_csv_paths[key] = [Path(str(p)) for p in csv_path]
+            else:
+                self.artifact_csv_paths[key] = Path(str(csv_path))
         self._analysis_input_csv_paths: dict[str, Path] = {}
         self.prompts_dir = Path(prompts_dir) if prompts_dir is not None else PROJECT_ROOT / "prompts"
         import random
@@ -412,6 +415,10 @@ class ForensicAnalyzer:
     def _resolve_artifact_csv_path(self, artifact_key: str) -> Path:
         """Resolve the CSV file path for a given artifact key.
 
+        For split artifacts with multiple CSV files, returns the first
+        path.  Use :meth:`_resolve_all_artifact_csv_paths` to get every
+        path for a split artifact.
+
         Args:
             artifact_key: Artifact identifier to resolve.
 
@@ -423,11 +430,15 @@ class ForensicAnalyzer:
         """
         mapped = self.artifact_csv_paths.get(artifact_key)
         if mapped is not None:
+            if isinstance(mapped, list):
+                return mapped[0]
             return mapped
 
         normalized = normalize_artifact_key(artifact_key)
         mapped_normalized = self.artifact_csv_paths.get(normalized)
         if mapped_normalized is not None:
+            if isinstance(mapped_normalized, list):
+                return mapped_normalized[0]
             return mapped_normalized
 
         candidate_path = Path(artifact_key)
@@ -456,6 +467,78 @@ class ForensicAnalyzer:
             f"No CSV path mapped for artifact '{artifact_key}'. "
             "Provide it in ForensicAnalyzer(artifact_csv_paths=...) or use case_dir/parsed CSV paths."
         )
+
+    def _resolve_all_artifact_csv_paths(self, artifact_key: str) -> list[Path]:
+        """Resolve all CSV file paths for a given artifact key.
+
+        For single-file artifacts returns a one-element list.  For split
+        artifacts (e.g. EVTX) returns all constituent CSV paths.
+
+        Args:
+            artifact_key: Artifact identifier to resolve.
+
+        Returns:
+            A non-empty list of ``Path`` objects.
+
+        Raises:
+            FileNotFoundError: If no CSV path can be found.
+        """
+        for key in (artifact_key, normalize_artifact_key(artifact_key)):
+            mapped = self.artifact_csv_paths.get(key)
+            if mapped is not None:
+                if isinstance(mapped, list):
+                    return list(mapped)
+                return [mapped]
+
+        # Delegate to single-path resolver for filesystem fallback.
+        return [self._resolve_artifact_csv_path(artifact_key)]
+
+    def _combine_csv_files(self, artifact_key: str, csv_paths: list[Path]) -> Path:
+        """Concatenate multiple CSV files into a single combined CSV.
+
+        All input files are assumed to share the same schema (column names).
+        The combined file is written to the case's ``parsed/`` directory (or
+        next to the first input file) with a ``_combined`` suffix.
+
+        Args:
+            artifact_key: Artifact identifier (used for the output filename).
+            csv_paths: List of CSV file paths to combine.
+
+        Returns:
+            Path to the combined CSV file.
+        """
+        import csv as csv_mod
+
+        output_dir = csv_paths[0].parent
+        safe_key = sanitize_filename(artifact_key)
+        combined_path = output_dir / f"{safe_key}_combined.csv"
+
+        fieldnames: list[str] = []
+        fieldnames_set: set[str] = set()
+
+        for csv_path in csv_paths:
+            if not csv_path.exists():
+                continue
+            with csv_path.open("r", newline="", encoding="utf-8") as fh:
+                reader = csv_mod.DictReader(fh)
+                if reader.fieldnames:
+                    for fn in reader.fieldnames:
+                        if fn not in fieldnames_set:
+                            fieldnames.append(fn)
+                            fieldnames_set.add(fn)
+
+        with combined_path.open("w", newline="", encoding="utf-8") as out:
+            writer = csv_mod.DictWriter(out, fieldnames=fieldnames, restval="", extrasaction="ignore")
+            writer.writeheader()
+            for csv_path in csv_paths:
+                if not csv_path.exists():
+                    continue
+                with csv_path.open("r", newline="", encoding="utf-8") as fh:
+                    reader = csv_mod.DictReader(fh)
+                    for row in reader:
+                        writer.writerow(row)
+
+        return combined_path
 
     def _set_analysis_input_csv_path(self, artifact_key: str, csv_path: Path) -> None:
         """Store the analysis-input CSV path for an artifact.
@@ -528,7 +611,14 @@ class ForensicAnalyzer:
         artifact_csv_paths = metadata.get("artifact_csv_paths")
         if isinstance(artifact_csv_paths, Mapping):
             for artifact_key, csv_path in artifact_csv_paths.items():
-                self.artifact_csv_paths[str(artifact_key)] = Path(str(csv_path))
+                if isinstance(csv_path, list) and len(csv_path) > 1:
+                    self.artifact_csv_paths[str(artifact_key)] = [
+                        Path(str(p)) for p in csv_path
+                    ]
+                elif isinstance(csv_path, list) and csv_path:
+                    self.artifact_csv_paths[str(artifact_key)] = Path(str(csv_path[0]))
+                else:
+                    self.artifact_csv_paths[str(artifact_key)] = Path(str(csv_path))
 
         for container_key in ("artifacts", "artifact_results", "parse_results", "parsed_artifacts"):
             container = metadata.get(container_key)
@@ -554,10 +644,15 @@ class ForensicAnalyzer:
 
         if isinstance(value, Mapping):
             csv_path = value.get("csv_path")
+            csv_paths = value.get("csv_paths")
+            if isinstance(csv_paths, list) and len(csv_paths) > 1:
+                self.artifact_csv_paths[str(artifact_key)] = [
+                    Path(str(p)) for p in csv_paths
+                ]
+                return
             if csv_path:
                 self.artifact_csv_paths[str(artifact_key)] = Path(str(csv_path))
                 return
-            csv_paths = value.get("csv_paths")
             if isinstance(csv_paths, list) and csv_paths:
                 self.artifact_csv_paths[str(artifact_key)] = Path(str(csv_paths[0]))
                 return
@@ -677,7 +772,11 @@ class ForensicAnalyzer:
 
         start_time = perf_counter()
         try:
-            csv_path = self._resolve_artifact_csv_path(artifact_key)
+            all_csv_paths = self._resolve_all_artifact_csv_paths(artifact_key)
+            if len(all_csv_paths) > 1:
+                csv_path = self._combine_csv_files(artifact_key, all_csv_paths)
+            else:
+                csv_path = all_csv_paths[0]
             artifact_prompt = self._prepare_artifact_data(
                 artifact_key=artifact_key, investigation_context=investigation_context, csv_path=csv_path,
             )
