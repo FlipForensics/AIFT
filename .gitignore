@@ -45,3 +45,6 @@ config.yaml
 
 # pdoc build output
 _site/
+
+# Wiki (maintained in separate GitHub Wiki repo)
+wiki/
