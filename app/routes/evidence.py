@@ -362,7 +362,13 @@ def _resolve_uploaded_dissect_path(uploaded_paths: list[Path]) -> Path:
         only_group = next(iter(segment_groups.values()))
         return min(only_group, key=lambda item: item[0])[1]
 
-    return uploaded_paths[0]
+    # Multiple files that are neither a single archive nor a recognized
+    # segment set — reject rather than silently analyzing only the first.
+    raise ValueError(
+        "Ambiguous upload: multiple files were provided but they do not "
+        "form a recognized segment set. Upload a single evidence file, "
+        "one archive, or a complete split-image segment set."
+    )
 
 
 def _normalize_user_path(value: str) -> str:

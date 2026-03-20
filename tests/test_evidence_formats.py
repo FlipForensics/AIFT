@@ -453,6 +453,27 @@ class TestResolveUploadedDissectPath(unittest.TestCase):
         result = routes_evidence._resolve_uploaded_dissect_path(paths)
         self.assertTrue(result.name.endswith(".E01"))
 
+    def test_two_standalone_images_raises(self) -> None:
+        """Reject two unrelated standalone evidence files (no segment pattern)."""
+        paths = [self._touch("disk1.vmdk"), self._touch("disk2.vmdk")]
+        with self.assertRaises(ValueError) as ctx:
+            routes_evidence._resolve_uploaded_dissect_path(paths)
+        self.assertIn("Ambiguous upload", str(ctx.exception))
+
+    def test_two_different_format_standalone_raises(self) -> None:
+        """Reject mixed standalone formats (e.g. .dd and .vmdk)."""
+        paths = [self._touch("image.dd"), self._touch("backup.vmdk")]
+        with self.assertRaises(ValueError) as ctx:
+            routes_evidence._resolve_uploaded_dissect_path(paths)
+        self.assertIn("Ambiguous upload", str(ctx.exception))
+
+    def test_three_standalone_images_raises(self) -> None:
+        """Reject three unrelated standalone evidence files."""
+        paths = [self._touch("a.raw"), self._touch("b.img"), self._touch("c.dd")]
+        with self.assertRaises(ValueError) as ctx:
+            routes_evidence._resolve_uploaded_dissect_path(paths)
+        self.assertIn("single evidence file", str(ctx.exception))
+
     def test_empty_list_raises(self) -> None:
         with self.assertRaises(ValueError):
             routes_evidence._resolve_uploaded_dissect_path([])
