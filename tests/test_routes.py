@@ -3256,6 +3256,93 @@ class TaskHelperTests(unittest.TestCase):
         routes_state.PARSE_PROGRESS.clear()
 
 
+class TestParseRerunClearsStaleState(unittest.TestCase):
+    """Regression: a failed reparse must not leave old parse outputs usable."""
+
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory(prefix="aift-reparse-")
+        self.cases_root = Path(self.temp_dir.name) / "cases"
+        self.config_path = Path(self.temp_dir.name) / "config.yaml"
+        self.app = create_app(str(self.config_path))
+        self.app.testing = True
+        self.csrf_token = self.app.config["CSRF_TOKEN"]
+        self.client = self.app.test_client()
+        self.client.environ_base["HTTP_X_CSRF_TOKEN"] = self.csrf_token
+        routes.CASE_STATES.clear()
+        routes.PARSE_PROGRESS.clear()
+        routes.ANALYSIS_PROGRESS.clear()
+        routes.CHAT_PROGRESS.clear()
+        unregister_all_case_log_handlers()
+
+    def tearDown(self) -> None:
+        unregister_all_case_log_handlers()
+        self.temp_dir.cleanup()
+
+    def test_failed_reparse_clears_old_parse_outputs(self) -> None:
+        """After a successful parse, a failing reparse must clear stale data."""
+        evidence_path = Path(self.temp_dir.name) / "stale.E01"
+        evidence_path.write_bytes(b"demo")
+
+        class FailingParser(FakeParser):
+            """Parser that raises on parse_artifact."""
+
+            def parse_artifact(self, artifact_key: str, progress_callback: object | None = None) -> dict[str, object]:
+                """Always raise to simulate a parser failure."""
+                raise RuntimeError("Simulated parse failure")
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(
+                routes, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch.object(
+                routes_handlers, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch.object(
+                routes_evidence, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+        ):
+            # Create case and load evidence.
+            create_resp = self.client.post("/api/cases", json={"case_name": "Stale"})
+            case_id = create_resp.get_json()["case_id"]
+            self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_path)})
+
+            # First parse succeeds.
+            resp = self.client.post(f"/api/cases/{case_id}/parse", json={"artifacts": ["runkeys"]})
+            self.assertEqual(resp.status_code, 202)
+            case = routes_state.CASE_STATES[case_id]
+            self.assertTrue(len(case.get("parse_results", [])) > 0, "First parse should produce results")
+            self.assertTrue(len(case.get("artifact_csv_paths", {})) > 0, "First parse should produce csv map")
+
+        # Now reparse with a failing parser.
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FailingParser),
+            patch.object(routes_handlers, "ForensicParser", FailingParser),
+            patch.object(routes_tasks, "ForensicParser", FailingParser),
+            patch.object(routes_evidence, "ForensicParser", FailingParser),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+        ):
+            resp = self.client.post(f"/api/cases/{case_id}/parse", json={"artifacts": ["runkeys"]})
+            self.assertEqual(resp.status_code, 202)
+
+            # After the failed reparse, stale outputs must be gone.
+            case = routes_state.CASE_STATES[case_id]
+            self.assertEqual(case.get("parse_results"), [], "Stale parse_results should be cleared")
+            self.assertEqual(case.get("artifact_csv_paths"), {}, "Stale artifact_csv_paths should be cleared")
+            self.assertEqual(case.get("analysis_results"), {}, "Stale analysis_results should be cleared")
+
+
 class TestRunAnalysisUnavailableProvider(unittest.TestCase):
     """Regression: analysis with an unconfigured provider must not mark case completed."""
 
