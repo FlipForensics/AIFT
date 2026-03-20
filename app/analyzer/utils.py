@@ -220,14 +220,18 @@ def parse_int(value: str) -> int | None:
         return None
 
 
-def parse_datetime_value(value: str) -> datetime | None:
+def parse_datetime_value(value: str, *, allow_epoch: bool = True) -> datetime | None:
     """Attempt to parse a string value into a naive UTC datetime.
 
-    Tries ISO format first, then common date/time formats, and finally
+    Tries ISO format first, then common date/time formats, and optionally
     epoch timestamps (seconds or milliseconds).
 
     Args:
         value: Raw string that may contain a date or timestamp.
+        allow_epoch: If ``True`` (default), bare integers in the plausible
+            epoch range are accepted.  Set to ``False`` when scanning
+            columns that are not known to hold timestamps, to avoid
+            misinterpreting numeric IDs or counters as dates.
 
     Returns:
         A naive ``datetime`` in UTC, or ``None`` if parsing fails.
@@ -262,6 +266,9 @@ def parse_datetime_value(value: str) -> datetime | None:
             return normalize_datetime(parsed)
         except ValueError:
             continue
+
+    if not allow_epoch:
+        return None
 
     int_value = parse_int(cleaned)
     if int_value is not None:
@@ -307,7 +314,11 @@ def is_dedup_safe_identifier_column(column_name: str) -> bool:
 def extract_row_datetime(row: dict[str, str], columns: list[str] | None = None) -> datetime | None:
     """Extract the first parseable timestamp from a CSV row.
 
-    Prioritizes columns whose names look like timestamps, then scans all values.
+    Prioritizes columns whose names look like timestamps (with full
+    parsing including epoch integers).  Falls back to remaining columns
+    but only accepts string-format dates — bare numeric values are
+    **not** treated as epoch timestamps in the fallback pass, to avoid
+    misinterpreting IDs or counters as dates.
 
     Args:
         row: Normalized row dict.
@@ -316,19 +327,21 @@ def extract_row_datetime(row: dict[str, str], columns: list[str] | None = None) 
     Returns:
         The first successfully parsed ``datetime``, or ``None``.
     """
-    candidate_columns: list[str] = []
-    if columns:
-        candidate_columns.extend(c for c in columns if looks_like_timestamp_column(c))
-    else:
-        candidate_columns.extend(c for c in row.keys() if looks_like_timestamp_column(c))
+    all_columns = columns if columns else list(row.keys())
+    timestamp_columns = [c for c in all_columns if looks_like_timestamp_column(c)]
 
-    for column in candidate_columns:
-        parsed = parse_datetime_value(row.get(column, ""))
+    # Pass 1: timestamp-named columns — full parsing including epochs.
+    for column in timestamp_columns:
+        parsed = parse_datetime_value(row.get(column, ""), allow_epoch=True)
         if parsed is not None:
             return parsed
 
-    for value in row.values():
-        parsed = parse_datetime_value(value)
+    # Pass 2: remaining columns — string dates only, no epoch integers.
+    timestamp_set = set(timestamp_columns)
+    for column in all_columns:
+        if column in timestamp_set:
+            continue
+        parsed = parse_datetime_value(row.get(column, ""), allow_epoch=False)
         if parsed is not None:
             return parsed
 

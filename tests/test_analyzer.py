@@ -2029,6 +2029,19 @@ class TestParseDatetimeValue(unittest.TestCase):
         from app.analyzer.utils import parse_datetime_value
         self.assertIsNone(parse_datetime_value("not-a-date"))
 
+    def test_epoch_rejected_when_allow_epoch_false(self) -> None:
+        """Epoch integers should be rejected when allow_epoch=False."""
+        from app.analyzer.utils import parse_datetime_value
+        result = parse_datetime_value("1768435200", allow_epoch=False)
+        self.assertIsNone(result)
+
+    def test_string_date_accepted_when_allow_epoch_false(self) -> None:
+        """String-format dates should still parse when allow_epoch=False."""
+        from app.analyzer.utils import parse_datetime_value
+        result = parse_datetime_value("2026-01-15T12:00:00", allow_epoch=False)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.year, 2026)
+
 
 class TestLooksLikeTimestampColumn(unittest.TestCase):
     """Tests for utils.looks_like_timestamp_column."""
@@ -2068,6 +2081,45 @@ class TestExtractRowDatetime(unittest.TestCase):
         result = extract_row_datetime(row, columns=["ts", "name"])
         self.assertIsNotNone(result)
 
+    def test_numeric_id_without_timestamp_columns_returns_none(self) -> None:
+        """Numeric IDs in non-timestamp columns must not be mistaken for epochs."""
+        from app.analyzer.utils import extract_row_datetime
+        row = {"record_id": "1768435200", "name": "test", "count": "42"}
+        result = extract_row_datetime(row)
+        self.assertIsNone(result)
+
+    def test_numeric_id_ignored_when_timestamp_column_present(self) -> None:
+        """When a timestamp column exists, numeric IDs in other columns are irrelevant."""
+        from app.analyzer.utils import extract_row_datetime
+        row = {"ts": "2026-01-15T12:00:00", "record_id": "9999999999"}
+        result = extract_row_datetime(row)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.year, 2026)
+
+    def test_epoch_in_timestamp_column_still_works(self) -> None:
+        """Epoch integers in a timestamp-named column should still parse."""
+        from app.analyzer.utils import extract_row_datetime
+        # 1768435200 = 2026-01-15 00:00:00 UTC
+        row = {"timestamp": "1768435200", "name": "test"}
+        result = extract_row_datetime(row)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.year, 2026)
+
+    def test_string_date_in_non_timestamp_column_still_works(self) -> None:
+        """String-format dates in non-timestamp columns should still parse."""
+        from app.analyzer.utils import extract_row_datetime
+        row = {"event_info": "2026-01-15T12:00:00", "id": "42"}
+        result = extract_row_datetime(row)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.year, 2026)
+
+    def test_all_numeric_non_timestamp_columns_returns_none(self) -> None:
+        """Rows with only numeric values and no timestamp columns produce None."""
+        from app.analyzer.utils import extract_row_datetime
+        row = {"id": "1000000001", "size": "2000000000", "count": "3000000000"}
+        result = extract_row_datetime(row)
+        self.assertIsNone(result)
+
 
 class TestTimeRangeForRows(unittest.TestCase):
     """Tests for utils.time_range_for_rows."""
@@ -2097,6 +2149,30 @@ class TestTimeRangeForRows(unittest.TestCase):
         min_t, max_t = time_range_for_rows(rows)
         self.assertIsNone(min_t)
         self.assertIsNone(max_t)
+
+    def test_numeric_ids_not_mistaken_for_time_range(self) -> None:
+        """Rows with only numeric IDs in non-timestamp columns produce no range."""
+        from app.analyzer.utils import time_range_for_rows
+        rows = [
+            {"id": "1000000001", "size": "2000000000"},
+            {"id": "1000000002", "size": "2000000001"},
+        ]
+        min_t, max_t = time_range_for_rows(rows)
+        self.assertIsNone(min_t)
+        self.assertIsNone(max_t)
+
+    def test_real_timestamps_still_produce_correct_range(self) -> None:
+        """Genuine timestamp columns still yield correct time ranges."""
+        from app.analyzer.utils import time_range_for_rows
+        rows = [
+            {"created_date": "2026-01-10T08:00:00", "id": "1000000001"},
+            {"created_date": "2026-01-20T08:00:00", "id": "1000000002"},
+        ]
+        min_t, max_t = time_range_for_rows(rows)
+        self.assertIsNotNone(min_t)
+        self.assertIsNotNone(max_t)
+        self.assertEqual(min_t.day, 10)
+        self.assertEqual(max_t.day, 20)
 
 
 class TestNormalizeArtifactKey(unittest.TestCase):
