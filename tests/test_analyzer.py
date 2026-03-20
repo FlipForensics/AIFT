@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import csv
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -1509,7 +1510,23 @@ class AppFactoryPathResolutionTests(unittest.TestCase):
         with TemporaryDirectory(prefix="aift-factory-test-") as temp_dir:
             config_path = Path(temp_dir) / "config.yaml"
             app = create_app(str(config_path))
-            self.assertEqual(app.config["AIFT_CONFIG_PATH"], str(config_path))
+            self.assertEqual(app.config["AIFT_CONFIG_PATH"], str(config_path.resolve()))
+
+    def test_create_app_relative_path_becomes_absolute(self) -> None:
+        """A relative custom config_path must be resolved to an absolute path."""
+        from app import create_app
+
+        app = create_app("relative/config.yaml")
+        stored = app.config["AIFT_CONFIG_PATH"]
+        self.assertTrue(
+            Path(stored).is_absolute(),
+            f"AIFT_CONFIG_PATH should be absolute, got: {stored}",
+        )
+        self.assertTrue(
+            stored.endswith("relative/config.yaml".replace("/", os.sep))
+            or stored.endswith("relative\\config.yaml"),
+            f"Resolved path should end with the original relative suffix, got: {stored}",
+        )
 
 
 class TestMatchColumnName(unittest.TestCase):

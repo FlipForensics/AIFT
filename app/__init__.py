@@ -51,7 +51,7 @@ def create_app(config_path: str | None = None) -> Flask:
     app = Flask(__name__, template_folder="../templates", static_folder="../static")
     aift_config = load_config(config_path)
     # Store the resolved absolute path so all downstream code uses it consistently.
-    resolved_config_path = str(Path(config_path)) if config_path is not None else str(PROJECT_ROOT / "config.yaml")
+    resolved_config_path = str(Path(config_path).resolve()) if config_path is not None else str(PROJECT_ROOT / "config.yaml")
     app.config["AIFT_CONFIG"] = aift_config
     app.config["AIFT_CONFIG_PATH"] = resolved_config_path
 
