@@ -3826,5 +3826,42 @@ class TestInitConvenienceShorthand(unittest.TestCase):
         self.assertIn("art", analyzer.artifact_csv_paths)
 
 
+class TestUnavailableProviderFailsAnalysis(unittest.TestCase):
+    """Regression: run_full_analysis must fail immediately with UnavailableProvider."""
+
+    def test_run_full_analysis_raises_on_unavailable_provider(self) -> None:
+        """If provider init failed, run_full_analysis must raise AIProviderError."""
+        with patch("app.analyzer.core.create_provider", side_effect=RuntimeError("bad key")):
+            analyzer = ForensicAnalyzer()
+
+        with self.assertRaises(AIProviderError) as ctx:
+            analyzer.run_full_analysis(
+                artifact_keys=["runkeys"],
+                investigation_context="test",
+                metadata=None,
+            )
+        self.assertIn("bad key", str(ctx.exception))
+
+    def test_run_full_analysis_succeeds_with_valid_provider(self) -> None:
+        """Normal providers must not be blocked by the UnavailableProvider guard."""
+        fake_provider = FakeProvider(responses=["finding", "summary"])
+        with TemporaryDirectory(prefix="aift-ok-") as tmp_dir:
+            csv_path = Path(tmp_dir) / "runkeys.csv"
+            csv_path.write_text("ts,name\n2024-01-01,test\n", encoding="utf-8")
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(
+                    case_dir=tmp_dir,
+                    config={"analysis": {"ai_max_tokens": 4096}},
+                    artifact_csv_paths={"runkeys": csv_path},
+                )
+            result = analyzer.run_full_analysis(
+                artifact_keys=["runkeys"],
+                investigation_context="test context",
+                metadata=None,
+            )
+        self.assertIn("per_artifact", result)
+        self.assertIn("summary", result)
+
+
 if __name__ == "__main__":
     unittest.main()

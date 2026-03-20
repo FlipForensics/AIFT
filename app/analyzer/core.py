@@ -980,6 +980,9 @@ class ForensicAnalyzer:
         Returns:
             A dict with ``per_artifact``, ``summary``, and ``model_info``.
         """
+        if isinstance(self.ai_provider, UnavailableProvider):
+            raise AIProviderError(self.ai_provider._error_message)
+
         self._register_artifact_paths_from_metadata(metadata)
         self._configure_explicit_analysis_date_range(metadata)
         per_artifact_results: list[dict[str, Any]] = []

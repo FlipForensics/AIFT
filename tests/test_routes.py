@@ -3262,5 +3262,66 @@ class TaskHelperTests(unittest.TestCase):
         routes_state.PARSE_PROGRESS.clear()
 
 
+class TestRunAnalysisUnavailableProvider(unittest.TestCase):
+    """Regression: analysis with an unconfigured provider must not mark case completed."""
+
+    def setUp(self) -> None:
+        routes_state.CASE_STATES.clear()
+        routes_state.ANALYSIS_PROGRESS.clear()
+
+    def tearDown(self) -> None:
+        routes_state.CASE_STATES.clear()
+        routes_state.ANALYSIS_PROGRESS.clear()
+
+    def test_unavailable_provider_sets_error_status(self) -> None:
+        """When provider init fails, case status must be error, not completed."""
+        from tempfile import TemporaryDirectory
+        import csv
+
+        with TemporaryDirectory(prefix="aift-unavail-") as tmp_dir:
+            csv_path = Path(tmp_dir) / "parsed" / "runkeys.csv"
+            csv_path.parent.mkdir(parents=True, exist_ok=True)
+            with csv_path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["ts", "name"])
+                writer.writerow(["2024-01-01", "test"])
+
+            audit = MagicMock()
+            routes_state.CASE_STATES["bad-provider"] = {
+                "case_dir": tmp_dir,
+                "audit": audit,
+                "artifact_csv_paths": {"runkeys": str(csv_path)},
+                "parse_results": [{"artifact_key": "runkeys", "success": True, "csv_path": str(csv_path)}],
+                "analysis_artifacts": ["runkeys"],
+                "selected_artifacts": ["runkeys"],
+                "artifact_options": [],
+                "image_metadata": {},
+            }
+
+            bad_config = {"ai": {"provider": "anthropic", "anthropic": {"api_key": ""}}}
+            with patch(
+                "app.routes.tasks.create_provider",
+                side_effect=RuntimeError("Invalid API key"),
+            ):
+                routes_tasks.run_analysis("bad-provider", "investigate breach", bad_config)
+
+            case = routes_state.CASE_STATES["bad-provider"]
+            progress = routes_state.ANALYSIS_PROGRESS.get("bad-provider", {})
+
+            # Case must NOT be completed
+            self.assertNotEqual(case.get("status"), "completed")
+            self.assertEqual(case.get("status"), "error")
+
+            # Analysis progress must be failed
+            self.assertEqual(progress.get("status"), "failed")
+
+            # No misleading analysis_results stored
+            self.assertFalse(
+                isinstance(case.get("analysis_results"), dict)
+                and case["analysis_results"].get("per_artifact"),
+                "Stale analysis_results should not be stored",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
