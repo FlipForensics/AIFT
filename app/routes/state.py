@@ -94,7 +94,7 @@ __all__ = [
 
 LOGGER = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CASES_ROOT = PROJECT_ROOT / "cases"
 IMAGES_ROOT = PROJECT_ROOT / "images"
 SENSITIVE_KEYS = {"api_key", "token", "secret", "password"}

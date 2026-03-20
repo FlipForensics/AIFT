@@ -1996,6 +1996,36 @@ class RoutesTests(unittest.TestCase):
 class StateHelperTests(unittest.TestCase):
     """Tests for helper functions in app.routes.state."""
 
+    def test_project_root_points_to_repo_root(self) -> None:
+        """PROJECT_ROOT must resolve to the repository root, not app/."""
+        self.assertTrue(
+            (routes_state.PROJECT_ROOT / "app").is_dir(),
+            "PROJECT_ROOT should contain the 'app' package directory",
+        )
+        self.assertTrue(
+            (routes_state.PROJECT_ROOT / "app" / "routes" / "state.py").is_file(),
+            "PROJECT_ROOT should be two levels above state.py",
+        )
+        self.assertNotEqual(
+            routes_state.PROJECT_ROOT.name,
+            "app",
+            "PROJECT_ROOT must not point inside 'app/'",
+        )
+
+    def test_cases_root_under_project_root(self) -> None:
+        """CASES_ROOT must be PROJECT_ROOT / 'cases'."""
+        self.assertEqual(
+            routes_state.CASES_ROOT,
+            routes_state.PROJECT_ROOT / "cases",
+        )
+
+    def test_images_root_under_project_root(self) -> None:
+        """IMAGES_ROOT must be PROJECT_ROOT / 'images'."""
+        self.assertEqual(
+            routes_state.IMAGES_ROOT,
+            routes_state.PROJECT_ROOT / "images",
+        )
+
     def test_now_iso_format(self) -> None:
         result = routes_state.now_iso()
         self.assertTrue(result.endswith("Z"))
