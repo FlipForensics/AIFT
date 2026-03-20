@@ -46,14 +46,14 @@
       : `/api/cases/${encodeURIComponent(caseId)}/csvs`;
     const fallback = kind === "report" ? `${caseId}_report.html` : `${caseId}_parsed_csvs.zip`;
     try {
-      const r = await fetch(endpoint, { method: "GET" });
+      const r = await A.fetchWithTimeout(endpoint, { method: "GET" }, A.FETCH_TIMEOUT_UPLOAD_MS);
       if (!r.ok) throw new Error((await A.readErr(r)) || `Download failed (${r.status}).`);
       const blob = await r.blob();
       const filename = A.getFilename(r.headers) || fallback;
       triggerDownload(blob, filename);
       A.setMsg(el.resultsMsg, `Download started: ${filename}`, "success");
     } catch (e) {
-      A.setMsg(el.resultsMsg, `Download failed: ${e.message}`, "error");
+      A.setMsg(el.resultsMsg, `Download failed: ${A.handleFetchError(e, endpoint)}`, "error");
     }
   }
 

@@ -117,9 +117,9 @@
         files.forEach((file, index) => {
           fd.append("evidence_file", file, file.name || `evidence_${index + 1}.bin`);
         });
-        ev = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", body: fd });
+        ev = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", body: fd, timeout: A.FETCH_TIMEOUT_UPLOAD_MS });
       } else {
-        ev = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", json: { path } });
+        ev = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", json: { path }, timeout: A.FETCH_TIMEOUT_UPLOAD_MS });
       }
       intakeProgress.complete();
       A.setCaseId(caseId);

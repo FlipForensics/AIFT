@@ -24,6 +24,8 @@ window.AIFT = (() => {
   const SSE_MAX_RETRIES = 10;
   const SSE_RETRY_BASE_DELAY_MS = 1000;
   const SSE_RETRY_MAX_DELAY_MS = 30000;
+  const FETCH_TIMEOUT_API_MS = 60000;
+  const FETCH_TIMEOUT_UPLOAD_MS = 240000;
 
   // ── Application state ──────────────────────────────────────────────────────
   const st = {
@@ -56,13 +58,59 @@ window.AIFT = (() => {
   const el = {};
   const q = (id) => document.getElementById(id);
 
+  // ── Fetch with timeout ─────────────────────────────────────────────────────
+  async function fetchWithTimeout(url, init = {}, timeoutMs = FETCH_TIMEOUT_API_MS) {
+    const controller = new AbortController();
+    let timedOut = false;
+
+    if (init.signal) {
+      if (init.signal.aborted) {
+        controller.abort(init.signal.reason);
+      } else {
+        init.signal.addEventListener("abort", () => controller.abort(init.signal.reason), { once: true });
+      }
+    }
+
+    const timer = timeoutMs > 0
+      ? window.setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs)
+      : null;
+
+    try {
+      return await fetch(url, Object.assign({}, init, { signal: controller.signal }));
+    } catch (e) {
+      if (e.name === "AbortError" && timedOut) {
+        const err = new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s.`);
+        err.name = "TimeoutError";
+        throw err;
+      }
+      throw e;
+    } finally {
+      if (timer) window.clearTimeout(timer);
+    }
+  }
+
+  function handleFetchError(error, url) {
+    if (error.name === "TimeoutError") {
+      return `Request to ${url} timed out. The server may be busy \u2014 please try again.`;
+    }
+    if (error.name === "AbortError") {
+      return "Request was cancelled.";
+    }
+    if (error instanceof TypeError || /network|failed to fetch/i.test(error.message)) {
+      return "Network error: unable to reach the server. Check your connection and ensure AIFT is running.";
+    }
+    return error.message || `Request to ${url} failed.`;
+  }
+
   // ── CSRF ───────────────────────────────────────────────────────────────────
   async function fetchCsrfToken() {
-    const r = await fetch("/api/csrf-token", { method: "GET" });
-    if (r.ok) {
-      const data = await r.json();
-      csrfToken = data.csrf_token || "";
-    }
+    try {
+      const r = await fetchWithTimeout("/api/csrf-token", { method: "GET" });
+      if (r.ok) {
+        const data = await r.json();
+        csrfToken = data.csrf_token || "";
+      }
+    } catch (_e) { /* CSRF fetch is best-effort */ }
   }
 
   // ── Case ID helpers ────────────────────────────────────────────────────────
@@ -187,12 +235,13 @@ window.AIFT = (() => {
       init.body = opts.body;
       if (init.body instanceof FormData) delete headers["Content-Type"];
     }
+    const timeoutMs = typeof opts.timeout === "number" ? opts.timeout : FETCH_TIMEOUT_API_MS;
     let r;
     try {
-      r = await fetch(url, init);
+      r = await fetchWithTimeout(url, init, timeoutMs);
     } catch (e) {
       if (e.name === "AbortError") throw e;
-      throw new Error(`Network error while calling ${url}: ${e.message}`);
+      throw new Error(handleFetchError(e, url));
     }
     const ct = r.headers.get("content-type") || "";
     const payload = ct.includes("application/json")
@@ -357,6 +406,7 @@ window.AIFT = (() => {
     STEP_IDS, RECOMMENDED_PRESET_EXCLUDED_ARTIFACTS, MODE_PARSE_AND_AI, MODE_PARSE_ONLY,
     RECOMMENDED_PROFILE, DROP_HELP, CONFIDENCE_TOKEN_PATTERN, AI_MAX_TOKENS_WARNING_THRESHOLD,
     CONFIDENCE_CLASS_MAP, SSE_MAX_RETRIES, SSE_RETRY_BASE_DELAY_MS, SSE_RETRY_MAX_DELAY_MS,
+    FETCH_TIMEOUT_API_MS, FETCH_TIMEOUT_UPLOAD_MS,
     // State & DOM
     st, el, q,
     // CSRF
@@ -368,7 +418,7 @@ window.AIFT = (() => {
     // SSE
     sseRetryDelayMs, closeSseChannel,
     // Network
-    apiJson, readErr,
+    fetchWithTimeout, handleFetchError, apiJson, readErr,
     // Utilities
     artifactName, fmtBytes, fmtNumber, safeJson, escapeHtml, val, num,
     isObj, obj, clone,
