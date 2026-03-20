@@ -383,41 +383,15 @@ class LocalProvider(AIProvider):
             )
 
         def _request() -> str:
-            attachment_response = self._request_with_csv_attachments(
+            result = self._build_stream_or_result(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
                 attachments=attachments,
             )
-            if attachment_response:
-                cleaned_attachment_response = _strip_leading_reasoning_blocks(attachment_response)
-                return cleaned_attachment_response or attachment_response.strip()
-
-            prompt_for_completion = self._build_chat_completion_prompt(
-                user_prompt=user_prompt,
-                attachments=attachments,
-            )
-
-            try:
-                stream = self.client.chat.completions.create(
-                    model=self.model,
-                    max_tokens=max_tokens,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt_for_completion},
-                    ],
-                    stream=True,
-                )
-            except self._openai.BadRequestError as error:
-                lowered_error = str(error).lower()
-                if "stream" in lowered_error and ("unsupported" in lowered_error or "not support" in lowered_error):
-                    return self._request_non_stream(
-                        system_prompt=system_prompt,
-                        user_prompt=user_prompt,
-                        max_tokens=max_tokens,
-                        attachments=attachments,
-                    )
-                raise
+            if isinstance(result, str):
+                return result
+            stream = result
 
             thinking_parts: list[str] = []
             answer_parts: list[str] = []
@@ -426,22 +400,11 @@ class LocalProvider(AIProvider):
             last_sent_answer = ""
 
             for chunk in stream:
-                choices = getattr(chunk, "choices", None)
-                if not choices:
-                    continue
-                choice = choices[0]
-                delta = getattr(choice, "delta", None)
-                if delta is None and isinstance(choice, dict):
-                    delta = choice.get("delta")
-                if delta is None:
+                chunk_result = self._process_stream_chunk(chunk)
+                if chunk_result is None:
                     continue
 
-                answer_delta = _extract_openai_delta_text(delta, ("content",))
-                thinking_delta = _extract_openai_delta_text(
-                    delta,
-                    ("reasoning_content", "reasoning", "thinking"),
-                )
-
+                thinking_delta, answer_delta = chunk_result
                 if thinking_delta:
                     thinking_parts.append(thinking_delta)
                 if answer_delta:
@@ -453,54 +416,202 @@ class LocalProvider(AIProvider):
                     thinking_text=current_thinking,
                 )
 
-                if not current_thinking and not current_answer:
-                    continue
-
-                now = time.monotonic()
-                changed = (
-                    current_thinking != last_sent_thinking
-                    or current_answer != last_sent_answer
-                )
-                if not changed:
-                    continue
-
-                if now - last_emit_at < 0.35 and (
-                    len(current_thinking) - len(last_sent_thinking) < 80
-                    and len(current_answer) - len(last_sent_answer) < 80
-                ):
-                    continue
-
-                last_emit_at = now
-                last_sent_thinking = current_thinking
-                last_sent_answer = current_answer
-                try:
-                    progress_callback(
-                        {
-                            "status": "thinking",
-                            "thinking_text": current_thinking,
-                            "partial_text": current_answer,
-                        }
+                last_emit_at, last_sent_thinking, last_sent_answer = (
+                    self._emit_progress_if_needed(
+                        progress_callback=progress_callback,
+                        current_thinking=current_thinking,
+                        current_answer=current_answer,
+                        last_emit_at=last_emit_at,
+                        last_sent_thinking=last_sent_thinking,
+                        last_sent_answer=last_sent_answer,
                     )
-                except Exception:
-                    pass
+                )
 
-            final_thinking = "".join(thinking_parts).strip()
-            final_answer = _clean_streamed_answer_text(
-                answer_text="".join(answer_parts),
-                thinking_text=final_thinking,
-            )
-            if final_answer:
-                return final_answer
-
-            if final_thinking:
-                return final_thinking
-
-            raise AIProviderError(
-                "Local AI provider returned an empty streamed response. "
-                "Try a different local model or increase max tokens."
-            )
+            return self._finalize_stream_response(thinking_parts, answer_parts)
 
         return self._run_local_request(_request)
+
+    def _build_stream_or_result(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int,
+        attachments: list[Mapping[str, str]] | None,
+    ) -> Any | str:
+        """Set up the streaming request, returning a stream or a final string.
+
+        Attempts CSV file attachment first. If that succeeds, returns the
+        completed text directly. Otherwise creates a streaming chat completion.
+        Falls back to non-streaming if the endpoint rejects streaming.
+
+        Args:
+            system_prompt: The system-level instruction text.
+            user_prompt: The user-facing prompt text.
+            max_tokens: Maximum completion tokens.
+            attachments: Optional list of attachment descriptors.
+
+        Returns:
+            A streaming response object, or a ``str`` if the result was
+            obtained without streaming (attachment path or fallback).
+
+        Raises:
+            AIProviderError: If the non-streaming fallback also fails.
+        """
+        attachment_response = self._request_with_csv_attachments(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=max_tokens,
+            attachments=attachments,
+        )
+        if attachment_response:
+            cleaned = _strip_leading_reasoning_blocks(attachment_response)
+            return cleaned or attachment_response.strip()
+
+        prompt_for_completion = self._build_chat_completion_prompt(
+            user_prompt=user_prompt,
+            attachments=attachments,
+        )
+
+        try:
+            return self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt_for_completion},
+                ],
+                stream=True,
+            )
+        except self._openai.BadRequestError as error:
+            lowered_error = str(error).lower()
+            if "stream" in lowered_error and (
+                "unsupported" in lowered_error or "not support" in lowered_error
+            ):
+                return self._request_non_stream(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    max_tokens=max_tokens,
+                    attachments=attachments,
+                )
+            raise
+
+    @staticmethod
+    def _process_stream_chunk(chunk: Any) -> tuple[str, str] | None:
+        """Extract thinking and answer deltas from a single stream chunk.
+
+        Args:
+            chunk: A streaming response chunk from the OpenAI SDK.
+
+        Returns:
+            A ``(thinking_delta, answer_delta)`` tuple, or ``None`` if the
+            chunk contains no usable text.
+        """
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            return None
+        choice = choices[0]
+        delta = getattr(choice, "delta", None)
+        if delta is None and isinstance(choice, dict):
+            delta = choice.get("delta")
+        if delta is None:
+            return None
+
+        answer_delta = _extract_openai_delta_text(delta, ("content",))
+        thinking_delta = _extract_openai_delta_text(
+            delta,
+            ("reasoning_content", "reasoning", "thinking"),
+        )
+
+        if not answer_delta and not thinking_delta:
+            return None
+        return (thinking_delta, answer_delta)
+
+    @staticmethod
+    def _emit_progress_if_needed(
+        progress_callback: Callable[[dict[str, str]], None],
+        current_thinking: str,
+        current_answer: str,
+        last_emit_at: float,
+        last_sent_thinking: str,
+        last_sent_answer: str,
+    ) -> tuple[float, str, str]:
+        """Send a progress callback if enough content has changed.
+
+        Applies rate-limiting so the callback fires at most every 0.35 s
+        unless at least 80 characters have been added to either channel.
+
+        Args:
+            progress_callback: The callable to invoke with progress data.
+            current_thinking: Accumulated thinking text so far.
+            current_answer: Accumulated answer text so far.
+            last_emit_at: Monotonic timestamp of the last emission.
+            last_sent_thinking: Thinking text sent in the last emission.
+            last_sent_answer: Answer text sent in the last emission.
+
+        Returns:
+            Updated ``(last_emit_at, last_sent_thinking, last_sent_answer)``.
+        """
+        if not current_thinking and not current_answer:
+            return last_emit_at, last_sent_thinking, last_sent_answer
+
+        changed = (
+            current_thinking != last_sent_thinking
+            or current_answer != last_sent_answer
+        )
+        if not changed:
+            return last_emit_at, last_sent_thinking, last_sent_answer
+
+        now = time.monotonic()
+        if now - last_emit_at < 0.35 and (
+            len(current_thinking) - len(last_sent_thinking) < 80
+            and len(current_answer) - len(last_sent_answer) < 80
+        ):
+            return last_emit_at, last_sent_thinking, last_sent_answer
+
+        try:
+            progress_callback(
+                {
+                    "status": "thinking",
+                    "thinking_text": current_thinking,
+                    "partial_text": current_answer,
+                }
+            )
+        except Exception:
+            pass
+
+        return now, current_thinking, current_answer
+
+    @staticmethod
+    def _finalize_stream_response(
+        thinking_parts: list[str],
+        answer_parts: list[str],
+    ) -> str:
+        """Assemble the final response text from accumulated stream parts.
+
+        Args:
+            thinking_parts: Collected thinking-channel text fragments.
+            answer_parts: Collected answer-channel text fragments.
+
+        Returns:
+            The cleaned final answer, or the thinking text if no answer
+            was produced.
+
+        Raises:
+            AIProviderError: If both channels are empty.
+        """
+        final_thinking = "".join(thinking_parts).strip()
+        final_answer = _clean_streamed_answer_text(
+            answer_text="".join(answer_parts),
+            thinking_text=final_thinking,
+        )
+        if final_answer:
+            return final_answer
+        if final_thinking:
+            return final_thinking
+        raise AIProviderError(
+            "Local AI provider returned an empty streamed response. "
+            "Try a different local model or increase max tokens."
+        )
 
     def _request_non_stream(
         self,
