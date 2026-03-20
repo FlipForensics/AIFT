@@ -113,6 +113,17 @@
     <section id="step-artifacts" class="wizard-step" data-step="2" aria-labelledby="step-artifacts-title" hidden>
       <h2 id="step-artifacts-title">Step 2: Artifacts</h2>
 
+      <div id="unsupported-evidence-error" class="unsupported-evidence-error" hidden>
+        <h3>Unsupported Evidence</h3>
+        <p>Dissect could not identify a supported operating system in the provided evidence.</p>
+        <p id="unsupported-evidence-hint" hidden>
+          When uploading E01 images, make sure to upload <strong>all</strong> segment files
+          (e.g.&nbsp;<code>.E01</code>, <code>.E02</code>, <code>.E03</code>, &hellip;).
+          Uploading only a single segment may prevent Dissect from reading the image.
+        </p>
+        <p>Please go back to <strong>Step 1</strong> and provide a valid evidence file.</p>
+      </div>
+
       <article id="evidence-summary-card" class="summary-card" aria-live="polite" hidden>
         <h3>Evidence Intake Summary</h3>
         <dl>
@@ -129,6 +140,7 @@
         </dl>
       </article>
 
+      <div id="artifact-selection-content">
       <div class="preset-actions">
         <button id="preset-quick-triage" type="button">Recommended</button>
         <button id="preset-clear-all" type="button">Clear All</button>
@@ -307,6 +319,7 @@
 
         <button id="parse-selected" type="submit" disabled>Parse Selected</button>
       </form>
+      </div><!-- /artifact-selection-content -->
     </section>
 
     <section

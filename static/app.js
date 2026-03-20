@@ -314,7 +314,7 @@
     A.resetChatState();
 
     if (el.evidenceForm) el.evidenceForm.reset();
-    if (el.modeUpload) el.modeUpload.checked = true;
+    if (el.modePath) el.modePath.checked = true;
     A.syncMode();
     A.setPendingFiles([]);
     if (el.analysisDateStart) el.analysisDateStart.value = "";

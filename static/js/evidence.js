@@ -196,7 +196,26 @@
     st.selectedAi = [];
 
     renderSummary(data.metadata || {}, data.hashes || {});
-    populateArtifacts(st.artifacts);
+
+    const osVersion = String((data.metadata || {}).os_version || "").trim().toLowerCase();
+    const isUnsupported = !osVersion || osVersion === "unknown" || osVersion === "-";
+    const errorBox = document.getElementById("unsupported-evidence-error");
+    const hintEl = document.getElementById("unsupported-evidence-hint");
+    const artifactContent = document.getElementById("artifact-selection-content");
+
+    if (isUnsupported && errorBox) {
+      errorBox.hidden = false;
+      if (hintEl) {
+        const wasUpload = !!(el.modeUpload && el.modeUpload.checked);
+        hintEl.hidden = !wasUpload;
+      }
+      if (artifactContent) artifactContent.hidden = true;
+    } else {
+      if (errorBox) errorBox.hidden = true;
+      if (artifactContent) artifactContent.hidden = false;
+      populateArtifacts(st.artifacts);
+    }
+
     A.renderParsePlaceholder();
     A.renderAnalysis();
     A.renderExecSummary();
