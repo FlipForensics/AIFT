@@ -397,9 +397,12 @@ class ForensicAnalyzer:
         if analysis_text.startswith("Analysis failed:"):
             return []
         try:
-            csv_path = self._resolve_artifact_csv_path(artifact_key)
+            original_path = self._resolve_artifact_csv_path(artifact_key)
         except FileNotFoundError:
             return []
+        csv_path = self._resolve_analysis_input_csv_path(
+            artifact_key, fallback=original_path,
+        )
         return validate_citations(
             artifact_key=artifact_key,
             analysis_text=analysis_text,

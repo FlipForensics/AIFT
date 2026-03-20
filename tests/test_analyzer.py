@@ -1785,6 +1785,92 @@ class TestValidateCitationsTimestamps(unittest.TestCase):
         self.assertEqual(warnings, [])
 
 
+class TestCitationValidationUsesAnalysisInputCsv(unittest.TestCase):
+    """Tests that _validate_citations uses the analysis-input CSV, not the raw CSV."""
+
+    def _write_csv(self, path: Path, headers: list[str], rows: list[list[str]]) -> None:
+        """Write a CSV file with the given headers and rows."""
+        with path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(headers)
+            for row in rows:
+                writer.writerow(row)
+
+    def test_split_artifact_validates_against_combined_csv(self) -> None:
+        """Citation data only in the second split part must be found."""
+        with TemporaryDirectory(prefix="aift-split-cite-") as tmp_dir:
+            # Part 1 has one timestamp; part 2 has a different one.
+            part1 = Path(tmp_dir) / "evtx_part1.csv"
+            part2 = Path(tmp_dir) / "evtx_part2.csv"
+            self._write_csv(part1, ["ts", "msg"], [["2026-01-01T00:00:00Z", "a"]])
+            self._write_csv(part2, ["ts", "msg"], [["2026-06-15T12:00:00Z", "b"]])
+
+            # Build a combined CSV containing both parts.
+            combined = Path(tmp_dir) / "evtx_combined.csv"
+            self._write_csv(
+                combined, ["ts", "msg"],
+                [["2026-01-01T00:00:00Z", "a"], ["2026-06-15T12:00:00Z", "b"]],
+            )
+
+            # Register the split parts as the original CSVs and the combined
+            # as the analysis-input CSV.
+            analyzer = ForensicAnalyzer(
+                artifact_csv_paths={"evtx": [part1, part2]},
+            )
+            analyzer._set_analysis_input_csv_path("evtx", combined)
+
+            # Cite the timestamp from part 2 — should validate successfully.
+            analysis = "At 2026-06-15T12:00:00Z a suspicious event occurred."
+            warnings = analyzer._validate_citations("evtx", analysis)
+            ts_warnings = [w for w in warnings if "timestamp" in w.lower()]
+            self.assertEqual(len(ts_warnings), 0, f"Unexpected warnings: {ts_warnings}")
+
+    def test_projected_artifact_validates_against_analysis_input_csv(self) -> None:
+        """Citation validation must use the projected/deduped CSV, not the raw one."""
+        with TemporaryDirectory(prefix="aift-proj-cite-") as tmp_dir:
+            # Raw CSV has column "RawCol" but not "ProjectedCol".
+            raw_csv = Path(tmp_dir) / "artifact_raw.csv"
+            self._write_csv(raw_csv, ["RawCol"], [["val1"]])
+
+            # Analysis-input CSV has "ProjectedCol" but not "RawCol".
+            analysis_csv = Path(tmp_dir) / "artifact_analysis.csv"
+            self._write_csv(analysis_csv, ["ProjectedCol"], [["val2"]])
+
+            analyzer = ForensicAnalyzer(
+                artifact_csv_paths={"myartifact": raw_csv},
+            )
+            analyzer._set_analysis_input_csv_path("myartifact", analysis_csv)
+
+            # Cite ProjectedCol — should be found in the analysis-input CSV.
+            analysis = "The `ProjectedCol` column reveals important data."
+            warnings = analyzer._validate_citations("myartifact", analysis)
+            unverifiable = [w for w in warnings if "unverifiable" in w.lower()]
+            self.assertEqual(len(unverifiable), 0, f"Unexpected warnings: {unverifiable}")
+
+            # Cite RawCol — should NOT be found (we validate against analysis CSV).
+            analysis2 = "The `RawCol` column was checked."
+            warnings2 = analyzer._validate_citations("myartifact", analysis2)
+            unverifiable2 = [w for w in warnings2 if "unverifiable" in w.lower()]
+            self.assertGreaterEqual(len(unverifiable2), 1)
+
+    def test_single_file_artifact_unchanged_behavior(self) -> None:
+        """Single-file artifacts without analysis-input override work as before."""
+        with TemporaryDirectory(prefix="aift-single-cite-") as tmp_dir:
+            csv_path = Path(tmp_dir) / "artifact.csv"
+            self._write_csv(
+                csv_path, ["ts", "value"],
+                [["2026-03-10T08:00:00Z", "test"]],
+            )
+            analyzer = ForensicAnalyzer(
+                artifact_csv_paths={"simple": csv_path},
+            )
+            # No _set_analysis_input_csv_path — fallback to original.
+            analysis = "At 2026-03-10T08:00:00Z the event was logged."
+            warnings = analyzer._validate_citations("simple", analysis)
+            ts_warnings = [w for w in warnings if "timestamp" in w.lower()]
+            self.assertEqual(len(ts_warnings), 0)
+
+
 ###############################################################################
 # utils.py — standalone function tests
 ###############################################################################
