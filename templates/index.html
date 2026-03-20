@@ -69,16 +69,16 @@
         <fieldset class="mode-toggle">
           <legend>Evidence source</legend>
           <label>
-            <input id="mode-upload" name="evidence_mode" type="radio" value="upload" checked>
+            <input id="mode-upload" name="evidence_mode" type="radio" value="upload">
             Upload File
           </label>
           <label>
-            <input id="mode-path" name="evidence_mode" type="radio" value="path">
+            <input id="mode-path" name="evidence_mode" type="radio" value="path" checked>
             Local Path
           </label>
         </fieldset>
 
-        <section id="upload-mode-panel" data-mode="upload" aria-labelledby="upload-mode-title">
+        <section id="upload-mode-panel" data-mode="upload" aria-labelledby="upload-mode-title" hidden>
           <h3 id="upload-mode-title">Upload File</h3>
           <label id="dropzone" for="evidence-file">
             <span id="dropzone-help">Drag and drop evidence here (.E01, .dd, .raw, .vmdk, .vhd, .vhdx, .vdi, .qcow2, .zip, .7z, .tar, ...)</span>
@@ -86,7 +86,7 @@
           </label>
         </section>
 
-        <section id="path-mode-panel" data-mode="path" aria-labelledby="path-mode-title" hidden>
+        <section id="path-mode-panel" data-mode="path" aria-labelledby="path-mode-title">
           <h3 id="path-mode-title">Local Path</h3>
           <label for="evidence-path">Filesystem path</label>
           <input
