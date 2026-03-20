@@ -471,6 +471,18 @@ class ForensicParser:
 
         try:
             for record in records:
+                if record_count >= MAX_RECORDS_PER_ARTIFACT:
+                    self.audit_logger.log(
+                        "parsing_capped",
+                        {
+                            "artifact_key": artifact_key,
+                            "record_count": record_count,
+                            "max_records": MAX_RECORDS_PER_ARTIFACT,
+                            "message": f"Artifact capped at {MAX_RECORDS_PER_ARTIFACT:,} rows",
+                        },
+                    )
+                    break
+
                 record_dict = self._record_to_dict(record)
                 group_name = self._extract_evtx_group_name(record_dict)
 

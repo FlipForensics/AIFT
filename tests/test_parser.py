@@ -482,6 +482,80 @@ class ParserTests(unittest.TestCase):
         capped_entries = [e for e in audit.entries if e[0] == "parsing_capped"]
         self.assertEqual(len(capped_entries), 1)
 
+    def test_parse_evtx_caps_at_max_records(self) -> None:
+        """EVTX records should be capped at MAX_RECORDS_PER_ARTIFACT."""
+        records = [
+            FakeRecord({"channel": "Security", "event_id": i})
+            for i in range(20)
+        ]
+
+        class EvtxTarget:
+            def evtx(self) -> list[FakeRecord]:
+                return records
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(EvtxTarget(), Path(temp_dir), audit)
+            with patch(_PATCH_MAX_RECORDS, 10):
+                result = parser.parse_artifact("evtx")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["record_count"], 10)
+        capped_entries = [e for e in audit.entries if e[0] == "parsing_capped"]
+        self.assertEqual(len(capped_entries), 1)
+        self.assertEqual(capped_entries[0][1]["max_records"], 10)
+
+    def test_parse_evtx_cap_closes_files_safely(self) -> None:
+        """EVTX cap should still close all file handles and produce valid CSVs."""
+        records = [
+            FakeRecord({"channel": "Security", "event_id": i})
+            for i in range(15)
+        ]
+
+        class EvtxTarget:
+            def evtx(self) -> list[FakeRecord]:
+                return records
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(EvtxTarget(), Path(temp_dir), audit)
+            with patch(_PATCH_MAX_RECORDS, 5):
+                result = parser.parse_artifact("evtx")
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["record_count"], 5)
+            # Verify the CSV is valid and has the right row count
+            csv_path = Path(result["csv_paths"][0])
+            with csv_path.open("r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+            self.assertEqual(len(rows), 5)
+
+    def test_parse_evtx_cap_with_multiple_channels(self) -> None:
+        """EVTX cap should apply globally across all channels."""
+        records = [
+            FakeRecord({"channel": "Security", "event_id": i})
+            for i in range(5)
+        ] + [
+            FakeRecord({"channel": "System", "event_id": i})
+            for i in range(5)
+        ]
+
+        class EvtxTarget:
+            def evtx(self) -> list[FakeRecord]:
+                return records
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(EvtxTarget(), Path(temp_dir), audit)
+            with patch(_PATCH_MAX_RECORDS, 7):
+                result = parser.parse_artifact("evtx")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["record_count"], 7)
+        capped_entries = [e for e in audit.entries if e[0] == "parsing_capped"]
+        self.assertEqual(len(capped_entries), 1)
+
     def test_parse_artifact_result_includes_duration(self) -> None:
         """Successful result should have a positive duration_seconds."""
         class SimpleTarget:
