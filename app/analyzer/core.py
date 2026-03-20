@@ -12,6 +12,7 @@ Sub-module organisation:
 - ``analyzer_citations``: Citation validation against source CSV.
 - ``analyzer_data_prep``: Date filtering, dedup, statistics, prompt assembly.
 - ``analyzer_chunking``: Chunked analysis and hierarchical merge.
+- ``analyzer_prompts``: Prompt template loading and construction.
 
 Attributes:
     PROJECT_ROOT (Path): Re-exported from ``analyzer_constants``.
@@ -23,8 +24,6 @@ import logging
 from pathlib import Path
 from time import perf_counter, sleep
 from typing import Any, Callable, Iterable, Mapping
-
-import yaml
 
 from ..ai_providers import AIProviderError, create_provider
 from .chunking import analyze_artifact_chunked, split_csv_and_suffix, split_csv_into_chunks
@@ -43,6 +42,11 @@ from .data_prep import (
     deduplicate_rows_for_analysis, extract_dates_from_context, prepare_artifact_data,
 )
 from .ioc import build_priority_directives, extract_ioc_targets, format_ioc_targets
+from .prompts import (
+    build_summary_prompt, load_artifact_ai_column_projections,
+    load_artifact_instruction_prompts, load_prompt_template,
+    resolve_artifact_ai_columns_config_path,
+)
 from .utils import (
     build_datetime, coerce_projection_columns, emit_analysis_progress,
     estimate_tokens, is_dedup_safe_identifier_column, normalize_artifact_key,
@@ -196,67 +200,30 @@ class ForensicAnalyzer:
     def _resolve_artifact_ai_columns_config_path(self) -> Path:
         """Resolve the artifact AI columns config path to an absolute Path.
 
+        Delegates to :func:`prompts.resolve_artifact_ai_columns_config_path`.
+
         Returns:
             Resolved absolute ``Path`` to the YAML config file.
         """
-        configured = Path(self.artifact_ai_columns_config_path).expanduser()
-        if configured.is_absolute():
-            return configured
-
-        candidates: list[Path] = []
-        if self.case_dir is not None:
-            candidates.append(self.case_dir / configured)
-        candidates.append(PROJECT_ROOT / configured)
-
-        for candidate in candidates:
-            if candidate.exists():
-                return candidate
-        return candidates[-1]
+        return resolve_artifact_ai_columns_config_path(
+            self.artifact_ai_columns_config_path, self.case_dir,
+        )
 
     def _load_artifact_ai_column_projections(self) -> dict[str, tuple[str, ...]]:
         """Load per-artifact column projection configuration from YAML.
+
+        Delegates to :func:`prompts.load_artifact_ai_column_projections`.
 
         Returns:
             A dict mapping normalized artifact keys to tuples of column names.
         """
         config_path = self._resolve_artifact_ai_columns_config_path()
-        try:
-            with config_path.open("r", encoding="utf-8") as handle:
-                parsed = yaml.safe_load(handle) or {}
-        except (OSError, yaml.YAMLError) as error:
-            self.logger.warning(
-                "Failed to load AI column projection config from %s: %s. "
-                "AI column projection is disabled.", config_path, error,
-            )
-            return {}
-
-        if not isinstance(parsed, Mapping):
-            self.logger.warning(
-                "Invalid AI column projection config in %s: expected a mapping, got %s.",
-                config_path, type(parsed).__name__,
-            )
-            return {}
-
-        source: Any = parsed.get("artifact_ai_columns", parsed)
-        if not isinstance(source, Mapping):
-            self.logger.warning(
-                "Invalid AI column projection config in %s: 'artifact_ai_columns' must be a mapping, got %s.",
-                config_path, type(source).__name__,
-            )
-            return {}
-
-        projections: dict[str, tuple[str, ...]] = {}
-        for artifact_key, raw_columns in source.items():
-            if artifact_key is None:
-                continue
-            normalized_key = normalize_artifact_key(str(artifact_key))
-            columns = coerce_projection_columns(raw_columns)
-            if columns:
-                projections[normalized_key] = tuple(columns)
-        return projections
+        return load_artifact_ai_column_projections(config_path)
 
     def _load_prompt_template(self, filename: str, default: str) -> str:
         """Read a prompt template file from the prompts directory.
+
+        Delegates to :func:`prompts.load_prompt_template`.
 
         Args:
             filename: Name of the template file.
@@ -265,32 +232,17 @@ class ForensicAnalyzer:
         Returns:
             The template text.
         """
-        try:
-            prompt_path = self.prompts_dir / filename
-            return prompt_path.read_text(encoding="utf-8")
-        except OSError:
-            return default
+        return load_prompt_template(self.prompts_dir, filename, default)
 
     def _load_artifact_instruction_prompts(self) -> dict[str, str]:
         """Load per-artifact analysis instruction prompts.
 
+        Delegates to :func:`prompts.load_artifact_instruction_prompts`.
+
         Returns:
             A dict mapping artifact keys to instruction prompt text.
         """
-        instructions_dir = self.prompts_dir / "artifact_instructions"
-        if not instructions_dir.exists() or not instructions_dir.is_dir():
-            return {}
-
-        prompts: dict[str, str] = {}
-        for prompt_path in sorted(instructions_dir.glob("*.md")):
-            try:
-                prompt_text = prompt_path.read_text(encoding="utf-8").strip()
-            except OSError:
-                continue
-            if not prompt_text:
-                continue
-            prompts[prompt_path.stem.strip().lower()] = prompt_text
-        return prompts
+        return load_artifact_instruction_prompts(self.prompts_dir)
 
     # ------------------------------------------------------------------
     # AI provider
@@ -864,28 +816,12 @@ class ForensicAnalyzer:
             The AI-generated summary text, or an error message.
         """
         metadata_map = metadata if isinstance(metadata, Mapping) else {}
-        findings_blocks: list[str] = []
-        for result in per_artifact_results:
-            artifact_key = str(result.get("artifact_key", "unknown"))
-            artifact_name = str(result.get("artifact_name", artifact_key))
-            analysis = str(result.get("analysis", "")).strip()
-            findings_blocks.append(f"### {artifact_name} ({artifact_key})\n{analysis}")
-
-        findings_text = "\n\n".join(findings_blocks) if findings_blocks else "No per-artifact findings available."
-        summary_prompt = self.summary_prompt_template
-        priority_directives = build_priority_directives(investigation_context)
-        ioc_targets = format_ioc_targets(investigation_context)
-        replacements = {
-            "priority_directives": priority_directives,
-            "investigation_context": investigation_context.strip() or "No investigation context provided.",
-            "ioc_targets": ioc_targets,
-            "hostname": str(metadata_map.get("hostname", "Unknown")),
-            "os_version": str(metadata_map.get("os_version", "Unknown")),
-            "domain": str(metadata_map.get("domain", "Unknown")),
-            "per_artifact_findings": findings_text,
-        }
-        for placeholder, value in replacements.items():
-            summary_prompt = summary_prompt.replace(f"{{{{{placeholder}}}}}", value)
+        summary_prompt = build_summary_prompt(
+            summary_prompt_template=self.summary_prompt_template,
+            investigation_context=investigation_context,
+            per_artifact_results=per_artifact_results,
+            metadata_map=metadata_map,
+        )
 
         model = self.model_info.get("model", "unknown")
         provider = self.model_info.get("provider", "unknown")

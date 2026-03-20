@@ -12,6 +12,7 @@ Sub-modules:
 - ``citations``: Citation validation against source CSV.
 - ``data_prep``: Date filtering, dedup, statistics, prompt assembly.
 - ``chunking``: Chunked analysis and hierarchical merge.
+- ``prompts``: Prompt template loading and construction.
 - ``core``: The ``ForensicAnalyzer`` class itself.
 """
 
