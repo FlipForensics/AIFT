@@ -2577,6 +2577,77 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(csv_resp.status_code, 200)
             self.assertEqual(csv_resp.mimetype, "application/zip")
 
+    def test_replace_evidence_clears_external_csv_output_dir(self) -> None:
+        """Replacing evidence must remove stale CSVs from an external csv_output_dir."""
+        evidence_a = Path(self.temp_dir.name) / "ext_a.E01"
+        evidence_a.write_bytes(b"aaa")
+        evidence_b = Path(self.temp_dir.name) / "ext_b.E01"
+        evidence_b.write_bytes(b"bbb")
+        external_output_root = Path(self.temp_dir.name) / "external_parsed"
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(
+                routes, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
+            ),
+            patch.object(
+                routes_handlers, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
+            ),
+            patch.object(
+                routes_evidence, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
+            ),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+        ):
+            # Configure external csv_output_dir.
+            settings_resp = self.client.post(
+                "/api/settings",
+                json={"evidence": {"csv_output_dir": str(external_output_root)}},
+            )
+            self.assertEqual(settings_resp.status_code, 200)
+
+            # Create case, load evidence A, parse.
+            create_resp = self.client.post("/api/cases", json={"case_name": "ExtCleanup"})
+            self.assertEqual(create_resp.status_code, 201)
+            case_id = create_resp.get_json()["case_id"]
+
+            self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_a)})
+            self.client.post(f"/api/cases/{case_id}/parse", json={"artifacts": ["runkeys"]})
+
+            # Confirm external parsed dir exists with CSVs.
+            with routes.STATE_LOCK:
+                case = routes.CASE_STATES[case_id]
+                ext_parsed_dir = Path(case["csv_output_dir"])
+            self.assertTrue(ext_parsed_dir.is_dir())
+            self.assertTrue(any(ext_parsed_dir.glob("*.csv")))
+            # Verify it is outside the case directory.
+            case_dir = Path(case["case_dir"])
+            self.assertFalse(
+                ext_parsed_dir.resolve().is_relative_to(case_dir.resolve()),
+                "External parsed dir should be outside case_dir",
+            )
+
+            # Replace evidence with B.
+            ev_resp = self.client.post(
+                f"/api/cases/{case_id}/evidence", json={"path": str(evidence_b)},
+            )
+            self.assertEqual(ev_resp.status_code, 200)
+
+            # The external parsed directory should have been cleaned up.
+            self.assertFalse(
+                ext_parsed_dir.exists(),
+                "External csv_output_dir should be removed on evidence replacement",
+            )
+
 
 class StateHelperTests(unittest.TestCase):
     """Tests for helper functions in app.routes.state."""

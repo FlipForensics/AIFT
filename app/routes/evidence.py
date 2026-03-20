@@ -658,6 +658,63 @@ def read_audit_entries(case_dir: Path) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Cleanup helpers
+# ---------------------------------------------------------------------------
+
+
+def _cleanup_parsed_output(case_dir: Path, prev_csv_output_dir: str) -> None:
+    """Remove stale parsed CSV output from a previous parse run.
+
+    Handles both the default ``case_dir/parsed`` location and external
+    directories configured via ``evidence.csv_output_dir``.  Only the
+    case-specific parsed directory is removed — parent directories and
+    unrelated paths are never touched.
+
+    Args:
+        case_dir: Path to the case's root directory.
+        prev_csv_output_dir: The ``csv_output_dir`` value stored from the
+            previous parse run (may be empty).
+    """
+    if not prev_csv_output_dir:
+        return
+
+    prev_path = Path(prev_csv_output_dir)
+
+    # Nothing to do if the directory doesn't exist.
+    if not prev_path.is_dir():
+        return
+
+    resolved_prev = prev_path.resolve()
+    resolved_case = case_dir.resolve()
+
+    # If the previous output dir is inside the case directory, the normal
+    # ``case_dir/parsed`` cleanup already handles it — skip.
+    try:
+        if resolved_prev.is_relative_to(resolved_case):
+            return
+    except (TypeError, ValueError):
+        return
+
+    # Safety: refuse to delete filesystem roots or very short paths that
+    # could indicate misconfiguration.
+    if resolved_prev == resolved_prev.root or resolved_prev == resolved_prev.anchor:
+        LOGGER.warning(
+            "Refusing to remove parsed output at filesystem root: %s",
+            resolved_prev,
+        )
+        return
+    if len(resolved_prev.parts) <= 2:
+        LOGGER.warning(
+            "Refusing to remove parsed output with suspiciously short path: %s",
+            resolved_prev,
+        )
+        return
+
+    LOGGER.info("Removing stale external parsed output: %s", resolved_prev)
+    shutil.rmtree(resolved_prev, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Route handlers
 # ---------------------------------------------------------------------------
 
@@ -750,6 +807,11 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
         )
 
         with STATE_LOCK:
+            # Capture the previous csv_output_dir before clearing it so
+            # we can remove stale parsed CSVs even when they live outside
+            # the case directory (external csv_output_dir).
+            prev_csv_output_dir = str(case.get("csv_output_dir", "")).strip()
+
             # Set new evidence metadata.
             case["evidence_mode"] = evidence_payload["mode"]
             case["source_path"] = evidence_payload["source_path"]
@@ -783,6 +845,7 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
 
         # Remove stale on-disk artifacts so disk fallbacks cannot
         # resurrect results from prior evidence.
+        _cleanup_parsed_output(case_dir, prev_csv_output_dir)
         parsed_dir = case_dir / "parsed"
         if parsed_dir.is_dir():
             shutil.rmtree(parsed_dir, ignore_errors=True)
