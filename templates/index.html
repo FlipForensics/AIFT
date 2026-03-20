@@ -19,6 +19,11 @@
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </head>
 <body>
+  <noscript>
+    <p style="padding:2em;color:#ff6b6b;font-size:1.2em;text-align:center;">
+      JavaScript is required to use AIFT. Please enable JavaScript in your browser settings and reload the page.
+    </p>
+  </noscript>
   <header class="app-header">
     <div class="header-bar">
       <div class="brand-lockup">
@@ -374,7 +379,7 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
 
       <section id="analysis-stream" aria-live="polite" aria-labelledby="analysis-stream-title">
         <h3 id="analysis-stream-title">Live Analysis Results</h3>
-        <div id="analysis-results-list">
+        <div id="analysis-results-list" aria-live="polite">
           <p>No analysis output yet.</p>
         </div>
       </section>

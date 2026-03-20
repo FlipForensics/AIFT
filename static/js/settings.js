@@ -82,6 +82,7 @@
     if (!el.settingsPanel || !el.settingsBtn) return;
     el.settingsPanel.hidden = true;
     el.settingsBtn.setAttribute("aria-expanded", "false");
+    el.settingsBtn.focus();
   }
 
   function showSettingsTab(tabName) {

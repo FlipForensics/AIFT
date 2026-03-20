@@ -253,6 +253,8 @@
       select = document.createElement("select");
       select.className = "artifact-mode-select";
       select.dataset.artifactKey = key;
+      const artifactName = st.artifactNames[key] || key;
+      select.setAttribute("aria-label", `Analysis mode for ${artifactName}`);
 
       const parseAiOption = document.createElement("option");
       parseAiOption.value = A.MODE_PARSE_AND_AI;

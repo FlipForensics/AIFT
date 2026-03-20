@@ -167,6 +167,7 @@
 
   function addNavButtons() {
     const total = A.STEP_IDS.length;
+    const stepLabels = ["Evidence", "Artifact Selection", "Parsing", "Analysis", "Results"];
     el.steps.forEach((s) => {
       if (!s || s.querySelector(".wizard-nav")) return;
       const n = Number(s.dataset.step || 1);
@@ -176,6 +177,7 @@
         const b = document.createElement("button");
         b.type = "button";
         b.textContent = "Back";
+        b.setAttribute("aria-label", `Back: ${stepLabels[n - 2] || "Previous"}`);
         b.addEventListener("click", () => showStep(n - 1));
         wrap.appendChild(b);
       }
@@ -183,6 +185,7 @@
         const b = document.createElement("button");
         b.type = "button";
         b.textContent = "Next";
+        b.setAttribute("aria-label", `Next: ${stepLabels[n] || "Next"}`);
         b.dataset.nextStep = String(n + 1);
         const hint = document.createElement("p");
         hint.className = "wizard-nav-hint";
