@@ -11,6 +11,8 @@ Attributes:
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from typing import Any
 
@@ -26,10 +28,30 @@ __all__ = [
 ]
 
 
+def _serialize_row(row: list[str]) -> str:
+    """Serialize a single parsed CSV row back to a CSV string.
+
+    Uses the ``csv`` module so that fields containing commas, quotes,
+    or newlines are properly quoted.
+
+    Args:
+        row: List of field values.
+
+    Returns:
+        A single CSV line (without trailing newline).
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(row)
+    return buf.getvalue().rstrip("\r\n")
+
+
 def split_csv_into_chunks(csv_text: str, max_chars: int) -> list[str]:
     """Split CSV text into chunks that each fit within *max_chars*.
 
-    Every chunk retains the original header row.
+    Parsing is done via the ``csv`` module so that quoted fields with
+    embedded newlines are kept intact as single records.  Every chunk
+    retains the original header row.
 
     Args:
         csv_text: Full CSV text including the header row.
@@ -41,35 +63,41 @@ def split_csv_into_chunks(csv_text: str, max_chars: int) -> list[str]:
     if max_chars <= 0 or len(csv_text) <= max_chars:
         return [csv_text]
 
-    lines = csv_text.split("\n")
-    if not lines:
+    reader = csv.reader(io.StringIO(csv_text))
+    try:
+        header_fields = next(reader)
+    except StopIteration:
         return [csv_text]
 
-    header = lines[0]
-    data_lines = lines[1:]
-    if not data_lines:
+    header_line = _serialize_row(header_fields)
+
+    data_rows: list[str] = []
+    for row in reader:
+        data_rows.append(_serialize_row(row))
+
+    if not data_rows:
         return [csv_text]
 
-    header_overhead = len(header) + 1
+    header_overhead = len(header_line) + 1  # +1 for the joining newline
     chunk_data_budget = max_chars - header_overhead
     if chunk_data_budget <= 0:
         return [csv_text]
 
     chunks: list[str] = []
-    current_lines: list[str] = []
+    current_rows: list[str] = []
     current_size = 0
 
-    for line in data_lines:
-        line_size = len(line) + 1
-        if current_lines and current_size + line_size > chunk_data_budget:
-            chunks.append(header + "\n" + "\n".join(current_lines))
-            current_lines = []
+    for serialized_row in data_rows:
+        row_size = len(serialized_row) + 1  # +1 for joining newline
+        if current_rows and current_size + row_size > chunk_data_budget:
+            chunks.append(header_line + "\n" + "\n".join(current_rows))
+            current_rows = []
             current_size = 0
-        current_lines.append(line)
-        current_size += line_size
+        current_rows.append(serialized_row)
+        current_size += row_size
 
-    if current_lines:
-        chunks.append(header + "\n" + "\n".join(current_lines))
+    if current_rows:
+        chunks.append(header_line + "\n" + "\n".join(current_rows))
 
     return chunks if chunks else [csv_text]
 

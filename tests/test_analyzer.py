@@ -2526,6 +2526,62 @@ class TestSplitCsvIntoChunks(unittest.TestCase):
         result = split_csv_into_chunks("", max_chars=100)
         self.assertEqual(len(result), 1)
 
+    def test_quoted_multiline_field_not_split(self) -> None:
+        """A CSV row with a quoted field containing newlines must stay intact."""
+        from app.analyzer.chunking import split_csv_into_chunks
+        csv_text = (
+            'name,description\n'
+            '"Alice","Short desc"\n'
+            '"Bob","Line one\nLine two\nLine three"'
+        )
+        # Budget large enough for everything → single chunk, no corruption
+        result = split_csv_into_chunks(csv_text, max_chars=5000)
+        self.assertEqual(len(result), 1)
+        # Re-parse the chunk to verify both data rows survived
+        import csv, io
+        rows = list(csv.reader(io.StringIO(result[0])))
+        self.assertEqual(len(rows), 3)  # header + 2 data rows
+        self.assertEqual(rows[1][0], "Alice")
+        self.assertEqual(rows[2][0], "Bob")
+        self.assertIn("Line one\nLine two\nLine three", rows[2][1])
+
+    def test_multiline_field_chunked_across_boundary(self) -> None:
+        """Multiline rows must not be split across chunk boundaries."""
+        from app.analyzer.chunking import split_csv_into_chunks
+        header = "id,notes"
+        # Build rows where the second has an embedded newline
+        row1 = '"1","normal row"'
+        row2 = '"2","has\nnewline"'
+        row3 = '"3","another normal"'
+        csv_text = f"{header}\n{row1}\n{row2}\n{row3}"
+        # Force multiple chunks with a tight budget
+        result = split_csv_into_chunks(csv_text, max_chars=38)
+        self.assertGreater(len(result), 1)
+        # Every chunk must be valid CSV with the header
+        import csv, io
+        all_data_rows = []
+        for chunk in result:
+            self.assertTrue(chunk.startswith("id,notes"))
+            rows = list(csv.reader(io.StringIO(chunk)))
+            self.assertGreaterEqual(len(rows), 2)  # header + at least 1 row
+            all_data_rows.extend(rows[1:])
+        # All 3 original data rows must be present and intact
+        ids = sorted(r[0] for r in all_data_rows)
+        self.assertEqual(ids, ["1", "2", "3"])
+        # The multiline field must be preserved
+        row2_data = [r for r in all_data_rows if r[0] == "2"][0]
+        self.assertIn("\n", row2_data[1])
+
+    def test_headers_preserved_in_all_chunks_with_multiline(self) -> None:
+        """Each chunk starts with the header even when rows have newlines."""
+        from app.analyzer.chunking import split_csv_into_chunks
+        rows = [f'"val{i}","line1\nline2"' for i in range(20)]
+        csv_text = "col1,col2\n" + "\n".join(rows)
+        result = split_csv_into_chunks(csv_text, max_chars=200)
+        self.assertGreater(len(result), 1)
+        for chunk in result:
+            self.assertTrue(chunk.startswith("col1,col2"))
+
 
 class TestSplitCsvAndSuffix(unittest.TestCase):
     """Tests for chunking.split_csv_and_suffix."""
