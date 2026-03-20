@@ -1768,5 +1768,1739 @@ class TestValidateCitationsTimestamps(unittest.TestCase):
         self.assertEqual(warnings, [])
 
 
+###############################################################################
+# utils.py — standalone function tests
+###############################################################################
+
+
+class TestStringifyValue(unittest.TestCase):
+    """Tests for utils.stringify_value."""
+
+    def test_none_returns_empty(self) -> None:
+        from app.analyzer.utils import stringify_value
+        self.assertEqual(stringify_value(None), "")
+
+    def test_string_stripped(self) -> None:
+        from app.analyzer.utils import stringify_value
+        self.assertEqual(stringify_value("  hello  "), "hello")
+
+    def test_int_converted(self) -> None:
+        from app.analyzer.utils import stringify_value
+        self.assertEqual(stringify_value(42), "42")
+
+    def test_empty_string(self) -> None:
+        from app.analyzer.utils import stringify_value
+        self.assertEqual(stringify_value(""), "")
+
+
+class TestFormatDatetime(unittest.TestCase):
+    """Tests for utils.format_datetime."""
+
+    def test_none_returns_na(self) -> None:
+        from app.analyzer.utils import format_datetime
+        self.assertEqual(format_datetime(None), "N/A")
+
+    def test_datetime_returns_iso(self) -> None:
+        from app.analyzer.utils import format_datetime
+        dt = datetime(2026, 1, 15, 12, 0, 0)
+        self.assertEqual(format_datetime(dt), "2026-01-15T12:00:00")
+
+
+class TestNormalizeTableCell(unittest.TestCase):
+    """Tests for utils.normalize_table_cell."""
+
+    def test_short_value_unchanged(self) -> None:
+        from app.analyzer.utils import normalize_table_cell
+        self.assertEqual(normalize_table_cell("hello", 100), "hello")
+
+    def test_long_value_truncated_with_ellipsis(self) -> None:
+        from app.analyzer.utils import normalize_table_cell
+        result = normalize_table_cell("a" * 50, 20)
+        self.assertTrue(result.endswith("..."))
+        self.assertEqual(len(result), 20)
+
+    def test_very_small_limit(self) -> None:
+        from app.analyzer.utils import normalize_table_cell
+        result = normalize_table_cell("abcdef", 3)
+        self.assertEqual(result, "abc")
+
+    def test_newlines_replaced(self) -> None:
+        from app.analyzer.utils import normalize_table_cell
+        result = normalize_table_cell("line1\nline2\rline3", 100)
+        self.assertNotIn("\n", result)
+        self.assertNotIn("\r", result)
+
+    def test_pipe_escaped(self) -> None:
+        from app.analyzer.utils import normalize_table_cell
+        result = normalize_table_cell("a|b", 100)
+        self.assertIn(r"\|", result)
+
+
+class TestSanitizeFilename(unittest.TestCase):
+    """Tests for utils.sanitize_filename."""
+
+    def test_clean_name_unchanged(self) -> None:
+        from app.analyzer.utils import sanitize_filename
+        self.assertEqual(sanitize_filename("runkeys"), "runkeys")
+
+    def test_special_chars_replaced(self) -> None:
+        from app.analyzer.utils import sanitize_filename
+        result = sanitize_filename("evtx/Security!@#")
+        self.assertNotIn("/", result)
+        self.assertNotIn("!", result)
+
+    def test_empty_returns_artifact(self) -> None:
+        from app.analyzer.utils import sanitize_filename
+        self.assertEqual(sanitize_filename(""), "artifact")
+
+    def test_only_special_chars_returns_artifact(self) -> None:
+        from app.analyzer.utils import sanitize_filename
+        self.assertEqual(sanitize_filename("!!!"), "artifact")
+
+
+class TestTruncateForPrompt(unittest.TestCase):
+    """Tests for utils.truncate_for_prompt."""
+
+    def test_short_string_unchanged(self) -> None:
+        from app.analyzer.utils import truncate_for_prompt
+        self.assertEqual(truncate_for_prompt("hello", 100), "hello")
+
+    def test_long_string_truncated(self) -> None:
+        from app.analyzer.utils import truncate_for_prompt
+        result = truncate_for_prompt("a" * 100, 50)
+        self.assertIn("[truncated]", result)
+        # The function uses limit - 14 for the prefix, plus " ... [truncated]"
+        # which is 14 chars, so the result may be close to but not exceed limit+2.
+        self.assertLess(len(result), 60)
+
+    def test_very_small_limit(self) -> None:
+        from app.analyzer.utils import truncate_for_prompt
+        result = truncate_for_prompt("abcdefghij", 5)
+        self.assertEqual(result, "abcde")
+
+    def test_none_value(self) -> None:
+        from app.analyzer.utils import truncate_for_prompt
+        result = truncate_for_prompt(None, 100)
+        self.assertEqual(result, "")
+
+
+class TestUniquePreserveOrder(unittest.TestCase):
+    """Tests for utils.unique_preserve_order."""
+
+    def test_deduplicates_case_insensitive(self) -> None:
+        from app.analyzer.utils import unique_preserve_order
+        result = unique_preserve_order(["Alpha", "alpha", "Beta"])
+        self.assertEqual(result, ["Alpha", "Beta"])
+
+    def test_strips_quotes_and_brackets(self) -> None:
+        from app.analyzer.utils import unique_preserve_order
+        result = unique_preserve_order(['"hello"', "'world'", "[test]"])
+        self.assertEqual(result, ["hello", "world", "test"])
+
+    def test_empty_values_skipped(self) -> None:
+        from app.analyzer.utils import unique_preserve_order
+        result = unique_preserve_order(["", "  ", "a"])
+        self.assertEqual(result, ["a"])
+
+    def test_trailing_punctuation_stripped(self) -> None:
+        from app.analyzer.utils import unique_preserve_order
+        result = unique_preserve_order(["hello.", "world;"])
+        self.assertEqual(result, ["hello", "world"])
+
+
+class TestBuildDatetime(unittest.TestCase):
+    """Tests for utils.build_datetime."""
+
+    def test_valid_date(self) -> None:
+        from app.analyzer.utils import build_datetime
+        result = build_datetime("2026", "1", "15")
+        self.assertEqual(result, datetime(2026, 1, 15))
+
+    def test_invalid_date_returns_none(self) -> None:
+        from app.analyzer.utils import build_datetime
+        result = build_datetime("2026", "13", "1")
+        self.assertIsNone(result)
+
+    def test_invalid_day_returns_none(self) -> None:
+        from app.analyzer.utils import build_datetime
+        result = build_datetime("2026", "2", "30")
+        self.assertIsNone(result)
+
+
+class TestNormalizeDatetime(unittest.TestCase):
+    """Tests for utils.normalize_datetime."""
+
+    def test_naive_unchanged(self) -> None:
+        from app.analyzer.utils import normalize_datetime
+        dt = datetime(2026, 1, 15, 12, 0, 0)
+        result = normalize_datetime(dt)
+        self.assertEqual(result, dt)
+        self.assertIsNone(result.tzinfo)
+
+    def test_aware_converted_to_naive_utc(self) -> None:
+        from app.analyzer.utils import normalize_datetime
+        dt = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        result = normalize_datetime(dt)
+        self.assertEqual(result, datetime(2026, 1, 15, 12, 0, 0))
+        self.assertIsNone(result.tzinfo)
+
+
+class TestParseInt(unittest.TestCase):
+    """Tests for utils.parse_int."""
+
+    def test_simple_int(self) -> None:
+        from app.analyzer.utils import parse_int
+        self.assertEqual(parse_int("42"), 42)
+
+    def test_negative_int(self) -> None:
+        from app.analyzer.utils import parse_int
+        self.assertEqual(parse_int("-5"), -5)
+
+    def test_embedded_int(self) -> None:
+        from app.analyzer.utils import parse_int
+        self.assertEqual(parse_int("row 123 here"), 123)
+
+    def test_empty_returns_none(self) -> None:
+        from app.analyzer.utils import parse_int
+        self.assertIsNone(parse_int(""))
+
+    def test_no_digits_returns_none(self) -> None:
+        from app.analyzer.utils import parse_int
+        self.assertIsNone(parse_int("abc"))
+
+
+class TestParseDatetimeValue(unittest.TestCase):
+    """Tests for utils.parse_datetime_value."""
+
+    def test_iso_format(self) -> None:
+        from app.analyzer.utils import parse_datetime_value
+        result = parse_datetime_value("2026-01-15T12:00:00")
+        self.assertEqual(result, datetime(2026, 1, 15, 12, 0, 0))
+
+    def test_iso_with_z(self) -> None:
+        from app.analyzer.utils import parse_datetime_value
+        result = parse_datetime_value("2026-01-15T12:00:00Z")
+        self.assertIsNotNone(result)
+        self.assertEqual(result, datetime(2026, 1, 15, 12, 0, 0))
+
+    def test_date_only(self) -> None:
+        from app.analyzer.utils import parse_datetime_value
+        result = parse_datetime_value("2026-01-15")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.year, 2026)
+
+    def test_empty_returns_none(self) -> None:
+        from app.analyzer.utils import parse_datetime_value
+        self.assertIsNone(parse_datetime_value(""))
+
+    def test_none_returns_none(self) -> None:
+        from app.analyzer.utils import parse_datetime_value
+        self.assertIsNone(parse_datetime_value(None))
+
+    def test_epoch_seconds(self) -> None:
+        from app.analyzer.utils import parse_datetime_value
+        # 2026-01-15 00:00:00 UTC = 1768435200
+        result = parse_datetime_value("1768435200")
+        self.assertIsNotNone(result)
+
+    def test_epoch_millis(self) -> None:
+        from app.analyzer.utils import parse_datetime_value
+        result = parse_datetime_value("1768435200000")
+        self.assertIsNotNone(result)
+
+    def test_garbage_returns_none(self) -> None:
+        from app.analyzer.utils import parse_datetime_value
+        self.assertIsNone(parse_datetime_value("not-a-date"))
+
+
+class TestLooksLikeTimestampColumn(unittest.TestCase):
+    """Tests for utils.looks_like_timestamp_column."""
+
+    def test_timestamp_hint(self) -> None:
+        from app.analyzer.utils import looks_like_timestamp_column
+        self.assertTrue(looks_like_timestamp_column("ts"))
+        self.assertTrue(looks_like_timestamp_column("Timestamp"))
+        self.assertTrue(looks_like_timestamp_column("created_date"))
+        self.assertTrue(looks_like_timestamp_column("LastModified"))
+
+    def test_non_timestamp(self) -> None:
+        from app.analyzer.utils import looks_like_timestamp_column
+        self.assertFalse(looks_like_timestamp_column("name"))
+        self.assertFalse(looks_like_timestamp_column("EventID"))
+
+
+class TestExtractRowDatetime(unittest.TestCase):
+    """Tests for utils.extract_row_datetime."""
+
+    def test_finds_timestamp_column(self) -> None:
+        from app.analyzer.utils import extract_row_datetime
+        row = {"ts": "2026-01-15T12:00:00", "name": "test"}
+        result = extract_row_datetime(row)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.year, 2026)
+
+    def test_returns_none_for_no_timestamps(self) -> None:
+        from app.analyzer.utils import extract_row_datetime
+        row = {"name": "test", "value": "abc"}
+        result = extract_row_datetime(row)
+        self.assertIsNone(result)
+
+    def test_with_explicit_columns(self) -> None:
+        from app.analyzer.utils import extract_row_datetime
+        row = {"ts": "2026-01-15T12:00:00", "name": "test"}
+        result = extract_row_datetime(row, columns=["ts", "name"])
+        self.assertIsNotNone(result)
+
+
+class TestTimeRangeForRows(unittest.TestCase):
+    """Tests for utils.time_range_for_rows."""
+
+    def test_computes_range(self) -> None:
+        from app.analyzer.utils import time_range_for_rows
+        rows = [
+            {"ts": "2026-01-15T10:00:00"},
+            {"ts": "2026-01-17T10:00:00"},
+            {"ts": "2026-01-16T10:00:00"},
+        ]
+        min_t, max_t = time_range_for_rows(rows)
+        self.assertIsNotNone(min_t)
+        self.assertIsNotNone(max_t)
+        self.assertEqual(min_t.day, 15)
+        self.assertEqual(max_t.day, 17)
+
+    def test_empty_rows(self) -> None:
+        from app.analyzer.utils import time_range_for_rows
+        min_t, max_t = time_range_for_rows([])
+        self.assertIsNone(min_t)
+        self.assertIsNone(max_t)
+
+    def test_no_timestamps(self) -> None:
+        from app.analyzer.utils import time_range_for_rows
+        rows = [{"name": "test"}, {"name": "test2"}]
+        min_t, max_t = time_range_for_rows(rows)
+        self.assertIsNone(min_t)
+        self.assertIsNone(max_t)
+
+
+class TestNormalizeArtifactKey(unittest.TestCase):
+    """Tests for utils.normalize_artifact_key."""
+
+    def test_known_normalizations(self) -> None:
+        from app.analyzer.utils import normalize_artifact_key
+        self.assertEqual(normalize_artifact_key("mft"), "mft")
+        self.assertEqual(normalize_artifact_key("MFT"), "mft")
+        self.assertEqual(normalize_artifact_key("evtx_Security"), "evtx")
+        self.assertEqual(normalize_artifact_key("shimcache_data"), "shimcache")
+        self.assertEqual(normalize_artifact_key("amcache.applications"), "amcache")
+        self.assertEqual(normalize_artifact_key("prefetch_data"), "prefetch")
+        self.assertEqual(normalize_artifact_key("services_list"), "services")
+        self.assertEqual(normalize_artifact_key("tasks_scheduled"), "tasks")
+        self.assertEqual(normalize_artifact_key("userassist_data"), "userassist")
+        self.assertEqual(normalize_artifact_key("runkeys_data"), "runkeys")
+
+    def test_unknown_key_lowered(self) -> None:
+        from app.analyzer.utils import normalize_artifact_key
+        self.assertEqual(normalize_artifact_key("CustomArtifact"), "customartifact")
+
+
+class TestExtractUrlHost(unittest.TestCase):
+    """Tests for utils.extract_url_host."""
+
+    def test_full_url(self) -> None:
+        from app.analyzer.utils import extract_url_host
+        self.assertEqual(extract_url_host("https://evil.example.com/path"), "evil.example.com")
+
+    def test_url_with_port(self) -> None:
+        from app.analyzer.utils import extract_url_host
+        self.assertEqual(extract_url_host("http://host.com:8080/path"), "host.com")
+
+    def test_bare_host(self) -> None:
+        from app.analyzer.utils import extract_url_host
+        self.assertEqual(extract_url_host("example.com/path"), "example.com")
+
+
+class TestNormalizeCsvRow(unittest.TestCase):
+    """Tests for utils.normalize_csv_row."""
+
+    def test_normalizes_values(self) -> None:
+        from app.analyzer.utils import normalize_csv_row
+        row = {"col1": "  hello  ", "col2": None, "col3": 42}
+        result = normalize_csv_row(row, ["col1", "col2"])
+        self.assertEqual(result["col1"], "hello")
+        self.assertEqual(result["col2"], "")
+
+    def test_extra_fields(self) -> None:
+        from app.analyzer.utils import normalize_csv_row
+        row = {"col1": "val1", None: ["extra1", "extra2"]}
+        result = normalize_csv_row(row, ["col1"])
+        self.assertIn("__extra__", result)
+        self.assertIn("extra1", result["__extra__"])
+
+
+class TestCoerceProjectionColumns(unittest.TestCase):
+    """Tests for utils.coerce_projection_columns."""
+
+    def test_string_split(self) -> None:
+        from app.analyzer.utils import coerce_projection_columns
+        result = coerce_projection_columns("ts, name, command")
+        self.assertEqual(result, ["ts", "name", "command"])
+
+    def test_list_input(self) -> None:
+        from app.analyzer.utils import coerce_projection_columns
+        result = coerce_projection_columns(["ts", "name"])
+        self.assertEqual(result, ["ts", "name"])
+
+    def test_deduplicates(self) -> None:
+        from app.analyzer.utils import coerce_projection_columns
+        result = coerce_projection_columns(["ts", "name", "ts"])
+        self.assertEqual(result, ["ts", "name"])
+
+    def test_non_string_non_list_returns_empty(self) -> None:
+        from app.analyzer.utils import coerce_projection_columns
+        result = coerce_projection_columns(42)
+        self.assertEqual(result, [])
+
+
+class TestEmitAnalysisProgress(unittest.TestCase):
+    """Tests for utils.emit_analysis_progress."""
+
+    def test_three_arg_callback(self) -> None:
+        from app.analyzer.utils import emit_analysis_progress
+        calls = []
+        def cb(key, status, payload):
+            calls.append((key, status, payload))
+        emit_analysis_progress(cb, "art1", "started", {"msg": "hi"})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "art1")
+
+    def test_single_arg_fallback(self) -> None:
+        from app.analyzer.utils import emit_analysis_progress
+        calls = []
+        def cb(payload):
+            calls.append(payload)
+        emit_analysis_progress(cb, "art1", "started", {"msg": "hi"})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["artifact_key"], "art1")
+
+    def test_broken_callback_does_not_raise(self) -> None:
+        from app.analyzer.utils import emit_analysis_progress
+        def cb(*args, **kwargs):
+            raise RuntimeError("broken")
+        # Should not raise
+        emit_analysis_progress(cb, "art1", "started", {"msg": "hi"})
+
+
+class TestReadIntSetting(unittest.TestCase):
+    """Tests for utils.read_int_setting."""
+
+    def test_default_used(self) -> None:
+        from app.analyzer.utils import read_int_setting
+        self.assertEqual(read_int_setting({}, "key", 10), 10)
+
+    def test_value_parsed(self) -> None:
+        from app.analyzer.utils import read_int_setting
+        self.assertEqual(read_int_setting({"key": "42"}, "key", 10), 42)
+
+    def test_minimum_clamping(self) -> None:
+        from app.analyzer.utils import read_int_setting
+        self.assertEqual(read_int_setting({"key": -5}, "key", 10, minimum=1), 1)
+
+    def test_maximum_clamping(self) -> None:
+        from app.analyzer.utils import read_int_setting
+        self.assertEqual(read_int_setting({"key": 100}, "key", 10, maximum=50), 50)
+
+    def test_invalid_value_uses_default(self) -> None:
+        from app.analyzer.utils import read_int_setting
+        self.assertEqual(read_int_setting({"key": "abc"}, "key", 10), 10)
+
+
+class TestReadBoolSetting(unittest.TestCase):
+    """Tests for utils.read_bool_setting."""
+
+    def test_bool_value(self) -> None:
+        from app.analyzer.utils import read_bool_setting
+        self.assertTrue(read_bool_setting({"key": True}, "key", False))
+        self.assertFalse(read_bool_setting({"key": False}, "key", True))
+
+    def test_string_true_variants(self) -> None:
+        from app.analyzer.utils import read_bool_setting
+        for val in ("true", "1", "yes", "on", "True", "YES"):
+            self.assertTrue(read_bool_setting({"key": val}, "key", False))
+
+    def test_string_false_variants(self) -> None:
+        from app.analyzer.utils import read_bool_setting
+        for val in ("false", "0", "no", "off"):
+            self.assertFalse(read_bool_setting({"key": val}, "key", True))
+
+    def test_int_value(self) -> None:
+        from app.analyzer.utils import read_bool_setting
+        self.assertTrue(read_bool_setting({"key": 1}, "key", False))
+        self.assertFalse(read_bool_setting({"key": 0}, "key", True))
+
+    def test_default_on_missing(self) -> None:
+        from app.analyzer.utils import read_bool_setting
+        self.assertTrue(read_bool_setting({}, "key", True))
+
+    def test_non_parseable_uses_default(self) -> None:
+        from app.analyzer.utils import read_bool_setting
+        self.assertTrue(read_bool_setting({"key": "maybe"}, "key", True))
+
+
+class TestReadPathSetting(unittest.TestCase):
+    """Tests for utils.read_path_setting."""
+
+    def test_string_value(self) -> None:
+        from app.analyzer.utils import read_path_setting
+        self.assertEqual(read_path_setting({"key": "/some/path"}, "key", "/default"), "/some/path")
+
+    def test_empty_string_uses_default(self) -> None:
+        from app.analyzer.utils import read_path_setting
+        self.assertEqual(read_path_setting({"key": ""}, "key", "/default"), "/default")
+
+    def test_missing_uses_default(self) -> None:
+        from app.analyzer.utils import read_path_setting
+        self.assertEqual(read_path_setting({}, "key", "/default"), "/default")
+
+    def test_path_object(self) -> None:
+        from app.analyzer.utils import read_path_setting
+        result = read_path_setting({"key": Path("/some/path")}, "key", "/default")
+        # On Windows, Path("/some/path") becomes "\\some\\path", so compare Path objects.
+        self.assertEqual(Path(result), Path("/some/path"))
+
+
+class TestIsDeupSafeIdentifierColumn(unittest.TestCase):
+    """Tests for utils.is_dedup_safe_identifier_column."""
+
+    def test_safe_columns(self) -> None:
+        from app.analyzer.utils import is_dedup_safe_identifier_column
+        self.assertTrue(is_dedup_safe_identifier_column("record_id"))
+        self.assertTrue(is_dedup_safe_identifier_column("RecordID"))
+        self.assertTrue(is_dedup_safe_identifier_column("entry_id"))
+        self.assertTrue(is_dedup_safe_identifier_column("index"))
+        self.assertTrue(is_dedup_safe_identifier_column("sequence_number"))
+
+    def test_unsafe_columns(self) -> None:
+        from app.analyzer.utils import is_dedup_safe_identifier_column
+        self.assertFalse(is_dedup_safe_identifier_column("EventID"))
+        self.assertFalse(is_dedup_safe_identifier_column("ProcessID"))
+        self.assertFalse(is_dedup_safe_identifier_column("name"))
+
+
+class TestEstimateTokensStandalone(unittest.TestCase):
+    """Tests for utils.estimate_tokens as standalone function."""
+
+    def test_empty_returns_one(self) -> None:
+        from app.analyzer.utils import estimate_tokens
+        self.assertEqual(estimate_tokens(""), 1)
+
+    def test_heuristic_ascii(self) -> None:
+        from app.analyzer.utils import estimate_tokens
+        text = "a" * 400
+        result = estimate_tokens(text, model_info={"provider": "anthropic", "model": "claude"})
+        self.assertGreaterEqual(result, 100)
+
+    def test_none_model_info(self) -> None:
+        from app.analyzer.utils import estimate_tokens
+        result = estimate_tokens("hello world")
+        self.assertGreaterEqual(result, 1)
+
+
+###############################################################################
+# chunking.py — standalone function tests
+###############################################################################
+
+
+class TestSplitCsvIntoChunks(unittest.TestCase):
+    """Tests for chunking.split_csv_into_chunks."""
+
+    def test_small_csv_returns_single_chunk(self) -> None:
+        from app.analyzer.chunking import split_csv_into_chunks
+        csv_text = "header\nrow1\nrow2"
+        result = split_csv_into_chunks(csv_text, max_chars=1000)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0], csv_text)
+
+    def test_splits_at_row_boundaries(self) -> None:
+        from app.analyzer.chunking import split_csv_into_chunks
+        header = "col1,col2"
+        rows = [f"val{i},data{i}" for i in range(100)]
+        csv_text = header + "\n" + "\n".join(rows)
+        result = split_csv_into_chunks(csv_text, max_chars=200)
+        self.assertGreater(len(result), 1)
+        for chunk in result:
+            self.assertTrue(chunk.startswith(header))
+
+    def test_zero_max_chars_returns_single_chunk(self) -> None:
+        from app.analyzer.chunking import split_csv_into_chunks
+        csv_text = "header\nrow1"
+        result = split_csv_into_chunks(csv_text, max_chars=0)
+        self.assertEqual(len(result), 1)
+
+    def test_header_only_csv(self) -> None:
+        from app.analyzer.chunking import split_csv_into_chunks
+        csv_text = "col1,col2"
+        result = split_csv_into_chunks(csv_text, max_chars=5)
+        self.assertEqual(len(result), 1)
+
+    def test_empty_string(self) -> None:
+        from app.analyzer.chunking import split_csv_into_chunks
+        result = split_csv_into_chunks("", max_chars=100)
+        self.assertEqual(len(result), 1)
+
+
+class TestSplitCsvAndSuffix(unittest.TestCase):
+    """Tests for chunking.split_csv_and_suffix."""
+
+    def test_plain_csv(self) -> None:
+        from app.analyzer.chunking import split_csv_and_suffix
+        csv_data, suffix = split_csv_and_suffix("col1,col2\nval1,val2")
+        self.assertEqual(csv_data, "col1,col2\nval1,val2")
+        self.assertEqual(suffix, "")
+
+    def test_with_trailing_fence(self) -> None:
+        from app.analyzer.chunking import split_csv_and_suffix
+        text = "col1,col2\nval1,val2\n```"
+        csv_data, suffix = split_csv_and_suffix(text)
+        self.assertEqual(csv_data, "col1,col2\nval1,val2")
+        self.assertIn("```", suffix)
+
+    def test_with_final_context_reminder(self) -> None:
+        from app.analyzer.chunking import split_csv_and_suffix
+        text = "col1,col2\nval1,val2\n\n## Final Context Reminder\nDo not ignore."
+        csv_data, suffix = split_csv_and_suffix(text)
+        self.assertEqual(csv_data, "col1,col2\nval1,val2")
+        self.assertIn("Final Context Reminder", suffix)
+
+
+class TestBuildMergePrompt(unittest.TestCase):
+    """Tests for chunking._build_merge_prompt."""
+
+    def test_fills_template(self) -> None:
+        from app.analyzer.chunking import _build_merge_prompt
+        template = "Chunks: {{chunk_count}}\nContext: {{investigation_context}}\nArtifact: {{artifact_name}} ({{artifact_key}})\n{{per_chunk_findings}}"
+        result = _build_merge_prompt(
+            findings_text="finding1\nfinding2",
+            batch_count=3,
+            artifact_key="evtx",
+            artifact_name="Event Logs",
+            investigation_context="Check for lateral movement.",
+            chunk_merge_prompt_template=template,
+        )
+        self.assertIn("Chunks: 3", result)
+        self.assertIn("Context: Check for lateral movement.", result)
+        self.assertIn("Artifact: Event Logs (evtx)", result)
+        self.assertIn("finding1", result)
+
+    def test_empty_context(self) -> None:
+        from app.analyzer.chunking import _build_merge_prompt
+        template = "{{investigation_context}}"
+        result = _build_merge_prompt(
+            findings_text="f", batch_count=1, artifact_key="k",
+            artifact_name="n", investigation_context="",
+            chunk_merge_prompt_template=template,
+        )
+        self.assertIn("No investigation context provided.", result)
+
+
+class TestAnalyzeArtifactChunked(unittest.TestCase):
+    """Tests for chunking.analyze_artifact_chunked."""
+
+    def test_no_csv_marker_calls_provider_directly(self) -> None:
+        from app.analyzer.chunking import analyze_artifact_chunked
+        mock_provider = FakeProvider(responses=["direct-response"])
+        result = analyze_artifact_chunked(
+            artifact_prompt="No CSV section here",
+            artifact_key="test",
+            artifact_name="Test",
+            investigation_context="context",
+            model="model",
+            system_prompt="system",
+            ai_response_max_tokens=1000,
+            chunk_csv_budget=5000,
+            chunk_merge_prompt_template="{{per_chunk_findings}}",
+            max_merge_rounds=5,
+            call_ai_with_retry_fn=lambda fn: fn(),
+            ai_provider=mock_provider,
+        )
+        self.assertEqual(result, "direct-response")
+
+    def test_small_csv_calls_provider_directly(self) -> None:
+        from app.analyzer.chunking import analyze_artifact_chunked
+        prompt = "## Full Data (CSV)\ncol1,col2\nval1,val2"
+        mock_provider = FakeProvider(responses=["single-response"])
+        result = analyze_artifact_chunked(
+            artifact_prompt=prompt,
+            artifact_key="test",
+            artifact_name="Test",
+            investigation_context="context",
+            model="model",
+            system_prompt="system",
+            ai_response_max_tokens=1000,
+            chunk_csv_budget=50000,
+            chunk_merge_prompt_template="{{per_chunk_findings}}",
+            max_merge_rounds=5,
+            call_ai_with_retry_fn=lambda fn: fn(),
+            ai_provider=mock_provider,
+        )
+        self.assertEqual(result, "single-response")
+
+
+###############################################################################
+# citations.py — standalone function tests
+###############################################################################
+
+
+class TestTimestampLookupKeys(unittest.TestCase):
+    """Tests for citations.timestamp_lookup_keys."""
+
+    def test_empty_string(self) -> None:
+        from app.analyzer.citations import timestamp_lookup_keys
+        self.assertEqual(timestamp_lookup_keys(""), set())
+
+    def test_iso_timestamp_generates_multiple_keys(self) -> None:
+        from app.analyzer.citations import timestamp_lookup_keys
+        keys = timestamp_lookup_keys("2026-01-15T12:00:00Z")
+        self.assertGreater(len(keys), 1)
+        self.assertIn("2026-01-15T12:00:00Z", keys)
+
+    def test_timestamp_with_offset(self) -> None:
+        from app.analyzer.citations import timestamp_lookup_keys
+        keys = timestamp_lookup_keys("2026-01-15T12:00:00+00:00")
+        self.assertGreater(len(keys), 1)
+
+
+class TestTimestampFoundInCsv(unittest.TestCase):
+    """Tests for citations.timestamp_found_in_csv."""
+
+    def test_empty_lookup(self) -> None:
+        from app.analyzer.citations import timestamp_found_in_csv
+        self.assertFalse(timestamp_found_in_csv("2026-01-15T12:00:00Z", set()))
+
+    def test_found(self) -> None:
+        from app.analyzer.citations import timestamp_found_in_csv, timestamp_lookup_keys
+        lookup = timestamp_lookup_keys("2026-01-15T12:00:00Z")
+        self.assertTrue(timestamp_found_in_csv("2026-01-15T12:00:00Z", lookup))
+
+    def test_not_found(self) -> None:
+        from app.analyzer.citations import timestamp_found_in_csv, timestamp_lookup_keys
+        lookup = timestamp_lookup_keys("2026-01-15T12:00:00Z")
+        self.assertFalse(timestamp_found_in_csv("2099-12-31T00:00:00Z", lookup))
+
+
+class TestMatchColumnNameStandalone(unittest.TestCase):
+    """Tests for citations.match_column_name as standalone function."""
+
+    def test_exact(self) -> None:
+        from app.analyzer.citations import match_column_name
+        status, header = match_column_name("Path", ["ts", "Path"])
+        self.assertEqual(status, "exact")
+        self.assertEqual(header, "Path")
+
+    def test_fuzzy(self) -> None:
+        from app.analyzer.citations import match_column_name
+        status, header = match_column_name("source_file", ["SourceFile"])
+        self.assertEqual(status, "fuzzy")
+        self.assertEqual(header, "SourceFile")
+
+    def test_unverifiable(self) -> None:
+        from app.analyzer.citations import match_column_name
+        status, header = match_column_name("NonExistent", ["ts", "Path"])
+        self.assertEqual(status, "unverifiable")
+        self.assertIsNone(header)
+
+
+class TestValidateCitationsStandalone(unittest.TestCase):
+    """Tests for citations.validate_citations as standalone function."""
+
+    def test_failed_analysis_returns_empty(self) -> None:
+        from app.analyzer.citations import validate_citations
+        result = validate_citations("art", "Analysis failed: error", Path("/fake.csv"), 20)
+        self.assertEqual(result, [])
+
+    def test_no_citations_returns_empty(self) -> None:
+        from app.analyzer.citations import validate_citations
+        with TemporaryDirectory(prefix="aift-cite-") as tmp_dir:
+            csv_path = Path(tmp_dir) / "test.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["ts", "name"])
+                writer.writerow(["2026-01-15T12:00:00Z", "test"])
+            result = validate_citations("art", "No specific citations here", csv_path, 20)
+        self.assertEqual(result, [])
+
+    def test_invalid_timestamp_produces_warning(self) -> None:
+        from app.analyzer.citations import validate_citations
+        with TemporaryDirectory(prefix="aift-cite-") as tmp_dir:
+            csv_path = Path(tmp_dir) / "test.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["ts", "name"])
+                writer.writerow(["2026-01-15T12:00:00Z", "test"])
+            result = validate_citations("art", "At 2099-12-31T00:00:00Z event.", csv_path, 20)
+        ts_warnings = [w for w in result if "timestamp" in w.lower()]
+        self.assertGreaterEqual(len(ts_warnings), 1)
+
+    def test_invalid_row_ref_produces_warning(self) -> None:
+        from app.analyzer.citations import validate_citations
+        with TemporaryDirectory(prefix="aift-cite-") as tmp_dir:
+            csv_path = Path(tmp_dir) / "test.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["ts", "name"])
+                writer.writerow(["2026-01-15T12:00:00Z", "test"])
+            result = validate_citations("art", "See row 999 for details.", csv_path, 20)
+        row_warnings = [w for w in result if "row" in w.lower()]
+        self.assertGreaterEqual(len(row_warnings), 1)
+
+    def test_missing_csv_returns_empty(self) -> None:
+        from app.analyzer.citations import validate_citations
+        result = validate_citations("art", "At 2026-01-15T12:00:00Z event.", Path("/no/exist.csv"), 20)
+        self.assertEqual(result, [])
+
+    def test_audit_log_called_on_warnings(self) -> None:
+        from app.analyzer.citations import validate_citations
+        audit_calls = []
+        def audit_fn(action, details):
+            audit_calls.append((action, details))
+        with TemporaryDirectory(prefix="aift-cite-") as tmp_dir:
+            csv_path = Path(tmp_dir) / "test.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["ts", "name"])
+                writer.writerow(["2026-01-15T12:00:00Z", "test"])
+            validate_citations("art", "At 2099-12-31T00:00:00Z event.", csv_path, 20, audit_log_fn=audit_fn)
+        self.assertGreater(len(audit_calls), 0)
+        self.assertEqual(audit_calls[0][0], "citation_validation")
+
+
+###############################################################################
+# ioc.py — standalone function tests
+###############################################################################
+
+
+class TestExtractToolKeywords(unittest.TestCase):
+    """Tests for ioc.extract_tool_keywords."""
+
+    def test_finds_keywords(self) -> None:
+        from app.analyzer.ioc import extract_tool_keywords
+        result = extract_tool_keywords("Used mimikatz and psexec for lateral movement.")
+        self.assertIn("mimikatz", result)
+        self.assertIn("psexec", result)
+
+    def test_case_insensitive(self) -> None:
+        from app.analyzer.ioc import extract_tool_keywords
+        result = extract_tool_keywords("MIMIKATZ was found")
+        self.assertIn("mimikatz", result)
+
+    def test_no_matches(self) -> None:
+        from app.analyzer.ioc import extract_tool_keywords
+        result = extract_tool_keywords("Normal application behavior")
+        self.assertEqual(result, [])
+
+
+class TestExtractIocTargetsStandalone(unittest.TestCase):
+    """Tests for ioc.extract_ioc_targets."""
+
+    def test_empty_context(self) -> None:
+        from app.analyzer.ioc import extract_ioc_targets
+        self.assertEqual(extract_ioc_targets(""), {})
+
+    def test_extracts_urls(self) -> None:
+        from app.analyzer.ioc import extract_ioc_targets
+        result = extract_ioc_targets("Check https://evil.com/payload")
+        self.assertIn("URLs", result)
+        self.assertIn("https://evil.com/payload", result["URLs"])
+
+    def test_extracts_ips(self) -> None:
+        from app.analyzer.ioc import extract_ioc_targets
+        result = extract_ioc_targets("IP 192.168.1.100 was seen.")
+        self.assertIn("IPv4", result)
+        self.assertIn("192.168.1.100", result["IPv4"])
+
+    def test_extracts_hashes(self) -> None:
+        from app.analyzer.ioc import extract_ioc_targets
+        md5 = "d41d8cd98f00b204e9800998ecf8427e"
+        result = extract_ioc_targets(f"Hash: {md5}")
+        self.assertIn("Hashes", result)
+        self.assertIn(md5, result["Hashes"])
+
+    def test_extracts_emails(self) -> None:
+        from app.analyzer.ioc import extract_ioc_targets
+        result = extract_ioc_targets("Contact attacker@evil.com")
+        self.assertIn("Emails", result)
+
+    def test_extracts_filenames(self) -> None:
+        from app.analyzer.ioc import extract_ioc_targets
+        result = extract_ioc_targets("Found malware.exe on disk")
+        self.assertIn("FileNames", result)
+
+    def test_excludes_local_domains(self) -> None:
+        from app.analyzer.ioc import extract_ioc_targets
+        result = extract_ioc_targets("Host dc01.corp.local was queried.")
+        domains = result.get("Domains", [])
+        local_domains = [d for d in domains if d.endswith(".local")]
+        self.assertEqual(len(local_domains), 0)
+
+    def test_url_hosts_not_duplicated_as_domains(self) -> None:
+        from app.analyzer.ioc import extract_ioc_targets
+        result = extract_ioc_targets("Visit https://evil.example.com/path for details.")
+        domains = result.get("Domains", [])
+        self.assertNotIn("evil.example.com", [d.lower() for d in domains])
+
+
+class TestFormatIocTargets(unittest.TestCase):
+    """Tests for ioc.format_ioc_targets."""
+
+    def test_no_iocs(self) -> None:
+        from app.analyzer.ioc import format_ioc_targets
+        result = format_ioc_targets("Nothing special here.")
+        self.assertIn("No explicit IOC", result)
+
+    def test_formats_categories(self) -> None:
+        from app.analyzer.ioc import format_ioc_targets
+        result = format_ioc_targets("Check 192.168.1.1 and mimikatz")
+        self.assertIn("- IPv4:", result)
+        self.assertIn("192.168.1.1", result)
+
+
+class TestBuildPriorityDirectives(unittest.TestCase):
+    """Tests for ioc.build_priority_directives."""
+
+    def test_with_iocs(self) -> None:
+        from app.analyzer.ioc import build_priority_directives
+        result = build_priority_directives("Check 192.168.1.1")
+        self.assertIn("1.", result)
+        self.assertIn("IOC", result)
+        self.assertIn("Observed", result)
+
+    def test_without_iocs(self) -> None:
+        from app.analyzer.ioc import build_priority_directives
+        result = build_priority_directives("Just general investigation.")
+        self.assertIn("No explicit IOC", result)
+
+
+class TestBuildArtifactFinalContextReminder(unittest.TestCase):
+    """Tests for ioc.build_artifact_final_context_reminder."""
+
+    def test_basic_structure(self) -> None:
+        from app.analyzer.ioc import build_artifact_final_context_reminder
+        result = build_artifact_final_context_reminder(
+            artifact_key="runkeys",
+            artifact_name="Run/RunOnce Keys",
+            investigation_context="Check for persistence.",
+        )
+        self.assertIn("## Final Context Reminder", result)
+        self.assertIn("runkeys", result)
+        self.assertIn("Run/RunOnce Keys", result)
+        self.assertIn("Check for persistence", result)
+
+    def test_empty_context(self) -> None:
+        from app.analyzer.ioc import build_artifact_final_context_reminder
+        result = build_artifact_final_context_reminder(
+            artifact_key="k", artifact_name="n", investigation_context="",
+        )
+        self.assertIn("No investigation context provided", result)
+
+
+###############################################################################
+# prompts.py — standalone function tests
+###############################################################################
+
+
+class TestLoadPromptTemplate(unittest.TestCase):
+    """Tests for prompts.load_prompt_template."""
+
+    def test_reads_file(self) -> None:
+        from app.analyzer.prompts import load_prompt_template
+        with TemporaryDirectory(prefix="aift-prompt-") as tmp_dir:
+            p = Path(tmp_dir)
+            (p / "test.md").write_text("TEMPLATE CONTENT", encoding="utf-8")
+            result = load_prompt_template(p, "test.md", "fallback")
+        self.assertEqual(result, "TEMPLATE CONTENT")
+
+    def test_fallback_on_missing_file(self) -> None:
+        from app.analyzer.prompts import load_prompt_template
+        with TemporaryDirectory(prefix="aift-prompt-") as tmp_dir:
+            result = load_prompt_template(Path(tmp_dir), "nonexistent.md", "fallback")
+        self.assertEqual(result, "fallback")
+
+
+class TestLoadArtifactInstructionPrompts(unittest.TestCase):
+    """Tests for prompts.load_artifact_instruction_prompts."""
+
+    def test_loads_md_files(self) -> None:
+        from app.analyzer.prompts import load_artifact_instruction_prompts
+        with TemporaryDirectory(prefix="aift-prompt-") as tmp_dir:
+            p = Path(tmp_dir)
+            inst_dir = p / "artifact_instructions"
+            inst_dir.mkdir()
+            (inst_dir / "evtx.md").write_text("EVTX INSTRUCTIONS", encoding="utf-8")
+            (inst_dir / "mft.md").write_text("MFT INSTRUCTIONS", encoding="utf-8")
+            result = load_artifact_instruction_prompts(p)
+        self.assertEqual(result["evtx"], "EVTX INSTRUCTIONS")
+        self.assertEqual(result["mft"], "MFT INSTRUCTIONS")
+
+    def test_missing_dir_returns_empty(self) -> None:
+        from app.analyzer.prompts import load_artifact_instruction_prompts
+        with TemporaryDirectory(prefix="aift-prompt-") as tmp_dir:
+            result = load_artifact_instruction_prompts(Path(tmp_dir))
+        self.assertEqual(result, {})
+
+    def test_empty_files_skipped(self) -> None:
+        from app.analyzer.prompts import load_artifact_instruction_prompts
+        with TemporaryDirectory(prefix="aift-prompt-") as tmp_dir:
+            p = Path(tmp_dir)
+            inst_dir = p / "artifact_instructions"
+            inst_dir.mkdir()
+            (inst_dir / "empty.md").write_text("", encoding="utf-8")
+            (inst_dir / "valid.md").write_text("Content", encoding="utf-8")
+            result = load_artifact_instruction_prompts(p)
+        self.assertNotIn("empty", result)
+        self.assertIn("valid", result)
+
+
+class TestResolveArtifactAiColumnsConfigPath(unittest.TestCase):
+    """Tests for prompts.resolve_artifact_ai_columns_config_path."""
+
+    def test_absolute_path_returned_as_is(self) -> None:
+        from app.analyzer.prompts import resolve_artifact_ai_columns_config_path
+        with TemporaryDirectory(prefix="aift-abs-") as tmp_dir:
+            abs_path = Path(tmp_dir) / "path.yaml"
+            result = resolve_artifact_ai_columns_config_path(str(abs_path), None)
+            self.assertEqual(result, abs_path)
+
+    def test_relative_path_resolves_to_project_root(self) -> None:
+        from app.analyzer.prompts import resolve_artifact_ai_columns_config_path
+        from app.analyzer.constants import PROJECT_ROOT
+        result = resolve_artifact_ai_columns_config_path("config/artifact_ai_columns.yaml", None)
+        self.assertTrue(str(result).startswith(str(PROJECT_ROOT)))
+
+
+class TestLoadArtifactAiColumnProjections(unittest.TestCase):
+    """Tests for prompts.load_artifact_ai_column_projections."""
+
+    def test_valid_yaml(self) -> None:
+        from app.analyzer.prompts import load_artifact_ai_column_projections
+        with TemporaryDirectory(prefix="aift-proj-") as tmp_dir:
+            config_path = Path(tmp_dir) / "config.yaml"
+            config_path.write_text(
+                "artifact_ai_columns:\n  runkeys:\n    - ts\n    - name\n",
+                encoding="utf-8",
+            )
+            result = load_artifact_ai_column_projections(config_path)
+        self.assertIn("runkeys", result)
+        self.assertEqual(result["runkeys"], ("ts", "name"))
+
+    def test_missing_file_returns_empty(self) -> None:
+        from app.analyzer.prompts import load_artifact_ai_column_projections
+        result = load_artifact_ai_column_projections(Path("/nonexistent.yaml"))
+        self.assertEqual(result, {})
+
+    def test_invalid_yaml_returns_empty(self) -> None:
+        from app.analyzer.prompts import load_artifact_ai_column_projections
+        with TemporaryDirectory(prefix="aift-proj-") as tmp_dir:
+            config_path = Path(tmp_dir) / "config.yaml"
+            config_path.write_text("[invalid yaml", encoding="utf-8")
+            result = load_artifact_ai_column_projections(config_path)
+        self.assertEqual(result, {})
+
+    def test_non_mapping_returns_empty(self) -> None:
+        from app.analyzer.prompts import load_artifact_ai_column_projections
+        with TemporaryDirectory(prefix="aift-proj-") as tmp_dir:
+            config_path = Path(tmp_dir) / "config.yaml"
+            config_path.write_text("- just a list\n- item2\n", encoding="utf-8")
+            result = load_artifact_ai_column_projections(config_path)
+        self.assertEqual(result, {})
+
+
+class TestBuildSummaryPrompt(unittest.TestCase):
+    """Tests for prompts.build_summary_prompt."""
+
+    def test_fills_template(self) -> None:
+        from app.analyzer.prompts import build_summary_prompt
+        template = (
+            "Context: {{investigation_context}}\n"
+            "Priority: {{priority_directives}}\n"
+            "IOC: {{ioc_targets}}\n"
+            "Host: {{hostname}}\nOS: {{os_version}}\nDomain: {{domain}}\n"
+            "Findings:\n{{per_artifact_findings}}\n"
+        )
+        result = build_summary_prompt(
+            summary_prompt_template=template,
+            investigation_context="Test context",
+            per_artifact_results=[
+                {"artifact_key": "runkeys", "artifact_name": "RunKeys", "analysis": "Found stuff"},
+            ],
+            metadata_map={"hostname": "host1", "os_version": "Win10", "domain": "corp"},
+        )
+        self.assertIn("Context: Test context", result)
+        self.assertIn("Host: host1", result)
+        self.assertIn("### RunKeys (runkeys)", result)
+
+    def test_empty_results(self) -> None:
+        from app.analyzer.prompts import build_summary_prompt
+        result = build_summary_prompt(
+            summary_prompt_template="{{per_artifact_findings}}",
+            investigation_context="ctx",
+            per_artifact_results=[],
+            metadata_map={},
+        )
+        self.assertIn("No per-artifact findings available", result)
+
+    def test_missing_metadata_uses_unknown(self) -> None:
+        from app.analyzer.prompts import build_summary_prompt
+        template = "Host: {{hostname}}\nOS: {{os_version}}\nDomain: {{domain}}"
+        result = build_summary_prompt(
+            summary_prompt_template=template,
+            investigation_context="ctx",
+            per_artifact_results=[],
+            metadata_map={},
+        )
+        self.assertIn("Host: Unknown", result)
+        self.assertIn("OS: Unknown", result)
+
+
+###############################################################################
+# data_prep.py — standalone function tests
+###############################################################################
+
+
+class TestExtractDatesFromContext(unittest.TestCase):
+    """Tests for data_prep.extract_dates_from_context."""
+
+    def test_empty_text(self) -> None:
+        from app.analyzer.data_prep import extract_dates_from_context
+        self.assertEqual(extract_dates_from_context(""), [])
+
+    def test_iso_date(self) -> None:
+        from app.analyzer.data_prep import extract_dates_from_context
+        result = extract_dates_from_context("Incident on 2026-03-15.")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].date().isoformat(), "2026-03-15")
+
+    def test_dmy_dash(self) -> None:
+        from app.analyzer.data_prep import extract_dates_from_context
+        result = extract_dates_from_context("Date: 15-03-2026")
+        self.assertEqual(len(result), 1)
+
+    def test_dmy_slash(self) -> None:
+        from app.analyzer.data_prep import extract_dates_from_context
+        result = extract_dates_from_context("Date: 15/03/2026")
+        self.assertEqual(len(result), 1)
+
+    def test_textual_date(self) -> None:
+        from app.analyzer.data_prep import extract_dates_from_context
+        result = extract_dates_from_context("Event on March 15, 2026")
+        self.assertEqual(len(result), 1)
+
+    def test_textual_range(self) -> None:
+        from app.analyzer.data_prep import extract_dates_from_context
+        result = extract_dates_from_context("Window is March 10-15, 2026")
+        self.assertEqual(len(result), 2)
+
+    def test_deduplicates(self) -> None:
+        from app.analyzer.data_prep import extract_dates_from_context
+        result = extract_dates_from_context("2026-01-15 and 2026-01-15")
+        self.assertEqual(len(result), 1)
+
+
+class TestCounterNormalize(unittest.TestCase):
+    """Tests for data_prep.counter_normalize."""
+
+    def test_low_signal_returns_empty(self) -> None:
+        from app.analyzer.data_prep import counter_normalize
+        self.assertEqual(counter_normalize("none"), "")
+        self.assertEqual(counter_normalize("N/A"), "")
+        self.assertEqual(counter_normalize(""), "")
+
+    def test_normal_value_returned(self) -> None:
+        from app.analyzer.data_prep import counter_normalize
+        self.assertNotEqual(counter_normalize("cmd.exe"), "")
+
+
+class TestSelectAiColumns(unittest.TestCase):
+    """Tests for data_prep.select_ai_columns."""
+
+    def test_no_projection_returns_all(self) -> None:
+        from app.analyzer.data_prep import select_ai_columns
+        cols, applied = select_ai_columns("runkeys", ["ts", "name", "cmd"], {})
+        self.assertEqual(cols, ["ts", "name", "cmd"])
+        self.assertFalse(applied)
+
+    def test_projection_applied(self) -> None:
+        from app.analyzer.data_prep import select_ai_columns
+        projections = {"runkeys": ("ts", "name")}
+        cols, applied = select_ai_columns("runkeys", ["ts", "name", "cmd"], projections)
+        self.assertEqual(cols, ["ts", "name"])
+        self.assertTrue(applied)
+
+    def test_missing_columns_logged(self) -> None:
+        from app.analyzer.data_prep import select_ai_columns
+        audit_calls = []
+        def audit_fn(action, details):
+            audit_calls.append((action, details))
+        projections = {"runkeys": ("ts", "nonexistent")}
+        cols, applied = select_ai_columns("runkeys", ["ts", "name"], projections, audit_log_fn=audit_fn)
+        self.assertEqual(cols, ["ts"])
+        self.assertTrue(applied)
+        self.assertGreater(len(audit_calls), 0)
+
+    def test_all_columns_missing_returns_all(self) -> None:
+        from app.analyzer.data_prep import select_ai_columns
+        projections = {"runkeys": ("x", "y")}
+        cols, applied = select_ai_columns("runkeys", ["ts", "name"], projections)
+        self.assertEqual(cols, ["ts", "name"])
+        self.assertFalse(applied)
+
+
+class TestProjectRowsForAnalysis(unittest.TestCase):
+    """Tests for data_prep.project_rows_for_analysis."""
+
+    def test_projects_columns(self) -> None:
+        from app.analyzer.data_prep import project_rows_for_analysis
+        rows = [{"ts": "2026-01-15", "name": "a", "extra": "x", "_row_ref": "1"}]
+        result = project_rows_for_analysis(rows, ["ts", "name"])
+        self.assertEqual(len(result), 1)
+        self.assertIn("ts", result[0])
+        self.assertIn("name", result[0])
+        self.assertNotIn("extra", result[0])
+        self.assertEqual(result[0]["_row_ref"], "1")
+
+
+class TestDeduplicateRowsForAnalysis(unittest.TestCase):
+    """Tests for data_prep.deduplicate_rows_for_analysis standalone."""
+
+    def test_empty_rows(self) -> None:
+        from app.analyzer.data_prep import deduplicate_rows_for_analysis
+        kept, cols, removed, annotated, variants = deduplicate_rows_for_analysis([], [])
+        self.assertEqual(kept, [])
+        self.assertEqual(removed, 0)
+
+    def test_no_variant_columns(self) -> None:
+        from app.analyzer.data_prep import deduplicate_rows_for_analysis
+        rows = [{"name": "a"}, {"name": "b"}]
+        kept, cols, removed, annotated, variants = deduplicate_rows_for_analysis(rows, ["name"])
+        self.assertEqual(len(kept), 2)
+        self.assertEqual(removed, 0)
+        self.assertEqual(variants, [])
+
+
+class TestBuildFullDataCsvStandalone(unittest.TestCase):
+    """Tests for data_prep.build_full_data_csv standalone."""
+
+    def test_no_columns(self) -> None:
+        from app.analyzer.data_prep import build_full_data_csv
+        result = build_full_data_csv([{"a": "1"}], [])
+        self.assertEqual(result, "No columns available.")
+
+    def test_serializes(self) -> None:
+        from app.analyzer.data_prep import build_full_data_csv
+        rows = [{"_row_ref": "1", "ts": "2026-01-15", "name": "test"}]
+        result = build_full_data_csv(rows, ["ts", "name"])
+        self.assertIn("row_ref,ts,name", result)
+        self.assertIn("test", result)
+
+
+class TestResolveAnalysisInputOutputDir(unittest.TestCase):
+    """Tests for data_prep.resolve_analysis_input_output_dir."""
+
+    def test_with_case_dir(self) -> None:
+        from app.analyzer.data_prep import resolve_analysis_input_output_dir
+        result = resolve_analysis_input_output_dir(Path("/case"), Path("/case/parsed/art.csv"))
+        self.assertEqual(result, Path("/case/parsed_deduplicated"))
+
+    def test_without_case_dir_parsed_parent(self) -> None:
+        from app.analyzer.data_prep import resolve_analysis_input_output_dir
+        result = resolve_analysis_input_output_dir(None, Path("/some/parsed/art.csv"))
+        self.assertEqual(result, Path("/some/parsed_deduplicated"))
+
+    def test_without_case_dir_non_parsed(self) -> None:
+        from app.analyzer.data_prep import resolve_analysis_input_output_dir
+        result = resolve_analysis_input_output_dir(None, Path("/some/other/art.csv"))
+        self.assertEqual(result, Path("/some/other/parsed_deduplicated"))
+
+
+class TestWriteAnalysisInputCsv(unittest.TestCase):
+    """Tests for data_prep.write_analysis_input_csv."""
+
+    def test_writes_csv(self) -> None:
+        from app.analyzer.data_prep import write_analysis_input_csv
+        with TemporaryDirectory(prefix="aift-write-") as tmp_dir:
+            source = Path(tmp_dir) / "parsed" / "art.csv"
+            source.parent.mkdir(parents=True)
+            source.write_text("ts,name\n2026-01-15,test\n", encoding="utf-8")
+            rows = [{"ts": "2026-01-15", "name": "test"}]
+            result = write_analysis_input_csv(source, rows, ["ts", "name"])
+            self.assertTrue(result.exists())
+            content = result.read_text(encoding="utf-8")
+            self.assertIn("ts,name", content)
+            self.assertIn("test", content)
+
+
+class TestBuildArtifactCsvAttachment(unittest.TestCase):
+    """Tests for data_prep.build_artifact_csv_attachment."""
+
+    def test_basic(self) -> None:
+        from app.analyzer.data_prep import build_artifact_csv_attachment
+        csv_path = Path("/path/to/file.csv")
+        result = build_artifact_csv_attachment("runkeys", csv_path)
+        self.assertEqual(result["path"], str(csv_path))
+        self.assertEqual(result["mime_type"], "text/csv")
+        self.assertIn("runkeys", result["name"])
+
+
+class TestResolveAnalysisInstructions(unittest.TestCase):
+    """Tests for data_prep._resolve_analysis_instructions."""
+
+    def test_instruction_from_prompts(self) -> None:
+        from app.analyzer.data_prep import _resolve_analysis_instructions
+        result = _resolve_analysis_instructions(
+            artifact_key="evtx_Security",
+            artifact_metadata={},
+            artifact_instruction_prompts={"evtx": "EVTX INSTRUCTIONS"},
+        )
+        self.assertEqual(result, "EVTX INSTRUCTIONS")
+
+    def test_instruction_from_metadata(self) -> None:
+        from app.analyzer.data_prep import _resolve_analysis_instructions
+        result = _resolve_analysis_instructions(
+            artifact_key="custom",
+            artifact_metadata={"analysis_instructions": "Custom guidance"},
+            artifact_instruction_prompts={},
+        )
+        self.assertEqual(result, "Custom guidance")
+
+    def test_default_message(self) -> None:
+        from app.analyzer.data_prep import _resolve_analysis_instructions
+        result = _resolve_analysis_instructions(
+            artifact_key="custom",
+            artifact_metadata={},
+            artifact_instruction_prompts={},
+        )
+        self.assertIn("No specific analysis instructions", result)
+
+
+###############################################################################
+# constants.py — UnavailableProvider tests
+###############################################################################
+
+
+class TestUnavailableProvider(unittest.TestCase):
+    """Tests for constants.UnavailableProvider."""
+
+    def test_analyze_raises(self) -> None:
+        from app.analyzer.constants import UnavailableProvider
+        provider = UnavailableProvider("Test error")
+        with self.assertRaises(AIProviderError):
+            provider.analyze("sys", "user")
+
+    def test_get_model_info(self) -> None:
+        from app.analyzer.constants import UnavailableProvider
+        provider = UnavailableProvider("err")
+        info = provider.get_model_info()
+        self.assertEqual(info["provider"], "unavailable")
+        self.assertEqual(info["model"], "unavailable")
+
+
+###############################################################################
+# core.py — ForensicAnalyzer method tests
+###############################################################################
+
+
+class TestCallAiWithRetry(unittest.TestCase):
+    """Tests for ForensicAnalyzer._call_ai_with_retry."""
+
+    def test_success_on_first_try(self) -> None:
+        fake_provider = FakeProvider(responses=["ok"])
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        result = analyzer._call_ai_with_retry(lambda: "success")
+        self.assertEqual(result, "success")
+
+    def test_raises_ai_provider_error_immediately(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        with self.assertRaises(AIProviderError):
+            analyzer._call_ai_with_retry(lambda: (_ for _ in ()).throw(AIProviderError("permanent")))
+
+    @patch("app.analyzer.core.sleep")
+    def test_retries_on_transient_error(self, mock_sleep) -> None:
+        call_count = 0
+        def flaky():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise RuntimeError("transient")
+            return "success"
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        result = analyzer._call_ai_with_retry(flaky)
+        self.assertEqual(result, "success")
+        self.assertEqual(call_count, 3)
+
+    @patch("app.analyzer.core.sleep")
+    def test_raises_last_error_after_all_retries(self, mock_sleep) -> None:
+        def always_fail():
+            raise RuntimeError("fail")
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        with self.assertRaises(RuntimeError):
+            analyzer._call_ai_with_retry(always_fail)
+
+
+class TestAuditLog(unittest.TestCase):
+    """Tests for ForensicAnalyzer._audit_log."""
+
+    def test_logs_with_audit_logger(self) -> None:
+        audit = FakeAuditLogger()
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer(audit_logger=audit)
+        analyzer._audit_log("test_action", {"key": "value"})
+        self.assertEqual(len(audit.entries), 1)
+        self.assertEqual(audit.entries[0][0], "test_action")
+
+    def test_no_audit_logger_does_not_raise(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        # Should not raise
+        analyzer._audit_log("test_action", {"key": "value"})
+
+    def test_broken_audit_logger_does_not_raise(self) -> None:
+        class BrokenLogger:
+            def log(self, action, details):
+                raise RuntimeError("broken")
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer(audit_logger=BrokenLogger())
+        # Should not raise
+        analyzer._audit_log("test_action", {"key": "value"})
+
+
+class TestSaveCasePrompt(unittest.TestCase):
+    """Tests for ForensicAnalyzer._save_case_prompt."""
+
+    def test_saves_prompt_file(self) -> None:
+        with TemporaryDirectory(prefix="aift-save-") as tmp_dir:
+            fake_provider = FakeProvider()
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(case_dir=tmp_dir)
+            analyzer._save_case_prompt("test.md", "system", "user")
+            prompt_path = Path(tmp_dir) / "prompts" / "test.md"
+            self.assertTrue(prompt_path.exists())
+            content = prompt_path.read_text(encoding="utf-8")
+            self.assertIn("system", content)
+            self.assertIn("user", content)
+
+    def test_no_case_dir_does_not_raise(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        # Should not raise
+        analyzer._save_case_prompt("test.md", "sys", "usr")
+
+
+class TestResolveArtifactCsvPath(unittest.TestCase):
+    """Tests for ForensicAnalyzer._resolve_artifact_csv_path."""
+
+    def test_mapped_path(self) -> None:
+        with TemporaryDirectory(prefix="aift-path-") as tmp_dir:
+            csv_path = Path(tmp_dir) / "art.csv"
+            csv_path.write_text("ts,name\n", encoding="utf-8")
+            analyzer = ForensicAnalyzer(artifact_csv_paths={"art": csv_path})
+            result = analyzer._resolve_artifact_csv_path("art")
+            self.assertEqual(result, csv_path)
+
+    def test_raises_on_missing(self) -> None:
+        analyzer = ForensicAnalyzer()
+        with self.assertRaises(FileNotFoundError):
+            analyzer._resolve_artifact_csv_path("nonexistent_artifact")
+
+    def test_case_dir_parsed_lookup(self) -> None:
+        with TemporaryDirectory(prefix="aift-path-") as tmp_dir:
+            parsed_dir = Path(tmp_dir) / "parsed"
+            parsed_dir.mkdir()
+            csv_path = parsed_dir / "runkeys.csv"
+            csv_path.write_text("ts,name\n", encoding="utf-8")
+            fake_provider = FakeProvider()
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(case_dir=tmp_dir)
+            result = analyzer._resolve_artifact_csv_path("runkeys")
+            self.assertEqual(result, csv_path)
+
+
+class TestRegisterArtifactPathsFromMetadata(unittest.TestCase):
+    """Tests for ForensicAnalyzer._register_artifact_paths_from_metadata."""
+
+    def test_registers_from_artifact_csv_paths(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._register_artifact_paths_from_metadata({
+            "artifact_csv_paths": {"art1": "/path/to/art1.csv"},
+        })
+        self.assertIn("art1", analyzer.artifact_csv_paths)
+
+    def test_registers_from_artifacts_container(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._register_artifact_paths_from_metadata({
+            "artifacts": {"art1": {"csv_path": "/path/art1.csv"}},
+        })
+        self.assertIn("art1", analyzer.artifact_csv_paths)
+
+    def test_none_metadata_does_not_raise(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._register_artifact_paths_from_metadata(None)
+
+    def test_registers_from_list_container(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._register_artifact_paths_from_metadata({
+            "artifacts": [{"artifact_key": "art1", "csv_path": "/path.csv"}],
+        })
+        self.assertIn("art1", analyzer.artifact_csv_paths)
+
+
+class TestRegisterArtifactPathEntry(unittest.TestCase):
+    """Tests for ForensicAnalyzer._register_artifact_path_entry."""
+
+    def test_mapping_with_csv_path(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._register_artifact_path_entry("art1", {"csv_path": "/path.csv"})
+        self.assertEqual(analyzer.artifact_csv_paths["art1"], Path("/path.csv"))
+
+    def test_mapping_with_csv_paths_list(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._register_artifact_path_entry("art1", {"csv_paths": ["/first.csv", "/second.csv"]})
+        self.assertEqual(analyzer.artifact_csv_paths["art1"], Path("/first.csv"))
+
+    def test_string_value(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._register_artifact_path_entry("art1", "/path.csv")
+        self.assertEqual(analyzer.artifact_csv_paths["art1"], Path("/path.csv"))
+
+    def test_empty_key_ignored(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._register_artifact_path_entry("", "/path.csv")
+        self.assertEqual(len(analyzer.artifact_csv_paths), 0)
+
+    def test_none_key_ignored(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._register_artifact_path_entry(None, "/path.csv")
+        self.assertEqual(len(analyzer.artifact_csv_paths), 0)
+
+
+class TestConfigureExplicitAnalysisDateRange(unittest.TestCase):
+    """Tests for ForensicAnalyzer._configure_explicit_analysis_date_range."""
+
+    def test_valid_range(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._configure_explicit_analysis_date_range({
+            "analysis_date_range": {"start_date": "2026-01-01", "end_date": "2026-01-31"},
+        })
+        self.assertIsNotNone(analyzer._explicit_analysis_date_range)
+        self.assertEqual(analyzer._explicit_analysis_date_range[0], datetime(2026, 1, 1))
+
+    def test_invalid_dates(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._configure_explicit_analysis_date_range({
+            "analysis_date_range": {"start_date": "invalid", "end_date": "2026-01-31"},
+        })
+        self.assertIsNone(analyzer._explicit_analysis_date_range)
+
+    def test_reversed_dates(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._configure_explicit_analysis_date_range({
+            "analysis_date_range": {"start_date": "2026-12-31", "end_date": "2026-01-01"},
+        })
+        self.assertIsNone(analyzer._explicit_analysis_date_range)
+
+    def test_none_metadata(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._configure_explicit_analysis_date_range(None)
+        self.assertIsNone(analyzer._explicit_analysis_date_range)
+
+    def test_missing_date_range_key(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        analyzer._configure_explicit_analysis_date_range({"some_key": "value"})
+        self.assertIsNone(analyzer._explicit_analysis_date_range)
+
+
+class TestResolveArtifactMetadata(unittest.TestCase):
+    """Tests for ForensicAnalyzer._resolve_artifact_metadata."""
+
+    def test_unknown_key_returns_defaults(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        result = analyzer._resolve_artifact_metadata("completely_unknown_artifact_xyz")
+        self.assertEqual(result["name"], "completely_unknown_artifact_xyz")
+        self.assertIn("No artifact description", result["description"])
+
+
+class TestReadModelInfo(unittest.TestCase):
+    """Tests for ForensicAnalyzer._read_model_info."""
+
+    def test_returns_provider_info(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        self.assertEqual(analyzer.model_info["provider"], "fake")
+        self.assertEqual(analyzer.model_info["model"], "fake-model-1")
+
+    def test_broken_provider_returns_unknown(self) -> None:
+        class BrokenProvider:
+            def get_model_info(self):
+                raise RuntimeError("broken")
+            def analyze(self, **kwargs):
+                return "ok"
+        with patch("app.analyzer.core.create_provider", return_value=BrokenProvider()):
+            analyzer = ForensicAnalyzer()
+        self.assertEqual(analyzer.model_info["provider"], "unknown")
+
+    def test_non_mapping_returns_unknown(self) -> None:
+        class WeirdProvider:
+            def get_model_info(self):
+                return "not a dict"
+            def analyze(self, **kwargs):
+                return "ok"
+        with patch("app.analyzer.core.create_provider", return_value=WeirdProvider()):
+            analyzer = ForensicAnalyzer()
+        self.assertEqual(analyzer.model_info["provider"], "unknown")
+
+
+class TestSetAndResolveAnalysisInputCsvPath(unittest.TestCase):
+    """Tests for _set_analysis_input_csv_path and _resolve_analysis_input_csv_path."""
+
+    def test_set_and_resolve(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        path = Path("/some/path.csv")
+        analyzer._set_analysis_input_csv_path("runkeys", path)
+        result = analyzer._resolve_analysis_input_csv_path("runkeys", Path("/fallback.csv"))
+        self.assertEqual(result, path)
+
+    def test_fallback_when_not_set(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        fallback = Path("/fallback.csv")
+        result = analyzer._resolve_analysis_input_csv_path("unknown_key", fallback)
+        self.assertEqual(result, fallback)
+
+
+class TestGenerateSummaryFailure(unittest.TestCase):
+    """Tests for ForensicAnalyzer.generate_summary error handling."""
+
+    def test_returns_failure_message_on_error(self) -> None:
+        fake_provider = FakeProvider(fail_calls={0})
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            with TemporaryDirectory(prefix="aift-sum-") as tmp_dir:
+                prompts_dir = Path(tmp_dir) / "prompts"
+                prompts_dir.mkdir()
+                (prompts_dir / "summary_prompt.md").write_text("{{per_artifact_findings}}", encoding="utf-8")
+                (prompts_dir / "system_prompt.md").write_text("sys", encoding="utf-8")
+                analyzer = ForensicAnalyzer(
+                    case_dir=tmp_dir,
+                    audit_logger=FakeAuditLogger(),
+                    prompts_dir=prompts_dir,
+                )
+                result = analyzer.generate_summary([], "ctx", {})
+        self.assertTrue(result.startswith("Analysis failed:"))
+
+
+class TestCreateAiProvider(unittest.TestCase):
+    """Tests for ForensicAnalyzer._create_ai_provider."""
+
+    def test_fallback_to_unavailable_provider(self) -> None:
+        from app.analyzer.constants import UnavailableProvider
+        with patch("app.analyzer.core.create_provider", side_effect=RuntimeError("cannot create")):
+            analyzer = ForensicAnalyzer()
+        self.assertIsInstance(analyzer.ai_provider, UnavailableProvider)
+
+    def test_default_config_when_no_config(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider) as mock_create:
+            analyzer = ForensicAnalyzer()
+        # Should have been called with the default local config
+        call_args = mock_create.call_args[0][0]
+        self.assertIn("ai", call_args)
+
+
+class TestLoadAnalysisSettings(unittest.TestCase):
+    """Tests for ForensicAnalyzer._load_analysis_settings."""
+
+    def test_default_settings(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer()
+        self.assertEqual(analyzer.ai_max_tokens, 128000)
+        self.assertEqual(analyzer.date_buffer_days, 7)
+        self.assertTrue(analyzer.artifact_deduplication_enabled)
+
+    def test_custom_settings(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer(config={
+                "analysis": {
+                    "ai_max_tokens": 50000,
+                    "date_buffer_days": 3,
+                    "artifact_deduplication_enabled": False,
+                }
+            })
+        self.assertEqual(analyzer.ai_max_tokens, 50000)
+        self.assertEqual(analyzer.date_buffer_days, 3)
+        self.assertFalse(analyzer.artifact_deduplication_enabled)
+
+    def test_non_mapping_analysis_config(self) -> None:
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer(config={"analysis": "not a dict"})
+        # Should use defaults without error
+        self.assertEqual(analyzer.ai_max_tokens, 128000)
+
+
+class TestInitConvenienceShorthand(unittest.TestCase):
+    """Tests for ForensicAnalyzer init with mapping as case_dir (convenience shorthand)."""
+
+    def test_mapping_as_case_dir(self) -> None:
+        with TemporaryDirectory(prefix="aift-init-") as tmp_dir:
+            csv_path = Path(tmp_dir) / "art.csv"
+            csv_path.write_text("ts,name\n", encoding="utf-8")
+            analyzer = ForensicAnalyzer({"art": csv_path})
+        self.assertIsNone(analyzer.case_dir)
+        self.assertIn("art", analyzer.artifact_csv_paths)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from zipfile import ZipFile
 
 import yaml
@@ -16,6 +16,9 @@ import yaml
 from app import create_app
 from app.case_logging import unregister_all_case_log_handlers
 import app.routes as routes
+import app.routes.artifacts as routes_artifacts
+import app.routes.analysis as routes_analysis
+import app.routes.chat as routes_chat
 import app.routes.evidence as routes_evidence
 import app.routes.handlers as routes_handlers
 import app.routes.tasks as routes_tasks
@@ -1649,6 +1652,910 @@ class RoutesTests(unittest.TestCase):
             changed_keys = details.get("changed_keys", [])
             self.assertIn("server.port", changed_keys)
             self.assertIn("ai.openai.api_key (redacted)", changed_keys)
+
+
+    # ------------------------------------------------------------------
+    # Route edge-case tests
+    # ------------------------------------------------------------------
+
+    def test_create_case_auto_generates_name_when_missing(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            resp = self.client.post("/api/cases", json={})
+            self.assertEqual(resp.status_code, 201)
+            payload = resp.get_json()
+            self.assertTrue(payload["success"])
+            self.assertTrue(payload["case_name"].startswith("Case "))
+
+    def test_create_case_auto_generates_name_when_blank(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            resp = self.client.post("/api/cases", json={"case_name": "   "})
+            self.assertEqual(resp.status_code, 201)
+            self.assertTrue(resp.get_json()["case_name"].startswith("Case "))
+
+    def test_favicon_returns_404_when_no_logo(self) -> None:
+        missing_dir = Path(self.temp_dir.name) / "no_images"
+        with patch.object(routes_state, "IMAGES_ROOT", missing_dir), patch.object(routes_handlers, "IMAGES_ROOT", missing_dir):
+            resp = self.client.get("/favicon.ico")
+            self.assertEqual(resp.status_code, 404)
+
+    def test_image_asset_rejects_path_traversal(self) -> None:
+        images_dir = Path(self.temp_dir.name) / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        with patch.object(routes_state, "IMAGES_ROOT", images_dir), patch.object(routes_handlers, "IMAGES_ROOT", images_dir):
+            resp = self.client.get("/images/../config.yaml")
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("Invalid image filename", resp.get_json()["error"])
+
+    def test_image_asset_returns_404_for_missing_file(self) -> None:
+        images_dir = Path(self.temp_dir.name) / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        with patch.object(routes_state, "IMAGES_ROOT", images_dir), patch.object(routes_handlers, "IMAGES_ROOT", images_dir):
+            resp = self.client.get("/images/nonexistent.png")
+            self.assertEqual(resp.status_code, 404)
+            self.assertIn("Image not found", resp.get_json()["error"])
+
+    def test_image_asset_returns_404_when_images_dir_missing(self) -> None:
+        missing_dir = Path(self.temp_dir.name) / "no_images_dir"
+        with patch.object(routes_state, "IMAGES_ROOT", missing_dir), patch.object(routes_handlers, "IMAGES_ROOT", missing_dir):
+            resp = self.client.get("/images/logo.png")
+            self.assertEqual(resp.status_code, 404)
+            self.assertIn("Image directory not found", resp.get_json()["error"])
+
+    def test_evidence_intake_nonexistent_case(self) -> None:
+        resp = self.client.post(
+            "/api/cases/nonexistent-id/evidence",
+            json={"path": "C:\\fake.E01"},
+        )
+        self.assertEqual(resp.status_code, 404)
+        self.assertIn("Case not found", resp.get_json()["error"])
+
+    def test_evidence_intake_missing_path_and_no_upload(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "No Evidence"})
+            case_id = create_resp.get_json()["case_id"]
+            resp = self.client.post(f"/api/cases/{case_id}/evidence", json={})
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("Provide evidence", resp.get_json()["error"])
+
+    def test_evidence_intake_nonexistent_path(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Missing Path"})
+            case_id = create_resp.get_json()["case_id"]
+            resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                json={"path": "C:\\does_not_exist\\fake.E01"},
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("does not exist", resp.get_json()["error"])
+
+    def test_parse_nonexistent_case(self) -> None:
+        resp = self.client.post(
+            "/api/cases/nonexistent-id/parse",
+            json={"artifacts": ["runkeys"]},
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_parse_no_evidence_loaded(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "No Evidence Parse"})
+            case_id = create_resp.get_json()["case_id"]
+            resp = self.client.post(
+                f"/api/cases/{case_id}/parse",
+                json={"artifacts": ["runkeys"]},
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("No evidence loaded", resp.get_json()["error"])
+
+    def test_parse_no_artifacts_provided(self) -> None:
+        evidence_path = Path(self.temp_dir.name) / "no-artifacts.E01"
+        evidence_path.write_bytes(b"demo")
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(
+                routes_evidence,
+                "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+        ):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Empty Artifacts"})
+            case_id = create_resp.get_json()["case_id"]
+            self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_path)})
+            resp = self.client.post(f"/api/cases/{case_id}/parse", json={"artifacts": []})
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("at least one artifact", resp.get_json()["error"])
+
+    def test_parse_already_running_returns_409(self) -> None:
+        evidence_path = Path(self.temp_dir.name) / "already-parsing.E01"
+        evidence_path.write_bytes(b"demo")
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(
+                routes_evidence,
+                "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+        ):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Already Running"})
+            case_id = create_resp.get_json()["case_id"]
+            self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_path)})
+            with routes.STATE_LOCK:
+                routes.PARSE_PROGRESS[case_id] = routes.new_progress(status="running")
+            resp = self.client.post(
+                f"/api/cases/{case_id}/parse",
+                json={"artifacts": ["runkeys"]},
+            )
+            self.assertEqual(resp.status_code, 409)
+            self.assertIn("already running", resp.get_json()["error"])
+
+    def test_parse_progress_nonexistent_case(self) -> None:
+        resp = self.client.get("/api/cases/nonexistent-id/parse/progress")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_analyze_nonexistent_case(self) -> None:
+        resp = self.client.post(
+            "/api/cases/nonexistent-id/analyze",
+            json={"prompt": "test"},
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_analyze_no_parse_results(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "No Parse Results"})
+            case_id = create_resp.get_json()["case_id"]
+            resp = self.client.post(
+                f"/api/cases/{case_id}/analyze",
+                json={"prompt": "test"},
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("No parsed artifacts", resp.get_json()["error"])
+
+    def test_analyze_progress_nonexistent_case(self) -> None:
+        resp = self.client.get("/api/cases/nonexistent-id/analyze/progress")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_chat_nonexistent_case(self) -> None:
+        resp = self.client.post(
+            "/api/cases/nonexistent-id/chat",
+            json={"message": "hello"},
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_chat_missing_payload(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Chat No Payload"})
+            case_id = create_resp.get_json()["case_id"]
+            resp = self.client.post(
+                f"/api/cases/{case_id}/chat",
+                data="not json",
+                content_type="text/plain",
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("JSON object", resp.get_json()["error"])
+
+    def test_chat_empty_message(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Chat Empty Message"})
+            case_id = create_resp.get_json()["case_id"]
+            resp = self.client.post(
+                f"/api/cases/{case_id}/chat",
+                json={"message": ""},
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("message", resp.get_json()["error"])
+
+    def test_chat_no_analysis_results(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Chat No Analysis"})
+            case_id = create_resp.get_json()["case_id"]
+            resp = self.client.post(
+                f"/api/cases/{case_id}/chat",
+                json={"message": "What happened?"},
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("No analysis results", resp.get_json()["error"])
+
+    def test_chat_already_running_returns_409(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Chat Running"})
+            case_id = create_resp.get_json()["case_id"]
+            # Set up analysis results so the check passes
+            with routes.STATE_LOCK:
+                routes.CASE_STATES[case_id]["analysis_results"] = {"summary": "done", "per_artifact": []}
+                routes.CHAT_PROGRESS[case_id] = routes.new_progress(status="running")
+            resp = self.client.post(
+                f"/api/cases/{case_id}/chat",
+                json={"message": "hello"},
+            )
+            self.assertEqual(resp.status_code, 409)
+            self.assertIn("already running", resp.get_json()["error"])
+
+    def test_chat_stream_nonexistent_case(self) -> None:
+        resp = self.client.get("/api/cases/nonexistent-id/chat/stream")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_chat_history_nonexistent_case(self) -> None:
+        resp = self.client.get("/api/cases/nonexistent-id/chat/history")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_clear_chat_history_nonexistent_case(self) -> None:
+        resp = self.client.delete("/api/cases/nonexistent-id/chat/history")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_report_nonexistent_case(self) -> None:
+        resp = self.client.get("/api/cases/nonexistent-id/report")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_csv_bundle_nonexistent_case(self) -> None:
+        resp = self.client.get("/api/cases/nonexistent-id/csvs")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_csv_bundle_no_csv_files(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "No CSVs"})
+            case_id = create_resp.get_json()["case_id"]
+            resp = self.client.get(f"/api/cases/{case_id}/csvs")
+            self.assertEqual(resp.status_code, 404)
+            self.assertIn("No parsed CSV", resp.get_json()["error"])
+
+    def test_settings_update_rejects_non_dict_payload(self) -> None:
+        resp = self.client.post(
+            "/api/settings",
+            data=json.dumps([1, 2, 3]),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("JSON object", resp.get_json()["error"])
+
+    def test_settings_test_connection_unexpected_error(self) -> None:
+        with (
+            patch.object(routes, "create_provider", side_effect=RuntimeError("boom")),
+            patch.object(routes_handlers, "create_provider", side_effect=RuntimeError("boom")),
+        ):
+            resp = self.client.post("/api/settings/test-connection")
+        self.assertEqual(resp.status_code, 500)
+        self.assertIn("Unexpected error", resp.get_json()["error"])
+
+    def test_settings_test_connection_empty_reply(self) -> None:
+        class EmptyReplyProvider:
+            def analyze(self, system_prompt: str, user_prompt: str, max_tokens: int = 256) -> str:
+                return ""
+            def get_model_info(self) -> dict[str, str]:
+                return {"provider": "fake", "model": "empty-model"}
+
+        with (
+            patch.object(routes, "create_provider", return_value=EmptyReplyProvider()),
+            patch.object(routes_handlers, "create_provider", return_value=EmptyReplyProvider()),
+        ):
+            resp = self.client.post("/api/settings/test-connection")
+        self.assertEqual(resp.status_code, 502)
+        self.assertIn("empty response", resp.get_json()["error"])
+
+    def test_profile_save_rejects_reserved_name(self) -> None:
+        resp = self.client.post(
+            "/api/artifact-profiles",
+            json={
+                "name": "recommended",
+                "artifact_options": [{"artifact_key": "runkeys", "mode": "parse_and_ai"}],
+            },
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("built-in", resp.get_json()["error"])
+
+    def test_profile_save_rejects_empty_name(self) -> None:
+        resp = self.client.post(
+            "/api/artifact-profiles",
+            json={
+                "name": "",
+                "artifact_options": [{"artifact_key": "runkeys", "mode": "parse_and_ai"}],
+            },
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("required", resp.get_json()["error"])
+
+    def test_profile_save_rejects_empty_options(self) -> None:
+        resp = self.client.post(
+            "/api/artifact-profiles",
+            json={"name": "EmptyProfile", "artifact_options": []},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("at least one", resp.get_json()["error"])
+
+    def test_profile_save_rejects_non_dict_payload(self) -> None:
+        resp = self.client.post(
+            "/api/artifact-profiles",
+            data=json.dumps("not a dict"),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("JSON object", resp.get_json()["error"])
+
+    def test_report_missing_hash_context(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "No Hash"})
+            case_id = create_resp.get_json()["case_id"]
+            # Simulate parse results exist but no hash
+            with routes.STATE_LOCK:
+                routes.CASE_STATES[case_id]["evidence_hashes"] = {"sha256": "abc123"}
+                routes.CASE_STATES[case_id]["source_path"] = ""
+                routes.CASE_STATES[case_id]["evidence_path"] = ""
+            resp = self.client.get(f"/api/cases/{case_id}/report")
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("hash context", resp.get_json()["error"])
+
+
+class StateHelperTests(unittest.TestCase):
+    """Tests for helper functions in app.routes.state."""
+
+    def test_now_iso_format(self) -> None:
+        result = routes_state.now_iso()
+        self.assertTrue(result.endswith("Z"))
+        self.assertIn("T", result)
+
+    def test_safe_name_replaces_special_chars(self) -> None:
+        self.assertEqual(routes_state.safe_name("hello world!"), "hello_world")
+        self.assertEqual(routes_state.safe_name("normal"), "normal")
+        self.assertEqual(routes_state.safe_name(""), "item")
+        self.assertEqual(routes_state.safe_name("!!!"), "item")
+        self.assertEqual(routes_state.safe_name("   ", fallback="default"), "default")
+
+    def test_safe_int_converts_values(self) -> None:
+        self.assertEqual(routes_state.safe_int("42"), 42)
+        self.assertEqual(routes_state.safe_int(3.7), 3)
+        self.assertEqual(routes_state.safe_int("bad"), 0)
+        self.assertEqual(routes_state.safe_int(None), 0)
+        self.assertEqual(routes_state.safe_int("bad", default=99), 99)
+
+    def test_normalize_case_status(self) -> None:
+        self.assertEqual(routes_state.normalize_case_status("Running"), "running")
+        self.assertEqual(routes_state.normalize_case_status("  Completed  "), "completed")
+        self.assertEqual(routes_state.normalize_case_status(None), "")
+        self.assertEqual(routes_state.normalize_case_status(""), "")
+
+    def test_new_progress_default_status(self) -> None:
+        prog = routes_state.new_progress()
+        self.assertEqual(prog["status"], "idle")
+        self.assertEqual(prog["events"], [])
+        self.assertIsNone(prog["error"])
+        self.assertIn("created_at", prog)
+
+    def test_new_progress_custom_status(self) -> None:
+        prog = routes_state.new_progress(status="running")
+        self.assertEqual(prog["status"], "running")
+
+    def test_set_progress_status(self) -> None:
+        store: dict[str, dict] = {}
+        routes_state.set_progress_status(store, "case1", "running")
+        self.assertEqual(store["case1"]["status"], "running")
+        self.assertIsNone(store["case1"]["error"])
+        routes_state.set_progress_status(store, "case1", "failed", "Something broke")
+        self.assertEqual(store["case1"]["status"], "failed")
+        self.assertEqual(store["case1"]["error"], "Something broke")
+
+    def test_emit_progress_appends_events(self) -> None:
+        store: dict[str, dict] = {}
+        routes_state.emit_progress(store, "case1", {"type": "started"})
+        routes_state.emit_progress(store, "case1", {"type": "progress"})
+        self.assertEqual(len(store["case1"]["events"]), 2)
+        self.assertEqual(store["case1"]["events"][0]["sequence"], 0)
+        self.assertEqual(store["case1"]["events"][1]["sequence"], 1)
+        self.assertIn("timestamp", store["case1"]["events"][0])
+
+    def test_get_case_returns_none_for_missing(self) -> None:
+        routes_state.CASE_STATES.clear()
+        self.assertIsNone(routes_state.get_case("nonexistent"))
+
+    def test_get_case_returns_state(self) -> None:
+        routes_state.CASE_STATES.clear()
+        routes_state.CASE_STATES["test-id"] = {"status": "active"}
+        result = routes_state.get_case("test-id")
+        self.assertEqual(result["status"], "active")
+        routes_state.CASE_STATES.clear()
+
+    def test_mark_case_status(self) -> None:
+        routes_state.CASE_STATES.clear()
+        routes_state.CASE_STATES["test-id"] = {"status": "active"}
+        routes_state.mark_case_status("test-id", "Completed")
+        self.assertEqual(routes_state.CASE_STATES["test-id"]["status"], "completed")
+        # No-op for missing case
+        routes_state.mark_case_status("missing", "completed")
+        routes_state.CASE_STATES.clear()
+
+    def test_cleanup_case_entries(self) -> None:
+        routes_state.CASE_STATES["test-id"] = {"status": "active"}
+        routes_state.PARSE_PROGRESS["test-id"] = routes_state.new_progress()
+        routes_state.ANALYSIS_PROGRESS["test-id"] = routes_state.new_progress()
+        routes_state.CHAT_PROGRESS["test-id"] = routes_state.new_progress()
+        routes_state.cleanup_case_entries("test-id")
+        self.assertNotIn("test-id", routes_state.CASE_STATES)
+        self.assertNotIn("test-id", routes_state.PARSE_PROGRESS)
+        self.assertNotIn("test-id", routes_state.ANALYSIS_PROGRESS)
+        self.assertNotIn("test-id", routes_state.CHAT_PROGRESS)
+
+    def test_mask_sensitive_masks_keys(self) -> None:
+        data = {
+            "name": "test",
+            "api_key": "secret123",
+            "nested": {"password": "pass123", "model": "gpt-4"},
+            "list_data": [{"token": "tok123"}],
+        }
+        masked = routes_state.mask_sensitive(data)
+        self.assertEqual(masked["name"], "test")
+        self.assertEqual(masked["api_key"], "********")
+        self.assertEqual(masked["nested"]["password"], "********")
+        self.assertEqual(masked["nested"]["model"], "gpt-4")
+        self.assertEqual(masked["list_data"][0]["token"], "********")
+
+    def test_mask_sensitive_empty_sensitive_value(self) -> None:
+        data = {"api_key": "real-key", "token": "", "password": "  "}
+        masked = routes_state.mask_sensitive(data)
+        self.assertEqual(masked["api_key"], "********")
+        # Empty string stays empty
+        self.assertEqual(masked["token"], "")
+        # Whitespace-only string is treated as empty
+        self.assertEqual(masked["password"], "")
+
+    def test_mask_sensitive_scalar_passthrough(self) -> None:
+        self.assertEqual(routes_state.mask_sensitive(42), 42)
+        self.assertEqual(routes_state.mask_sensitive("hello"), "hello")
+
+    def test_deep_merge_updates_values(self) -> None:
+        current = {"a": 1, "b": {"c": 2, "d": 3}}
+        updates = {"a": 10, "b": {"c": 20}}
+        changed = routes_state.deep_merge(current, updates)
+        self.assertEqual(current["a"], 10)
+        self.assertEqual(current["b"]["c"], 20)
+        self.assertEqual(current["b"]["d"], 3)
+        self.assertIn("a", changed)
+        self.assertIn("b.c", changed)
+
+    def test_deep_merge_skips_masked_sensitive(self) -> None:
+        current = {"api_key": "real-secret"}
+        updates = {"api_key": "********"}
+        changed = routes_state.deep_merge(current, updates)
+        self.assertEqual(current["api_key"], "real-secret")
+        self.assertEqual(changed, [])
+
+    def test_deep_merge_skips_non_string_keys(self) -> None:
+        current = {"a": 1}
+        updates = {123: "value", "b": 2}
+        changed = routes_state.deep_merge(current, updates)
+        self.assertIn("b", changed)
+        self.assertNotIn(123, current)
+
+    def test_sanitize_changed_keys(self) -> None:
+        keys = ["server.port", "ai.openai.api_key", "", "  ", "server.port"]
+        result = routes_state.sanitize_changed_keys(keys)
+        self.assertIn("server.port", result)
+        self.assertIn("ai.openai.api_key (redacted)", result)
+        # Deduplication
+        self.assertEqual(result.count("server.port"), 1)
+        # Empty strings removed
+        self.assertTrue(all(r.strip() for r in result))
+
+    def test_sanitize_changed_keys_non_string(self) -> None:
+        keys = [42, None, "valid.key"]
+        result = routes_state.sanitize_changed_keys(keys)
+        self.assertEqual(result, ["valid.key"])
+
+    def test_cleanup_terminal_cases_excludes_specified(self) -> None:
+        routes_state.CASE_STATES.clear()
+        routes_state.PARSE_PROGRESS.clear()
+        routes_state.ANALYSIS_PROGRESS.clear()
+        routes_state.CHAT_PROGRESS.clear()
+        routes_state.CASE_STATES["keep-me"] = {"status": "completed"}
+        routes_state.CASE_STATES["remove-me"] = {"status": "completed"}
+        routes_state.cleanup_terminal_cases(exclude_case_id="keep-me")
+        self.assertIn("keep-me", routes_state.CASE_STATES)
+        self.assertNotIn("remove-me", routes_state.CASE_STATES)
+        routes_state.CASE_STATES.clear()
+
+
+class EvidenceHelperTests(unittest.TestCase):
+    """Tests for helper functions in app.routes.evidence."""
+
+    def test_build_csv_map_successful_results(self) -> None:
+        results = [
+            {"artifact_key": "runkeys", "success": True, "csv_path": "/path/runkeys.csv"},
+            {"artifact_key": "tasks", "success": False, "csv_path": "/path/tasks.csv"},
+            {"artifact_key": "amcache", "success": True, "csv_path": ""},
+            {"artifact_key": "multi", "success": True, "csv_paths": ["/path/multi_1.csv", "/path/multi_2.csv"]},
+        ]
+        mapping = routes_evidence.build_csv_map(results)
+        self.assertEqual(mapping["runkeys"], "/path/runkeys.csv")
+        self.assertNotIn("tasks", mapping)
+        self.assertNotIn("amcache", mapping)
+        self.assertEqual(mapping["multi"], "/path/multi_1.csv")
+
+    def test_build_csv_map_empty_results(self) -> None:
+        self.assertEqual(routes_evidence.build_csv_map([]), {})
+
+    def test_read_audit_entries_missing_file(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            result = routes_evidence.read_audit_entries(Path(tmpdir))
+        self.assertEqual(result, [])
+
+    def test_read_audit_entries_valid_file(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            audit_path = Path(tmpdir) / "audit.jsonl"
+            audit_path.write_text(
+                '{"action": "test", "timestamp": "2025-01-01T00:00:00Z"}\n'
+                'invalid json line\n'
+                '{"action": "test2"}\n',
+                encoding="utf-8",
+            )
+            result = routes_evidence.read_audit_entries(Path(tmpdir))
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["action"], "test")
+        self.assertEqual(result[1]["action"], "test2")
+
+    def test_resolve_hash_verification_path_source(self) -> None:
+        case = {"source_path": "/evidence/disk.E01", "evidence_path": "/case/extracted/disk.E01"}
+        result = routes_evidence.resolve_hash_verification_path(case)
+        self.assertEqual(result, Path("/evidence/disk.E01"))
+
+    def test_resolve_hash_verification_path_evidence_fallback(self) -> None:
+        case = {"source_path": "", "evidence_path": "/case/extracted/disk.E01"}
+        result = routes_evidence.resolve_hash_verification_path(case)
+        self.assertEqual(result, Path("/case/extracted/disk.E01"))
+
+    def test_resolve_hash_verification_path_none(self) -> None:
+        case = {"source_path": "", "evidence_path": ""}
+        result = routes_evidence.resolve_hash_verification_path(case)
+        self.assertIsNone(result)
+
+    def test_resolve_case_csv_output_dir_default(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            case_dir = Path(tmpdir) / "case1"
+            case_dir.mkdir()
+            case = {"case_dir": case_dir, "case_id": "case1"}
+            result = routes_evidence.resolve_case_csv_output_dir(case, {})
+        self.assertEqual(result, case_dir / "parsed")
+
+    def test_resolve_case_csv_output_dir_configured(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            case_dir = Path(tmpdir) / "case1"
+            case_dir.mkdir()
+            output_root = Path(tmpdir) / "custom_output"
+            case = {"case_dir": case_dir, "case_id": "case1"}
+            config = {"evidence": {"csv_output_dir": str(output_root)}}
+            result = routes_evidence.resolve_case_csv_output_dir(case, config)
+        self.assertEqual(result, output_root / "case1" / "parsed")
+
+    def test_collect_case_csv_paths_from_artifact_csv_paths(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            case_dir = Path(tmpdir)
+            csv_path = case_dir / "parsed" / "runkeys.csv"
+            csv_path.parent.mkdir(parents=True, exist_ok=True)
+            csv_path.write_text("data", encoding="utf-8")
+            case = {
+                "case_dir": case_dir,
+                "artifact_csv_paths": {"runkeys": str(csv_path)},
+                "parse_results": [],
+            }
+            result = routes_evidence.collect_case_csv_paths(case)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0], csv_path)
+
+    def test_collect_case_csv_paths_fallback_to_parsed_dir(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            case_dir = Path(tmpdir)
+            parsed_dir = case_dir / "parsed"
+            parsed_dir.mkdir()
+            (parsed_dir / "test.csv").write_text("data", encoding="utf-8")
+            case = {"case_dir": case_dir, "artifact_csv_paths": {}, "parse_results": []}
+            result = routes_evidence.collect_case_csv_paths(case)
+        self.assertEqual(len(result), 1)
+
+
+class ArtifactHelperTests(unittest.TestCase):
+    """Tests for helper functions in app.routes.artifacts."""
+
+    def test_normalize_artifact_mode_defaults(self) -> None:
+        self.assertEqual(routes_artifacts.normalize_artifact_mode("parse_and_ai"), "parse_and_ai")
+        self.assertEqual(routes_artifacts.normalize_artifact_mode("parse_only"), "parse_only")
+        self.assertEqual(routes_artifacts.normalize_artifact_mode(""), "parse_and_ai")
+        self.assertEqual(routes_artifacts.normalize_artifact_mode(None), "parse_and_ai")
+        self.assertEqual(routes_artifacts.normalize_artifact_mode("invalid"), "parse_and_ai")
+        self.assertEqual(
+            routes_artifacts.normalize_artifact_mode("invalid", default_mode="parse_only"),
+            "parse_only",
+        )
+
+    def test_normalize_artifact_options_string_list(self) -> None:
+        result = routes_artifacts.normalize_artifact_options(["runkeys", "mft", "runkeys"])
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["artifact_key"], "runkeys")
+        self.assertEqual(result[0]["mode"], "parse_and_ai")
+
+    def test_normalize_artifact_options_dict_list(self) -> None:
+        result = routes_artifacts.normalize_artifact_options([
+            {"artifact_key": "runkeys", "mode": "parse_only"},
+            {"key": "mft", "ai_enabled": False},
+        ])
+        self.assertEqual(result[0]["mode"], "parse_only")
+        self.assertEqual(result[1]["artifact_key"], "mft")
+        self.assertEqual(result[1]["mode"], "parse_only")
+
+    def test_normalize_artifact_options_rejects_non_list(self) -> None:
+        with self.assertRaises(ValueError):
+            routes_artifacts.normalize_artifact_options("not a list")
+
+    def test_normalize_artifact_options_skips_non_string_non_dict(self) -> None:
+        result = routes_artifacts.normalize_artifact_options(["runkeys", 42, None])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["artifact_key"], "runkeys")
+
+    def test_artifact_options_to_lists(self) -> None:
+        options = [
+            {"artifact_key": "runkeys", "mode": "parse_and_ai"},
+            {"artifact_key": "mft", "mode": "parse_only"},
+            {"artifact_key": "evtx", "mode": "parse_and_ai"},
+        ]
+        parse, analysis = routes_artifacts.artifact_options_to_lists(options)
+        self.assertEqual(parse, ["runkeys", "mft", "evtx"])
+        self.assertEqual(analysis, ["runkeys", "evtx"])
+
+    def test_extract_parse_selection_payload_new_format(self) -> None:
+        payload = {
+            "artifact_options": [
+                {"artifact_key": "runkeys", "mode": "parse_and_ai"},
+                {"artifact_key": "mft", "mode": "parse_only"},
+            ]
+        }
+        options, parse_list, analysis_list = routes_artifacts.extract_parse_selection_payload(payload)
+        self.assertEqual(len(options), 2)
+        self.assertEqual(parse_list, ["runkeys", "mft"])
+        self.assertEqual(analysis_list, ["runkeys"])
+
+    def test_extract_parse_selection_payload_legacy_format(self) -> None:
+        payload = {
+            "artifacts": ["runkeys", "mft"],
+            "ai_artifacts": ["runkeys"],
+        }
+        options, parse_list, analysis_list = routes_artifacts.extract_parse_selection_payload(payload)
+        self.assertEqual(parse_list, ["runkeys", "mft"])
+        self.assertEqual(analysis_list, ["runkeys"])
+
+    def test_extract_parse_selection_payload_legacy_no_ai_artifacts(self) -> None:
+        payload = {"artifacts": ["runkeys", "mft"]}
+        options, parse_list, analysis_list = routes_artifacts.extract_parse_selection_payload(payload)
+        self.assertEqual(parse_list, ["runkeys", "mft"])
+        self.assertEqual(analysis_list, ["runkeys", "mft"])
+
+    def test_extract_parse_selection_payload_invalid_artifacts(self) -> None:
+        with self.assertRaises(ValueError):
+            routes_artifacts.extract_parse_selection_payload({"artifacts": "not a list"})
+
+    def test_extract_parse_selection_payload_invalid_ai_artifacts(self) -> None:
+        with self.assertRaises(ValueError):
+            routes_artifacts.extract_parse_selection_payload(
+                {"artifacts": ["runkeys"], "ai_artifacts": "not a list"}
+            )
+
+    def test_validate_analysis_date_range_valid(self) -> None:
+        result = routes_artifacts.validate_analysis_date_range(
+            {"start_date": "2025-01-01", "end_date": "2025-01-31"}
+        )
+        self.assertEqual(result["start_date"], "2025-01-01")
+        self.assertEqual(result["end_date"], "2025-01-31")
+
+    def test_validate_analysis_date_range_none(self) -> None:
+        self.assertIsNone(routes_artifacts.validate_analysis_date_range(None))
+
+    def test_validate_analysis_date_range_empty(self) -> None:
+        self.assertIsNone(
+            routes_artifacts.validate_analysis_date_range({"start_date": "", "end_date": ""})
+        )
+
+    def test_validate_analysis_date_range_partial(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            routes_artifacts.validate_analysis_date_range({"start_date": "2025-01-01"})
+        self.assertIn("Provide both", str(ctx.exception))
+
+    def test_validate_analysis_date_range_invalid_format(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            routes_artifacts.validate_analysis_date_range(
+                {"start_date": "01-01-2025", "end_date": "01-31-2025"}
+            )
+        self.assertIn("YYYY-MM-DD", str(ctx.exception))
+
+    def test_validate_analysis_date_range_reversed(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            routes_artifacts.validate_analysis_date_range(
+                {"start_date": "2025-02-01", "end_date": "2025-01-01"}
+            )
+        self.assertIn("earlier", str(ctx.exception))
+
+    def test_validate_analysis_date_range_non_dict(self) -> None:
+        with self.assertRaises(ValueError):
+            routes_artifacts.validate_analysis_date_range("not a dict")
+
+    def test_extract_parse_progress_dict_arg(self) -> None:
+        key, count = routes_artifacts.extract_parse_progress(
+            "fallback", ({"artifact_key": "runkeys", "record_count": 42},)
+        )
+        self.assertEqual(key, "runkeys")
+        self.assertEqual(count, 42)
+
+    def test_extract_parse_progress_positional_args(self) -> None:
+        key, count = routes_artifacts.extract_parse_progress("fallback", ("mft", 100))
+        self.assertEqual(key, "mft")
+        self.assertEqual(count, 100)
+
+    def test_extract_parse_progress_single_arg(self) -> None:
+        key, count = routes_artifacts.extract_parse_progress("fallback", (50,))
+        self.assertEqual(key, "fallback")
+        self.assertEqual(count, 50)
+
+    def test_extract_parse_progress_no_args(self) -> None:
+        key, count = routes_artifacts.extract_parse_progress("fallback", ())
+        self.assertEqual(key, "fallback")
+        self.assertEqual(count, 0)
+
+    def test_sanitize_prompt_short(self) -> None:
+        result = routes_artifacts.sanitize_prompt("  hello   world  ")
+        self.assertEqual(result, "hello world")
+
+    def test_sanitize_prompt_truncation(self) -> None:
+        long_prompt = "a" * 3000
+        result = routes_artifacts.sanitize_prompt(long_prompt, max_chars=100)
+        self.assertTrue(result.endswith("... [truncated]"))
+        self.assertTrue(len(result) < 200)
+
+    def test_normalize_profile_name_valid(self) -> None:
+        self.assertEqual(routes_artifacts.normalize_profile_name("My Profile"), "My Profile")
+
+    def test_normalize_profile_name_empty(self) -> None:
+        with self.assertRaises(ValueError):
+            routes_artifacts.normalize_profile_name("")
+
+    def test_normalize_profile_name_reserved(self) -> None:
+        with self.assertRaises(ValueError):
+            routes_artifacts.normalize_profile_name("recommended")
+
+    def test_normalize_profile_name_invalid_chars(self) -> None:
+        with self.assertRaises(ValueError):
+            routes_artifacts.normalize_profile_name("!@#$%")
+
+    def test_profile_path_for_new_name(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            profiles_root = Path(tmpdir)
+            path = routes_artifacts.profile_path_for_new_name(profiles_root, "My Profile")
+            self.assertEqual(path, profiles_root / "my_profile.json")
+
+    def test_profile_path_for_new_name_collision(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            profiles_root = Path(tmpdir)
+            (profiles_root / "my_profile.json").write_text("{}", encoding="utf-8")
+            path = routes_artifacts.profile_path_for_new_name(profiles_root, "My Profile")
+            self.assertEqual(path, profiles_root / "my_profile_1.json")
+
+
+class TaskHelperTests(unittest.TestCase):
+    """Tests for helper functions in app.routes.tasks."""
+
+    def test_load_case_analysis_results_from_memory(self) -> None:
+        case = {
+            "case_dir": "/tmp/fake",
+            "analysis_results": {"summary": "test", "per_artifact": []},
+        }
+        result = routes_tasks.load_case_analysis_results(case)
+        self.assertEqual(result["summary"], "test")
+
+    def test_load_case_analysis_results_empty_dict_no_file(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            case = {"case_dir": tmpdir, "analysis_results": {}}
+            result = routes_tasks.load_case_analysis_results(case)
+        # Empty dict in memory with no file on disk returns empty dict (not None)
+        self.assertEqual(result, {})
+
+    def test_load_case_analysis_results_none_no_file(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            case = {"case_dir": tmpdir, "analysis_results": None}
+            result = routes_tasks.load_case_analysis_results(case)
+        self.assertIsNone(result)
+
+    def test_load_case_analysis_results_from_disk(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            results_path = Path(tmpdir) / "analysis_results.json"
+            results_path.write_text(
+                json.dumps({"summary": "disk_result", "per_artifact": []}),
+                encoding="utf-8",
+            )
+            case = {"case_dir": tmpdir, "analysis_results": {}}
+            result = routes_tasks.load_case_analysis_results(case)
+        self.assertEqual(result["summary"], "disk_result")
+
+    def test_load_case_analysis_results_missing_file(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            case = {"case_dir": tmpdir, "analysis_results": None}
+            result = routes_tasks.load_case_analysis_results(case)
+        self.assertIsNone(result)
+
+    def test_resolve_case_investigation_context_from_memory(self) -> None:
+        case = {"case_dir": "/tmp/fake", "investigation_context": "memory context"}
+        result = routes_tasks.resolve_case_investigation_context(case)
+        self.assertEqual(result, "memory context")
+
+    def test_resolve_case_investigation_context_from_disk(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            prompt_path = Path(tmpdir) / "prompt.txt"
+            prompt_path.write_text("disk context", encoding="utf-8")
+            case = {"case_dir": tmpdir, "investigation_context": ""}
+            result = routes_tasks.resolve_case_investigation_context(case)
+        self.assertEqual(result, "disk context")
+
+    def test_resolve_case_investigation_context_empty(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            case = {"case_dir": tmpdir, "investigation_context": ""}
+            result = routes_tasks.resolve_case_investigation_context(case)
+        self.assertEqual(result, "")
+
+    def test_resolve_case_parsed_dir_from_csv_output_dir(self) -> None:
+        case = {"case_dir": "/tmp/fake", "csv_output_dir": "/custom/output", "artifact_csv_paths": {}, "parse_results": []}
+        result = routes_tasks.resolve_case_parsed_dir(case)
+        self.assertEqual(result, Path("/custom/output"))
+
+    def test_resolve_case_parsed_dir_default(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            case = {"case_dir": tmpdir, "csv_output_dir": "", "artifact_csv_paths": {}, "parse_results": []}
+            result = routes_tasks.resolve_case_parsed_dir(case)
+        self.assertEqual(result, Path(tmpdir) / "parsed")
+
+    def test_run_task_with_case_log_context_calls_function(self) -> None:
+        called_args: list = []
+
+        def task_fn(*args: object) -> None:
+            called_args.extend(args)
+
+        routes_tasks.run_task_with_case_log_context("fake-case", task_fn, "a", "b")
+        self.assertEqual(called_args, ["a", "b"])
+
+    def test_run_parse_case_not_found(self) -> None:
+        routes_state.CASE_STATES.clear()
+        routes_state.PARSE_PROGRESS.clear()
+        routes_tasks.run_parse("missing-id", ["runkeys"], ["runkeys"], [], {})
+        self.assertEqual(routes_state.PARSE_PROGRESS["missing-id"]["status"], "failed")
+        routes_state.PARSE_PROGRESS.clear()
+
+    def test_run_analysis_case_not_found(self) -> None:
+        routes_state.CASE_STATES.clear()
+        routes_state.ANALYSIS_PROGRESS.clear()
+        routes_tasks.run_analysis("missing-id", "prompt", {})
+        self.assertEqual(routes_state.ANALYSIS_PROGRESS["missing-id"]["status"], "failed")
+        routes_state.ANALYSIS_PROGRESS.clear()
+
+    def test_run_chat_case_not_found(self) -> None:
+        routes_state.CASE_STATES.clear()
+        routes_state.CHAT_PROGRESS.clear()
+        routes_tasks.run_chat("missing-id", "hello", {})
+        self.assertEqual(routes_state.CHAT_PROGRESS["missing-id"]["status"], "failed")
+        routes_state.CHAT_PROGRESS.clear()
+
+    def test_run_parse_no_evidence(self) -> None:
+        routes_state.CASE_STATES.clear()
+        routes_state.PARSE_PROGRESS.clear()
+        audit = MagicMock()
+        routes_state.CASE_STATES["test-id"] = {
+            "case_dir": "/tmp/fake",
+            "evidence_path": "",
+            "audit": audit,
+        }
+        routes_tasks.run_parse("test-id", ["runkeys"], ["runkeys"], [], {})
+        self.assertEqual(routes_state.PARSE_PROGRESS["test-id"]["status"], "failed")
+        self.assertEqual(routes_state.CASE_STATES["test-id"]["status"], "failed")
+        routes_state.CASE_STATES.clear()
+        routes_state.PARSE_PROGRESS.clear()
 
 
 if __name__ == "__main__":
