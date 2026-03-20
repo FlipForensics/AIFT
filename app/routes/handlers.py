@@ -102,8 +102,7 @@ _REQUEST_CASE_LOG_TOKEN = "_aift_case_log_token"
 def _bind_case_log_context_for_request() -> None:
     """Bind case-specific logging context before each request."""
     case_id: str | None = None
-    if request.blueprint == routes_bp.name:
-        case_id = str((request.view_args or {}).get("case_id", "")).strip() or None
+    case_id = str((request.view_args or {}).get("case_id", "")).strip() or None
     setattr(g, _REQUEST_CASE_LOG_TOKEN, push_case_log_context(case_id))
 
 

@@ -187,10 +187,12 @@ class RoutesTests(unittest.TestCase):
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes, "ReportGenerator", FakeReportGenerator),
             patch.object(routes_handlers, "ReportGenerator", FakeReportGenerator),
+            patch.object(routes_evidence, "ReportGenerator", FakeReportGenerator),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -209,8 +211,18 @@ class RoutesTests(unittest.TestCase):
                     "size_bytes": 4,
                 },
             ),
+            patch.object(
+                routes_evidence,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
             patch.object(routes, "verify_hash", return_value=(True, "a" * 64)),
             patch.object(routes_handlers, "verify_hash", return_value=(True, "a" * 64)),
+            patch.object(routes_evidence, "verify_hash", return_value=(True, "a" * 64)),
             patch.object(routes.threading, "Thread", ImmediateThread),
         ):
             create_resp = self.client.post("/api/cases", json={"case_name": "Demo Case"})
@@ -266,10 +278,12 @@ class RoutesTests(unittest.TestCase):
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes, "ReportGenerator", FakeReportGenerator),
             patch.object(routes_handlers, "ReportGenerator", FakeReportGenerator),
+            patch.object(routes_evidence, "ReportGenerator", FakeReportGenerator),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -288,8 +302,18 @@ class RoutesTests(unittest.TestCase):
                     "size_bytes": 4,
                 },
             ),
+            patch.object(
+                routes_evidence,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
             patch.object(routes, "verify_hash", return_value=(True, "a" * 64)),
             patch.object(routes_handlers, "verify_hash", return_value=(True, "a" * 64)),
+            patch.object(routes_evidence, "verify_hash", return_value=(True, "a" * 64)),
             patch.object(routes.threading, "Thread", ImmediateThread),
         ):
             create_resp = self.client.post("/api/cases", json={"case_name": "Cleanup On Completion"})
@@ -420,6 +444,7 @@ class RoutesTests(unittest.TestCase):
             patch.object(routes, "ForensicParser", CapturingParser),
             patch.object(routes_handlers, "ForensicParser", CapturingParser),
             patch.object(routes_tasks, "ForensicParser", CapturingParser),
+            patch.object(routes_evidence, "ForensicParser", CapturingParser),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -431,6 +456,15 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_handlers,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 12,
+                },
+            ),
+            patch.object(
+                routes_evidence,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -738,6 +772,7 @@ class RoutesTests(unittest.TestCase):
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -749,6 +784,15 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_handlers,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_evidence,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -782,6 +826,7 @@ class RoutesTests(unittest.TestCase):
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -793,6 +838,15 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_handlers,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_evidence,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -851,6 +905,7 @@ class RoutesTests(unittest.TestCase):
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -862,6 +917,15 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_handlers,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_evidence,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -903,6 +967,7 @@ class RoutesTests(unittest.TestCase):
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(
@@ -916,6 +981,15 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_handlers,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_evidence,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -966,6 +1040,7 @@ class RoutesTests(unittest.TestCase):
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes.threading, "Thread", ImmediateThread),
             patch.object(
                 routes,
@@ -978,6 +1053,15 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_handlers,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_evidence,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -1027,6 +1111,7 @@ class RoutesTests(unittest.TestCase):
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes.threading, "Thread", ImmediateThread),
             patch.object(
                 routes,
@@ -1039,6 +1124,15 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_handlers,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_evidence,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -1080,6 +1174,7 @@ class RoutesTests(unittest.TestCase):
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes.threading, "Thread", ImmediateThread),
@@ -1094,6 +1189,15 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_handlers,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_evidence,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -1165,6 +1269,7 @@ class RoutesTests(unittest.TestCase):
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes.threading, "Thread", ImmediateThread),
@@ -1182,6 +1287,15 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_handlers,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_evidence,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -1285,6 +1399,7 @@ class RoutesTests(unittest.TestCase):
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -1296,6 +1411,15 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_handlers,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch.object(
+                routes_evidence,
                 "compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
@@ -1349,8 +1473,10 @@ class RoutesTests(unittest.TestCase):
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes, "ReportGenerator", FakeReportGenerator),
             patch.object(routes_handlers, "ReportGenerator", FakeReportGenerator),
+            patch.object(routes_evidence, "ReportGenerator", FakeReportGenerator),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -1369,8 +1495,18 @@ class RoutesTests(unittest.TestCase):
                     "size_bytes": 4,
                 },
             ),
+            patch.object(
+                routes_evidence,
+                "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
             patch.object(routes, "verify_hash", return_value=(True, "a" * 64)),
-            patch.object(routes_handlers, "verify_hash", return_value=(True, "a" * 64)) as verify_hash_mock,
+            patch.object(routes_handlers, "verify_hash", return_value=(True, "a" * 64)),
+            patch.object(routes_evidence, "verify_hash", return_value=(True, "a" * 64)) as verify_hash_mock,
         ):
             create_resp = self.client.post("/api/cases", json={"case_name": "ZIP Case"})
             self.assertEqual(create_resp.status_code, 201)
@@ -1434,7 +1570,7 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(create_resp.status_code, 201)
             case_id = create_resp.get_json()["case_id"]
 
-            with patch.object(routes, "resolve_evidence_payload", side_effect=RuntimeError("internal-boom")), patch.object(routes_handlers, "resolve_evidence_payload", side_effect=RuntimeError("internal-boom")):
+            with patch.object(routes, "resolve_evidence_payload", side_effect=RuntimeError("internal-boom")), patch.object(routes_evidence, "resolve_evidence_payload", side_effect=RuntimeError("internal-boom")):
                 response = self.client.post(f"/api/cases/{case_id}/evidence", json={"path": "C:\\bad.E01"})
 
         self.assertEqual(response.status_code, 500)
@@ -1449,7 +1585,7 @@ class RoutesTests(unittest.TestCase):
             case_id = str(create_resp.get_json()["case_id"])
             case_dir = self.cases_root / case_id
 
-            with patch.object(routes, "resolve_evidence_payload", side_effect=RuntimeError("internal-boom")), patch.object(routes_handlers, "resolve_evidence_payload", side_effect=RuntimeError("internal-boom")):
+            with patch.object(routes, "resolve_evidence_payload", side_effect=RuntimeError("internal-boom")), patch.object(routes_evidence, "resolve_evidence_payload", side_effect=RuntimeError("internal-boom")):
                 response = self.client.post(f"/api/cases/{case_id}/evidence", json={"path": "C:\\bad.E01"})
             self.assertEqual(response.status_code, 500)
 

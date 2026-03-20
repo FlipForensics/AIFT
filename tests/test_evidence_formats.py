@@ -466,8 +466,10 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes, "compute_hashes", return_value=FAKE_HASHES),
             patch.object(routes_handlers, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_evidence, "compute_hashes", return_value=FAKE_HASHES),
         ):
             resp = self.client.post(
                 f"/api/cases/{case_id}/evidence",
@@ -551,8 +553,10 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes, "compute_hashes", return_value=FAKE_HASHES),
             patch.object(routes_handlers, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_evidence, "compute_hashes", return_value=FAKE_HASHES),
         ):
             resp = self.client.post(
                 f"/api/cases/{case_id}/evidence",
@@ -576,8 +580,10 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes, "compute_hashes", return_value=FAKE_HASHES),
             patch.object(routes_handlers, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_evidence, "compute_hashes", return_value=FAKE_HASHES),
         ):
             resp = self.client.post(
                 f"/api/cases/{case_id}/evidence",
@@ -598,8 +604,10 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes, "compute_hashes", return_value=FAKE_HASHES),
             patch.object(routes_handlers, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_evidence, "compute_hashes", return_value=FAKE_HASHES),
         ):
             resp = self.client.post(
                 f"/api/cases/{case_id}/evidence",
@@ -616,8 +624,10 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes, "compute_hashes", return_value=FAKE_HASHES),
             patch.object(routes_handlers, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_evidence, "compute_hashes", return_value=FAKE_HASHES),
         ):
             resp = self.client.post(
                 f"/api/cases/{case_id}/evidence",
@@ -640,8 +650,10 @@ class TestEvidenceIntakeFormats(unittest.TestCase):
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
             patch.object(routes, "compute_hashes", return_value=FAKE_HASHES),
             patch.object(routes_handlers, "compute_hashes", return_value=FAKE_HASHES),
+            patch.object(routes_evidence, "compute_hashes", return_value=FAKE_HASHES),
         ):
             resp = self.client.post(
                 f"/api/cases/{case_id}/evidence",
