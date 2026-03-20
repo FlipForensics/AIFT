@@ -19,6 +19,7 @@ import re
 import shutil
 import tarfile
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -112,6 +113,8 @@ def _extract_archive_members(
     if (extract_member is None) == (extract_all_members is None):
         raise ValueError("Exactly one extraction callback must be provided.")
 
+    if destination.exists():
+        shutil.rmtree(destination)
     destination.mkdir(parents=True, exist_ok=True)
     root = destination.resolve()
 
@@ -399,7 +402,7 @@ def _make_extract_dir(evidence_dir: Path, source_path: Path) -> Path:
     Returns:
         A timestamped extraction directory path.
     """
-    return evidence_dir / f"extracted_{safe_name(source_path.stem, 'evidence')}_{int(time.time())}"
+    return evidence_dir / f"extracted_{safe_name(source_path.stem, 'evidence')}_{uuid.uuid4().hex[:12]}"
 
 
 def resolve_evidence_payload(case_dir: Path) -> dict[str, Any]:

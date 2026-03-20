@@ -1012,5 +1012,114 @@ class TestEvidenceIntegrityTamperDetection(unittest.TestCase):
             self.assertFalse(hash_events[-1]["details"]["match"])
 
 
+# ---------------------------------------------------------------------------
+# 8. Extraction directory reuse regression tests
+# ---------------------------------------------------------------------------
+
+class TestExtractionDirNoStaleFiles(unittest.TestCase):
+    """Verify that repeated archive extractions never inherit stale files.
+
+    Regression coverage for the bug where second-resolution timestamps
+    allowed two same-stem extractions in the same second to reuse the
+    same directory, mixing stale files into the new extraction.
+    """
+
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory(prefix="aift-extract-stale-")
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_zip_extraction_cleans_destination(self) -> None:
+        """If the destination dir already exists with stale files, they
+        must not survive a new extraction into that directory."""
+        # Create a ZIP with one file.
+        zip_path = self.root / "evidence.zip"
+        with ZipFile(zip_path, "w") as zf:
+            zf.writestr("new_file.e01", b"NEW-DATA")
+
+        dest = self.root / "extracted"
+        # Pre-populate destination with a stale file.
+        dest.mkdir(parents=True, exist_ok=True)
+        stale = dest / "stale_leftover.txt"
+        stale.write_text("I should not survive")
+
+        routes_evidence._extract_zip(zip_path, dest)
+
+        self.assertFalse(stale.exists(), "Stale file survived extraction")
+        self.assertTrue((dest / "new_file.e01").exists())
+
+    def test_tar_extraction_cleans_destination(self) -> None:
+        """Stale files in the destination must be removed before tar extraction."""
+        tar_path = self.root / "evidence.tar"
+        with tarfile.open(tar_path, "w") as tf:
+            data = b"TAR-DATA"
+            info = tarfile.TarInfo(name="new_file.vmdk")
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+
+        dest = self.root / "extracted"
+        dest.mkdir(parents=True, exist_ok=True)
+        stale = dest / "old_artifact.bin"
+        stale.write_bytes(b"stale")
+
+        routes_evidence._extract_tar(tar_path, dest)
+
+        self.assertFalse(stale.exists(), "Stale file survived tar extraction")
+        self.assertTrue((dest / "new_file.vmdk").exists())
+
+    def test_7z_extraction_cleans_destination(self) -> None:
+        """Stale files in the destination must be removed before 7z extraction."""
+        archive_path = self.root / "evidence.7z"
+        with py7zr.SevenZipFile(archive_path, mode="w") as szf:
+            szf.writestr(b"7Z-DATA", "new_file.e01")
+
+        dest = self.root / "extracted"
+        dest.mkdir(parents=True, exist_ok=True)
+        stale = dest / "leftover.dat"
+        stale.write_text("stale data")
+
+        routes_evidence._extract_7z(archive_path, dest)
+
+        self.assertFalse(stale.exists(), "Stale file survived 7z extraction")
+        self.assertTrue((dest / "new_file.e01").exists())
+
+    def test_make_extract_dir_produces_unique_paths(self) -> None:
+        """Two calls to _make_extract_dir with the same inputs must return
+        different paths, even if called in the same second."""
+        evidence_dir = self.root / "evidence"
+        evidence_dir.mkdir()
+        source = self.root / "archive.zip"
+
+        path1 = routes_evidence._make_extract_dir(evidence_dir, source)
+        path2 = routes_evidence._make_extract_dir(evidence_dir, source)
+
+        self.assertNotEqual(path1, path2,
+                            "Two _make_extract_dir calls returned the same path")
+
+    def test_repeated_zip_extraction_no_cross_contamination(self) -> None:
+        """Full round-trip: extract ZIP A, then extract ZIP B into the same
+        destination — files from A must not appear after B's extraction."""
+        dest = self.root / "extracted"
+
+        # First ZIP with file_a.e01
+        zip_a = self.root / "a.zip"
+        with ZipFile(zip_a, "w") as zf:
+            zf.writestr("file_a.e01", b"DATA-A")
+        routes_evidence._extract_zip(zip_a, dest)
+        self.assertTrue((dest / "file_a.e01").exists())
+
+        # Second ZIP with file_b.e01 into the SAME destination
+        zip_b = self.root / "b.zip"
+        with ZipFile(zip_b, "w") as zf:
+            zf.writestr("file_b.e01", b"DATA-B")
+        routes_evidence._extract_zip(zip_b, dest)
+
+        self.assertTrue((dest / "file_b.e01").exists())
+        self.assertFalse((dest / "file_a.e01").exists(),
+                         "File from first extraction leaked into second")
+
+
 if __name__ == "__main__":
     unittest.main()
