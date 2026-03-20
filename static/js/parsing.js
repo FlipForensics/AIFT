@@ -30,6 +30,9 @@
     const dateRangeValidation = A.validateAnalysisDateRange();
     if (!dateRangeValidation.ok) return A.setMsg(el.artifactsMsg, dateRangeValidation.message, "error");
 
+    if (st.parse.cancelPending) {
+      await st.parse.cancelPending;
+    }
     st.selected = arts;
     st.selectedAi = aiArtifacts;
     resetParseState();
@@ -255,7 +258,9 @@
     A.updateNav();
     const caseId = A.activeCaseId();
     if (caseId) {
-      fetch(`/api/cases/${caseId}/parse/cancel`, { method: "POST" }).catch(() => {});
+      st.parse.cancelPending = A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/parse/cancel`, { method: "POST" })
+        .catch(() => {})
+        .finally(() => { st.parse.cancelPending = null; });
     }
   }
 

@@ -49,6 +49,9 @@
     }
     if (st.analysis.run) return A.setMsg(el.analysisMsg, "Analysis is already running.", "error");
 
+    if (st.analysis.cancelPending) {
+      await st.analysis.cancelPending;
+    }
     resetAnalysisState();
     st.analysis.run = true;
     const abortCtrl = new AbortController();
@@ -355,7 +358,9 @@
     A.updateNav();
     const caseId = A.activeCaseId();
     if (caseId) {
-      fetch(`/api/cases/${caseId}/analyze/cancel`, { method: "POST" }).catch(() => {});
+      st.analysis.cancelPending = A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/analyze/cancel`, { method: "POST" })
+        .catch(() => {})
+        .finally(() => { st.analysis.cancelPending = null; });
     }
   }
 

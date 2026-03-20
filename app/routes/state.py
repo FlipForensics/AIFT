@@ -86,6 +86,7 @@ __all__ = [
     "mark_case_status",
     "cancel_progress",
     "is_cancelled",
+    "get_cancel_event",
     "cleanup_case_entries",
     "cleanup_terminal_cases",
     "mask_sensitive",
@@ -257,7 +258,13 @@ def new_progress(status: str = "idle") -> dict[str, Any]:
         A progress dict with ``status``, ``events``, ``error``, and
         ``created_at`` keys.
     """
-    return {"status": status, "events": [], "error": None, "created_at": time.monotonic()}
+    return {
+        "status": status,
+        "events": [],
+        "error": None,
+        "created_at": time.monotonic(),
+        "cancel_event": threading.Event(),
+    }
 
 
 def set_progress_status(
@@ -286,7 +293,7 @@ def cancel_progress(
     store: dict[str, dict[str, Any]],
     case_id: str,
 ) -> bool:
-    """Mark a running progress entry as cancelled.
+    """Mark a running progress entry as cancelled and signal its cancel event.
 
     Thread-safe: acquires ``STATE_LOCK``.
 
@@ -302,6 +309,9 @@ def cancel_progress(
         if state is None or state.get("status") != "running":
             return False
         state["status"] = "cancelled"
+        cancel_event = state.get("cancel_event")
+        if isinstance(cancel_event, threading.Event):
+            cancel_event.set()
         return True
 
 
@@ -323,6 +333,31 @@ def is_cancelled(
     with STATE_LOCK:
         state = store.get(case_id)
         return state is not None and state.get("status") == "cancelled"
+
+
+def get_cancel_event(
+    store: dict[str, dict[str, Any]],
+    case_id: str,
+) -> threading.Event | None:
+    """Return the cancel event for the current progress entry.
+
+    Thread-safe: acquires ``STATE_LOCK``. The caller should hold a
+    reference to the returned event so that it remains valid even if
+    the progress dict is later replaced by a new run.
+
+    Args:
+        store: One of the progress dicts.
+        case_id: UUID of the case.
+
+    Returns:
+        The ``threading.Event``, or ``None`` if no entry exists.
+    """
+    with STATE_LOCK:
+        state = store.get(case_id)
+        if state is None:
+            return None
+        event = state.get("cancel_event")
+        return event if isinstance(event, threading.Event) else None
 
 
 def emit_progress(

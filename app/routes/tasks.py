@@ -41,8 +41,8 @@ from .state import (
     PARSE_PROGRESS,
     STATE_LOCK,
     emit_progress,
+    get_cancel_event,
     get_case,
-    is_cancelled,
     mark_case_status,
     safe_int,
     set_progress_status,
@@ -344,6 +344,7 @@ def run_parse(
         artifact_options: Canonical artifact option dicts.
         config_snapshot: Deep copy of application config.
     """
+    cancel_event = get_cancel_event(PARSE_PROGRESS, case_id)
     case = get_case(case_id)
     if case is None:
         set_progress_status(PARSE_PROGRESS, case_id, "failed", "Case not found.")
@@ -374,12 +375,8 @@ def run_parse(
             total = len(parse_artifacts)
 
             for index, artifact in enumerate(parse_artifacts, start=1):
-                if is_cancelled(PARSE_PROGRESS, case_id):
+                if cancel_event is not None and cancel_event.is_set():
                     LOGGER.info("Parsing cancelled for case %s before artifact %s", case_id, artifact)
-                    mark_case_status(case_id, "cancelled")
-                    emit_progress(PARSE_PROGRESS, case_id, {
-                        "type": "parse_failed", "error": "Parsing cancelled by user.",
-                    })
                     return
                 emit_progress(
                     PARSE_PROGRESS, case_id,
@@ -473,6 +470,7 @@ def run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> 
         prompt: Investigation context / user prompt.
         config_snapshot: Deep copy of application config.
     """
+    cancel_event = get_cancel_event(ANALYSIS_PROGRESS, case_id)
     case = get_case(case_id)
     if case is None:
         set_progress_status(ANALYSIS_PROGRESS, case_id, "failed", "Case not found.")
@@ -573,7 +571,7 @@ def run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> 
             investigation_context=prompt,
             metadata=metadata,
             progress_callback=_analysis_progress,
-            cancel_check=lambda: is_cancelled(ANALYSIS_PROGRESS, case_id),
+            cancel_check=(lambda: cancel_event.is_set()) if cancel_event is not None else None,
         )
         analysis_results_path = Path(case_dir) / "analysis_results.json"
         with analysis_results_path.open("w", encoding="utf-8") as analysis_results_file:
@@ -597,11 +595,6 @@ def run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> 
         mark_case_status(case_id, "completed")
     except AnalysisCancelledError:
         LOGGER.info("Analysis cancelled for case %s", case_id)
-        _purge_stale_analysis(case, case_dir)
-        mark_case_status(case_id, "cancelled")
-        emit_progress(ANALYSIS_PROGRESS, case_id, {
-            "type": "analysis_failed", "error": "Analysis cancelled by user.",
-        })
     except Exception:
         LOGGER.exception("Background analysis failed for case %s", case_id)
         _purge_stale_analysis(case, case_dir)
