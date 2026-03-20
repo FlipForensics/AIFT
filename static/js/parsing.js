@@ -188,7 +188,9 @@
       A.clearMsg(el.parseErr);
       A.updateParseButton();
       A.updateNav();
-      return A.showStep(4);
+      if (st.selectedAi.length > 0) return A.showStep(4);
+      A.setMsg(el.parseErr, "Parsing complete. No artifacts were set to \u201cParse and use in AI,\u201d so analysis is not available. You can review parsed CSVs in the case folder or go back and re-parse with AI-enabled artifacts.", "success");
+      return;
     }
     if (t === "parse_failed") {
       st.parse.run = false;

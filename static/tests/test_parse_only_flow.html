@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Parse-Only Flow Regression Tests</title>
+<style>
+  body { font-family: monospace; background: #1a1b2e; color: #e0e0e0; padding: 1.5rem; }
+  h1 { color: #4a9eff; }
+  .pass { color: #4caf50; } .fail { color: #f44336; }
+  .result { margin: 0.3rem 0; }
+  #summary { margin-top: 1rem; font-size: 1.1rem; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Parse-Only Flow Regression Tests</h1>
+<p>These tests simulate the frontend state machine to verify parse-only flows
+do not auto-advance into analysis.</p>
+<div id="results"></div>
+<div id="summary"></div>
+
+<script>
+"use strict";
+// Minimal harness that exercises the same branching logic found in parsing.js
+// and app.js without loading the full application.
+
+const results = [];
+function assert(condition, name) {
+  results.push({ name, ok: !!condition });
+}
+
+// ── Simulate state & helpers ──────────────────────────────────────────────
+let currentStep = 3;
+let msgText = "";
+let msgType = "";
+const st = {
+  selectedAi: [],
+  parse: { done: false, run: false, fail: false },
+  analysis: { done: false, run: false, fail: false },
+};
+
+function showStep(n) { currentStep = n; }
+function setMsg(text, type) { msgText = text; msgType = type; }
+function clearMsg() { msgText = ""; msgType = ""; }
+
+// ── Replicate parse_completed logic from parsing.js ───────────────────────
+function onParseCompleted() {
+  st.parse.run = false;
+  st.parse.done = true;
+  st.parse.fail = false;
+  clearMsg();
+  if (st.selectedAi.length > 0) return showStep(4);
+  setMsg("Parsing complete. No artifacts were set to \u201cParse and use in AI,\u201d so analysis is not available.", "success");
+}
+
+// ── Replicate navBlockReason for step 4 from app.js ───────────────────────
+function navBlockReason4() {
+  if (st.parse.done && st.selectedAi.length > 0) return "";
+  if (st.parse.done && st.selectedAi.length === 0)
+    return "No artifacts are set to \u201cParse and use in AI.\u201d Re-parse with AI-enabled artifacts to unlock analysis.";
+  if (st.parse.run) return "Parsing is still running.";
+  if (st.parse.fail) return "Parsing failed.";
+  return "Parse selected artifacts first.";
+}
+
+// ── Test 1: parse-only flow stays on step 3 ───────────────────────────────
+currentStep = 3;
+st.selectedAi = [];
+onParseCompleted();
+assert(currentStep === 3, "Parse-only: stays on step 3 after parse_completed");
+assert(msgType === "success", "Parse-only: shows success message");
+assert(msgText.includes("Parsing complete"), "Parse-only: message says 'Parsing complete'");
+assert(msgText.includes("not available"), "Parse-only: message says analysis is not available");
+
+// ── Test 2: AI flow advances to step 4 ────────────────────────────────────
+currentStep = 3;
+st.selectedAi = ["evtx"];
+st.parse.done = false;
+onParseCompleted();
+assert(currentStep === 4, "AI flow: advances to step 4 after parse_completed");
+
+// ── Test 3: navBlockReason blocks step 4 in parse-only ────────────────────
+st.parse.done = true;
+st.selectedAi = [];
+const reason = navBlockReason4();
+assert(reason !== "", "Nav: step 4 blocked when no AI artifacts");
+assert(reason.includes("Parse and use in AI"), "Nav: block message references 'Parse and use in AI'");
+
+// ── Test 4: navBlockReason allows step 4 with AI artifacts ────────────────
+st.selectedAi = ["evtx"];
+const reasonOk = navBlockReason4();
+assert(reasonOk === "", "Nav: step 4 allowed when AI artifacts selected");
+
+// ── Test 5: navBlockReason blocks when parsing not done ───────────────────
+st.parse.done = false;
+st.parse.run = false;
+st.parse.fail = false;
+st.selectedAi = ["evtx"];
+const reasonNotDone = navBlockReason4();
+assert(reasonNotDone !== "", "Nav: step 4 blocked when parsing not done");
+
+// ── Render results ────────────────────────────────────────────────────────
+const container = document.getElementById("results");
+let passed = 0, failed = 0;
+results.forEach((r) => {
+  const div = document.createElement("div");
+  div.className = "result " + (r.ok ? "pass" : "fail");
+  div.textContent = (r.ok ? "PASS" : "FAIL") + ": " + r.name;
+  container.appendChild(div);
+  if (r.ok) passed++; else failed++;
+});
+const summary = document.getElementById("summary");
+summary.className = failed ? "fail" : "pass";
+summary.textContent = `${passed} passed, ${failed} failed out of ${results.length} tests`;
+</script>
+</body>
+</html>

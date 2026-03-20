@@ -269,7 +269,8 @@
     if (step === 2 && !A.activeCaseId()) return "Submit evidence first.";
     if (step === 3 && st.selected.length === 0) return "Select artifacts and click Parse Selected first.";
     if (step === 4) {
-      if (st.parse.done) return "";
+      if (st.parse.done && st.selectedAi.length > 0) return "";
+      if (st.parse.done && st.selectedAi.length === 0) return "No artifacts are set to \u201cParse and use in AI.\u201d Re-parse with AI-enabled artifacts to unlock analysis.";
       if (st.parse.run) return "Parsing is still running. Wait for completion.";
       if (st.parse.fail) return "Parsing failed. Resolve the error in Step 3 and parse again.";
       return "Parse selected artifacts first.";
