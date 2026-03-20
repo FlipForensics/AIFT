@@ -216,6 +216,13 @@ main#wizard {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.step-indicator li:hover {
+  background: var(--bg-card);
+  color: var(--text-primary);
 }
 
 .step-indicator li:last-child {
