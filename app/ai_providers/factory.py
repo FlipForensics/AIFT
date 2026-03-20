@@ -4,13 +4,10 @@ This module contains the ``create_provider`` function that reads the
 application ``config.yaml`` and constructs the appropriate provider
 class based on the configured provider name.
 
-Attributes:
-    logger: Module-level logger for factory operations.
 """
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from .base import (
@@ -29,9 +26,6 @@ from .base import (
     _resolve_api_key_candidates,
     _resolve_timeout_seconds,
 )
-
-logger = logging.getLogger(__name__)
-
 
 def create_provider(config: dict[str, Any]) -> AIProvider:
     """Create and return an AI provider instance based on application config.

@@ -4,13 +4,11 @@ Handles starting and streaming progress of AI-powered forensic analysis.
 
 Attributes:
     analysis_bp: Flask Blueprint for analysis routes.
-    LOGGER: Module-level logger.
 """
 
 from __future__ import annotations
 
 import copy
-import logging
 import threading
 from pathlib import Path
 from typing import Any
@@ -31,8 +29,6 @@ from .artifacts import sanitize_prompt
 from .tasks import run_task_with_case_log_context, run_analysis
 
 __all__ = ["analysis_bp"]
-
-LOGGER = logging.getLogger(__name__)
 
 analysis_bp = Blueprint("analysis", __name__)
 

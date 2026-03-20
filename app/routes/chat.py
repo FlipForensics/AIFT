@@ -5,13 +5,11 @@ including message submission, SSE streaming, and history management.
 
 Attributes:
     chat_bp: Flask Blueprint for chat routes.
-    LOGGER: Module-level logger.
 """
 
 from __future__ import annotations
 
 import copy
-import logging
 import threading
 
 from flask import Blueprint, Response, current_app, request
@@ -34,8 +32,6 @@ from .tasks import (
 )
 
 __all__ = ["chat_bp"]
-
-LOGGER = logging.getLogger(__name__)
 
 chat_bp = Blueprint("chat", __name__)
 
