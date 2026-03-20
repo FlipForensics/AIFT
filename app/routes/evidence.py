@@ -34,7 +34,10 @@ from ..parser import ForensicParser
 from ..reporter import ReportGenerator
 
 from .state import (
+    ANALYSIS_PROGRESS,
     CASES_ROOT,
+    CHAT_PROGRESS,
+    PARSE_PROGRESS,
     PROJECT_ROOT,
     STATE_LOCK,
     cleanup_case_entries,
@@ -708,6 +711,7 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
         )
 
         with STATE_LOCK:
+            # Set new evidence metadata.
             case["evidence_mode"] = evidence_payload["mode"]
             case["source_path"] = evidence_payload["source_path"]
             case["stored_path"] = evidence_payload["stored_path"]
@@ -716,6 +720,30 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
             case["evidence_hashes"] = hashes
             case["image_metadata"] = metadata
             case["available_artifacts"] = available_artifacts
+
+            # Invalidate all downstream state derived from prior evidence.
+            case["parse_results"] = []
+            case["artifact_csv_paths"] = {}
+            case["analysis_results"] = {}
+            case["csv_output_dir"] = ""
+            case["selected_artifacts"] = []
+            case["analysis_artifacts"] = []
+            case["artifact_options"] = []
+            case["analysis_date_range"] = None
+            case["investigation_context"] = ""
+            case["status"] = "evidence_loaded"
+
+            # Clear progress stores so stale SSE streams are not reused.
+            PARSE_PROGRESS.pop(case_id, None)
+            ANALYSIS_PROGRESS.pop(case_id, None)
+            CHAT_PROGRESS.pop(case_id, None)
+
+        # Remove stale on-disk artifacts so disk fallbacks cannot
+        # resurrect results from prior evidence.
+        for stale_file in ("analysis_results.json", "prompt.txt", "chat_history.jsonl"):
+            stale_path = case_dir / stale_file
+            if stale_path.exists():
+                stale_path.unlink(missing_ok=True)
 
         return success_response(
             {

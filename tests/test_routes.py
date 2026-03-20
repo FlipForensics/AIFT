@@ -344,7 +344,8 @@ class RoutesTests(unittest.TestCase):
             self.assertIn(case_id, routes.CASE_STATES)
             self.assertIn(case_id, routes.PARSE_PROGRESS)
             self.assertIn(case_id, routes.ANALYSIS_PROGRESS)
-            self.assertIn(case_id, routes.CHAT_PROGRESS)
+            # CHAT_PROGRESS is cleared by evidence intake (no chat was started).
+            self.assertNotIn(case_id, routes.CHAT_PROGRESS)
 
             report_resp = self.client.get(f"/api/cases/{case_id}/report")
             self.assertEqual(report_resp.status_code, 200)
@@ -1991,6 +1992,227 @@ class RoutesTests(unittest.TestCase):
             resp = self.client.get(f"/api/cases/{case_id}/report")
             self.assertEqual(resp.status_code, 400)
             self.assertIn("hash context", resp.get_json()["error"])
+
+    def test_replace_evidence_clears_stale_downstream_state(self) -> None:
+        """Loading new evidence must invalidate parse, analysis, and chat state."""
+        evidence_a = Path(self.temp_dir.name) / "disk_a.E01"
+        evidence_a.write_bytes(b"disk-a")
+        evidence_b = Path(self.temp_dir.name) / "disk_b.E01"
+        evidence_b.write_bytes(b"disk-b")
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(
+                routes, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 6},
+            ),
+            patch.object(
+                routes_handlers, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 6},
+            ),
+            patch.object(
+                routes_evidence, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 6},
+            ),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+        ):
+            # Create case, load evidence A, parse, and analyze.
+            create_resp = self.client.post("/api/cases", json={"case_name": "Stale State"})
+            self.assertEqual(create_resp.status_code, 201)
+            case_id = create_resp.get_json()["case_id"]
+
+            self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_a)})
+            self.client.post(f"/api/cases/{case_id}/parse", json={"artifacts": ["runkeys"]})
+            self.client.post(f"/api/cases/{case_id}/analyze", json={"prompt": "Investigate"})
+
+            # Confirm downstream state is populated before replacement.
+            with routes.STATE_LOCK:
+                case = routes.CASE_STATES[case_id]
+                self.assertTrue(case.get("parse_results"), "parse_results should exist after parsing")
+                self.assertTrue(case.get("artifact_csv_paths"), "artifact_csv_paths should exist after parsing")
+                self.assertTrue(case.get("analysis_results"), "analysis_results should exist after analysis")
+
+            # Replace evidence with B.
+            ev_resp = self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_b)})
+            self.assertEqual(ev_resp.status_code, 200)
+
+            # Verify all downstream state has been cleared.
+            with routes.STATE_LOCK:
+                case = routes.CASE_STATES[case_id]
+                self.assertEqual(case.get("parse_results"), [])
+                self.assertEqual(case.get("artifact_csv_paths"), {})
+                self.assertEqual(case.get("analysis_results"), {})
+                self.assertEqual(case.get("csv_output_dir"), "")
+                self.assertEqual(case.get("selected_artifacts"), [])
+                self.assertEqual(case.get("analysis_artifacts"), [])
+                self.assertEqual(case.get("artifact_options"), [])
+                self.assertIsNone(case.get("analysis_date_range"))
+                self.assertEqual(case.get("investigation_context"), "")
+                self.assertEqual(case.get("status"), "evidence_loaded")
+
+            # Progress stores should be cleared.
+            self.assertNotIn(case_id, routes.PARSE_PROGRESS)
+            self.assertNotIn(case_id, routes.ANALYSIS_PROGRESS)
+            self.assertNotIn(case_id, routes.CHAT_PROGRESS)
+
+            # Evidence metadata should reflect the new evidence.
+            with routes.STATE_LOCK:
+                self.assertIn("disk_b", case.get("source_path", ""))
+
+    def test_replace_evidence_blocks_analysis_until_reparsed(self) -> None:
+        """After evidence replacement, analysis should fail (no parse results)."""
+        evidence_a = Path(self.temp_dir.name) / "ev_a.E01"
+        evidence_a.write_bytes(b"aaa")
+        evidence_b = Path(self.temp_dir.name) / "ev_b.E01"
+        evidence_b.write_bytes(b"bbb")
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(
+                routes, "compute_hashes",
+                return_value={"sha256": "c" * 64, "md5": "d" * 32, "size_bytes": 3},
+            ),
+            patch.object(
+                routes_handlers, "compute_hashes",
+                return_value={"sha256": "c" * 64, "md5": "d" * 32, "size_bytes": 3},
+            ),
+            patch.object(
+                routes_evidence, "compute_hashes",
+                return_value={"sha256": "c" * 64, "md5": "d" * 32, "size_bytes": 3},
+            ),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+        ):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Reparse"})
+            case_id = create_resp.get_json()["case_id"]
+
+            # Load A, parse, analyze.
+            self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_a)})
+            self.client.post(f"/api/cases/{case_id}/parse", json={"artifacts": ["runkeys"]})
+            self.client.post(f"/api/cases/{case_id}/analyze", json={"prompt": "Check"})
+
+            # Replace evidence with B.
+            self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_b)})
+
+            # Analysis should be rejected — no parse results from new evidence.
+            analyze_resp = self.client.post(
+                f"/api/cases/{case_id}/analyze", json={"prompt": "Check again"},
+            )
+            self.assertEqual(analyze_resp.status_code, 400)
+            self.assertIn("parsing", analyze_resp.get_json()["error"].lower())
+
+    def test_replace_evidence_blocks_chat_until_reanalyzed(self) -> None:
+        """After evidence replacement, chat should fail (no analysis results)."""
+        evidence_a = Path(self.temp_dir.name) / "chat_a.E01"
+        evidence_a.write_bytes(b"aaa")
+        evidence_b = Path(self.temp_dir.name) / "chat_b.E01"
+        evidence_b.write_bytes(b"bbb")
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(
+                routes, "compute_hashes",
+                return_value={"sha256": "e" * 64, "md5": "f" * 32, "size_bytes": 3},
+            ),
+            patch.object(
+                routes_handlers, "compute_hashes",
+                return_value={"sha256": "e" * 64, "md5": "f" * 32, "size_bytes": 3},
+            ),
+            patch.object(
+                routes_evidence, "compute_hashes",
+                return_value={"sha256": "e" * 64, "md5": "f" * 32, "size_bytes": 3},
+            ),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+        ):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Chat Block"})
+            case_id = create_resp.get_json()["case_id"]
+
+            # Load A, parse, analyze.
+            self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_a)})
+            self.client.post(f"/api/cases/{case_id}/parse", json={"artifacts": ["runkeys"]})
+            self.client.post(f"/api/cases/{case_id}/analyze", json={"prompt": "Investigate"})
+
+            # Replace evidence with B.
+            self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_b)})
+
+            # Chat should be rejected — no analysis results from new evidence.
+            chat_resp = self.client.post(
+                f"/api/cases/{case_id}/chat", json={"message": "What happened?"},
+            )
+            self.assertEqual(chat_resp.status_code, 400)
+            self.assertIn("analysis", chat_resp.get_json()["error"].lower())
+
+    def test_replace_evidence_allows_clean_reparse(self) -> None:
+        """After evidence replacement, a fresh parse should succeed cleanly."""
+        evidence_a = Path(self.temp_dir.name) / "rp_a.E01"
+        evidence_a.write_bytes(b"aaa")
+        evidence_b = Path(self.temp_dir.name) / "rp_b.E01"
+        evidence_b.write_bytes(b"bbb")
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", FakeParser),
+            patch.object(routes_handlers, "ForensicParser", FakeParser),
+            patch.object(routes_tasks, "ForensicParser", FakeParser),
+            patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
+            patch.object(
+                routes, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
+            ),
+            patch.object(
+                routes_handlers, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
+            ),
+            patch.object(
+                routes_evidence, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
+            ),
+            patch.object(routes.threading, "Thread", ImmediateThread),
+        ):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Reparse OK"})
+            case_id = create_resp.get_json()["case_id"]
+
+            # Load A and parse.
+            self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_a)})
+            self.client.post(f"/api/cases/{case_id}/parse", json={"artifacts": ["runkeys"]})
+
+            # Replace evidence with B.
+            self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_b)})
+
+            # Fresh parse on new evidence should succeed.
+            parse_resp = self.client.post(
+                f"/api/cases/{case_id}/parse", json={"artifacts": ["runkeys"]},
+            )
+            self.assertEqual(parse_resp.status_code, 202)
+
+            # Verify parse results are populated from the new parse.
+            with routes.STATE_LOCK:
+                case = routes.CASE_STATES[case_id]
+                self.assertTrue(case.get("parse_results"))
+                self.assertTrue(case.get("artifact_csv_paths"))
 
 
 class StateHelperTests(unittest.TestCase):
