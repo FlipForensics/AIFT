@@ -431,6 +431,8 @@ def resolve_evidence_payload(case_dir: Path) -> dict[str, Any]:
         mode = "upload"
     else:
         payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            raise ValueError("Request body must be a JSON object.")
         path_value = payload.get("path")
         if not isinstance(path_value, str):
             raise ValueError(

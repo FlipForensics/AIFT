@@ -2068,6 +2068,118 @@ class RoutesTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("JSON object", resp.get_json()["error"])
 
+    # ------------------------------------------------------------------
+    # JSON body type validation (non-object payloads → 400)
+    # ------------------------------------------------------------------
+
+    def test_create_case_rejects_json_array(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            resp = self.client.post(
+                "/api/cases",
+                data=json.dumps(["not", "an", "object"]),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("JSON object", resp.get_json()["error"])
+
+    def test_create_case_rejects_json_scalar(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            resp = self.client.post(
+                "/api/cases",
+                data=json.dumps("just a string"),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("JSON object", resp.get_json()["error"])
+
+    def test_create_case_accepts_valid_object(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            resp = self.client.post("/api/cases", json={"case_name": "Valid"})
+            self.assertEqual(resp.status_code, 201)
+            self.assertIn("case_id", resp.get_json())
+
+    def test_start_parse_rejects_json_array(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Parse Array"})
+            case_id = create_resp.get_json()["case_id"]
+            with routes.STATE_LOCK:
+                routes.CASE_STATES[case_id]["evidence_path"] = "/fake/evidence.E01"
+            resp = self.client.post(
+                f"/api/cases/{case_id}/parse",
+                data=json.dumps(["runkeys"]),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("JSON object", resp.get_json()["error"])
+
+    def test_start_parse_rejects_json_scalar(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Parse Scalar"})
+            case_id = create_resp.get_json()["case_id"]
+            with routes.STATE_LOCK:
+                routes.CASE_STATES[case_id]["evidence_path"] = "/fake/evidence.E01"
+            resp = self.client.post(
+                f"/api/cases/{case_id}/parse",
+                data=json.dumps(42),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("JSON object", resp.get_json()["error"])
+
+    def test_start_analysis_rejects_json_array(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Analysis Array"})
+            case_id = create_resp.get_json()["case_id"]
+            with routes.STATE_LOCK:
+                routes.CASE_STATES[case_id]["parse_results"] = [{"success": True}]
+                routes.CASE_STATES[case_id]["analysis_artifacts"] = ["runkeys"]
+            resp = self.client.post(
+                f"/api/cases/{case_id}/analyze",
+                data=json.dumps(["prompt text"]),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("JSON object", resp.get_json()["error"])
+
+    def test_start_analysis_rejects_json_scalar(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Analysis Scalar"})
+            case_id = create_resp.get_json()["case_id"]
+            with routes.STATE_LOCK:
+                routes.CASE_STATES[case_id]["parse_results"] = [{"success": True}]
+                routes.CASE_STATES[case_id]["analysis_artifacts"] = ["runkeys"]
+            resp = self.client.post(
+                f"/api/cases/{case_id}/analyze",
+                data=json.dumps(true if False else "a string"),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("JSON object", resp.get_json()["error"])
+
+    def test_evidence_intake_rejects_json_array(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Evidence Array"})
+            case_id = create_resp.get_json()["case_id"]
+            resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                data=json.dumps(["/some/path"]),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("JSON object", resp.get_json()["error"])
+
+    def test_evidence_intake_rejects_json_scalar(self) -> None:
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Evidence Scalar"})
+            case_id = create_resp.get_json()["case_id"]
+            resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                data=json.dumps(12345),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("JSON object", resp.get_json()["error"])
+
     def test_report_missing_hash_context(self) -> None:
         with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "No Hash"})

@@ -190,6 +190,8 @@ def create_case() -> tuple[Response, int]:
     cleanup_terminal_cases()
 
     payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return error_response("Request body must be a JSON object.", 400)
     case_name = str(payload.get("case_name", "")).strip()
     if not case_name:
         case_name = datetime.now().strftime("Case %Y-%m-%d %H:%M:%S")

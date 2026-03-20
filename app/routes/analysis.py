@@ -73,6 +73,8 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
             )
 
     payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return error_response("Request body must be a JSON object.", 400)
     prompt = str(payload.get("prompt", "")).strip()
 
     prompt_path = Path(case_dir) / "prompt.txt"

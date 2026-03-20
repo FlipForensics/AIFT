@@ -582,6 +582,8 @@ def start_parse(case_id: str) -> tuple[Response, int]:
         return error_response("No evidence loaded for this case.", 400)
 
     payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return error_response("Request body must be a JSON object.", 400)
     try:
         artifact_options, parse_artifacts, analysis_artifacts = extract_parse_selection_payload(payload)
     except ValueError as error:
