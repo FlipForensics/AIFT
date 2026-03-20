@@ -107,9 +107,6 @@ code,
 pre,
 time,
 .mono,
-.timestamp,
-.file-path,
-.data-value,
 #summary-sha256,
 #summary-ips,
 #evidence-path {
@@ -271,8 +268,6 @@ button:disabled {
   font-size: 0.8rem;
 }
 
-button.primary,
-button.btn-primary,
 #submit-evidence,
 #parse-selected,
 #run-analysis,
@@ -285,8 +280,6 @@ button.btn-primary,
   font-weight: 600;
 }
 
-button.secondary,
-button.btn-secondary,
 #preset-quick-triage,
 #artifact-profile-load,
 #download-csvs,
@@ -296,9 +289,8 @@ button.btn-secondary,
   color: var(--accent);
 }
 
-button.danger,
-button.btn-danger,
-#preset-clear-all {
+#preset-clear-all,
+#clear-chat {
   background: transparent;
   border-color: var(--danger);
   color: var(--danger);
@@ -601,21 +593,6 @@ progress::-moz-progress-bar {
   background: var(--accent);
 }
 
-progress.progress-success::-webkit-progress-value,
-progress.progress-success::-moz-progress-bar {
-  background: var(--success);
-}
-
-progress.progress-warning::-webkit-progress-value,
-progress.progress-warning::-moz-progress-bar {
-  background: var(--warning);
-}
-
-progress.progress-danger::-webkit-progress-value,
-progress.progress-danger::-moz-progress-bar {
-  background: var(--danger);
-}
-
 #evidence-intake-progress,
 #parse-overall-progress {
   margin-top: var(--space-2);
@@ -673,8 +650,7 @@ tbody td:nth-child(3) {
 #executive-summary-card,
 #results-timeline,
 #artifact-findings,
-.summary-card,
-.metadata-card {
+.summary-card {
   border: 1px solid var(--border);
   background: var(--bg-card);
   padding: var(--space-4);
@@ -1000,8 +976,7 @@ tbody td:nth-child(3) {
 /* ==========================================================================
    Collapsible Sections
    ========================================================================== */
-details,
-.collapsible-section {
+details {
   border: 1px solid var(--border);
   background: var(--bg-secondary);
 }
@@ -1010,8 +985,7 @@ details + details {
   margin-top: var(--space-2);
 }
 
-details > summary,
-.collapsible-section > summary {
+details > summary {
   cursor: pointer;
   list-style: none;
   padding: 0.55rem 0.75rem;
@@ -1019,59 +993,15 @@ details > summary,
   color: var(--text-primary);
 }
 
-details[open] > summary,
-.collapsible-section[open] > summary {
+details[open] > summary {
   border-bottom: 1px solid var(--border);
   color: var(--accent);
   background: var(--bg-card);
 }
 
-details > :not(summary),
-.collapsible-section > :not(summary) {
+details > :not(summary) {
   margin: 0;
   padding: var(--space-3);
-}
-
-/* ==========================================================================
-   Status Badges
-   ========================================================================== */
-.status-badge,
-[data-status] {
-  display: inline-block;
-  border: 1px solid var(--border);
-  border-radius: 0;
-  padding: 0.15rem 0.45rem;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.status-badge.parsing,
-[data-status="parsing"],
-[data-status="in-progress"] {
-  color: var(--warning);
-  border-color: var(--warning);
-  background: rgb(255 152 0 / 14%);
-}
-
-.status-badge.complete,
-[data-status="complete"],
-[data-status="completed"],
-[data-status="success"] {
-  color: var(--success);
-  border-color: var(--success);
-  background: rgb(76 175 80 / 14%);
-}
-
-.status-badge.error,
-[data-status="error"],
-[data-status="failed"],
-[data-status="danger"] {
-  color: var(--danger);
-  border-color: var(--danger);
-  background: rgb(244 67 54 / 15%);
 }
 
 /* ==========================================================================
@@ -1288,11 +1218,5 @@ details > :not(summary),
 
   details:not([open]) > *:not(summary) {
     display: block !important;
-  }
-
-  .status-badge,
-  [data-status] {
-    background: #ffffff !important;
-    border-color: #555555 !important;
   }
 }
