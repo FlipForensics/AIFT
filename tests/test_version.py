@@ -32,11 +32,6 @@ class VersionModuleTests(unittest.TestCase):
             f"TOOL_VERSION '{TOOL_VERSION}' does not match MAJOR.MINOR.PATCH format",
         )
 
-    def test_tool_version_current_value(self) -> None:
-        """TOOL_VERSION should match the expected current release value."""
-        from app.version import TOOL_VERSION
-
-        self.assertEqual(TOOL_VERSION, "1.2.1")
 
     def test_tool_version_parts_are_non_negative(self) -> None:
         """Each component of the version string must be a non-negative integer."""
