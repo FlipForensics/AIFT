@@ -25,6 +25,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -564,6 +565,45 @@ def compose_profile_response(profiles_root: Path) -> list[dict[str, Any]]:
 artifact_bp = Blueprint("artifacts", __name__)
 
 
+def _purge_stale_parsed_data(case_dir: Path, prev_csv_output_dir: str) -> None:
+    """Remove parsed CSV data from disk before a new parse run.
+
+    Cleans both the default ``case_dir/parsed`` directory and any external
+    CSV output directory that was used by the previous parse run.
+
+    Args:
+        case_dir: Path to the case directory.
+        prev_csv_output_dir: The ``csv_output_dir`` stored from the previous
+            parse run.  May be empty if no prior run exists.
+    """
+    # Clean the default parsed directory inside the case folder.
+    default_parsed = case_dir / "parsed"
+    if default_parsed.is_dir():
+        LOGGER.info("Removing stale parsed output: %s", default_parsed)
+        shutil.rmtree(default_parsed, ignore_errors=True)
+
+    # Clean external CSV output directory if configured and different
+    # from the default location.
+    if not prev_csv_output_dir:
+        return
+    prev_path = Path(prev_csv_output_dir)
+    if not prev_path.is_dir():
+        return
+    resolved_prev = prev_path.resolve()
+    resolved_default = default_parsed.resolve()
+    if resolved_prev == resolved_default:
+        return  # Already handled above.
+    # Safety: refuse to delete filesystem roots or suspiciously short paths.
+    if resolved_prev == resolved_prev.root or resolved_prev == resolved_prev.anchor:
+        LOGGER.warning("Refusing to remove parsed output at filesystem root: %s", resolved_prev)
+        return
+    if len(resolved_prev.parts) <= 2:
+        LOGGER.warning("Refusing to remove parsed output with suspiciously short path: %s", resolved_prev)
+        return
+    LOGGER.info("Removing stale external parsed output: %s", resolved_prev)
+    shutil.rmtree(resolved_prev, ignore_errors=True)
+
+
 def _purge_stale_downstream_case_files(case_dir: Path) -> None:
     """Remove stale analysis/chat artifacts before a new parse run.
 
@@ -623,6 +663,10 @@ def start_parse(case_id: str) -> tuple[Response, int]:
         case["artifact_options"] = list(artifact_options)
         case["analysis_date_range"] = analysis_date_range
 
+        # Capture previous CSV output dir before clearing so we can
+        # remove stale on-disk data outside the case directory.
+        prev_csv_output_dir = str(case.get("csv_output_dir", "")).strip()
+
         # Invalidate prior parse-derived outputs so a failed rerun
         # cannot leave stale data usable by downstream analysis.
         case["parse_results"] = []
@@ -631,6 +675,7 @@ def start_parse(case_id: str) -> tuple[Response, int]:
         case["csv_output_dir"] = ""
         case["investigation_context"] = ""
 
+    _purge_stale_parsed_data(case_dir, prev_csv_output_dir)
     _purge_stale_downstream_case_files(case_dir)
 
     parse_started_event: dict[str, Any] = {

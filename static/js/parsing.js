@@ -277,6 +277,8 @@
     st.parse.status = {};
     A.clearMsg(el.parseErr);
     renderParsePlaceholder();
+    // Old analysis results depend on old parsed data — clear them.
+    A.resetAnalysisState();
     A.updateParseButton();
     A.updateNav();
   }
