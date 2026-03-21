@@ -192,6 +192,19 @@ main#wizard {
   border-color: var(--accent);
 }
 
+.evidence-loaded-banner {
+  border: 1px solid var(--accent);
+  background: var(--bg-card);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.evidence-loaded-banner p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--accent);
+}
+
 /* ==========================================================================
    Step Wizard Indicator
    ========================================================================== */

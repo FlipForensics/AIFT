@@ -570,8 +570,11 @@
     const options = selectedArtifactOptions();
     const parseArtifacts = options.map((option) => option.artifact_key);
     const dateRangeValidation = validateAnalysisDateRange();
-    const disabled = !A.activeCaseId() || st.parse.run || parseArtifacts.length === 0 || !dateRangeValidation.ok;
-    if (el.parseBtn) el.parseBtn.disabled = disabled;
+    const disabled = !A.activeCaseId() || parseArtifacts.length === 0 || !dateRangeValidation.ok;
+    if (el.parseBtn) {
+      el.parseBtn.disabled = disabled;
+      el.parseBtn.textContent = (st.parse.run || st.parse.done) ? "Restart Parsing" : "Parse Selected";
+    }
     if (el.cancelParse) el.cancelParse.hidden = !st.parse.run;
     A.updateNav();
   }

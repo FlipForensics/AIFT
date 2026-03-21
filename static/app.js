@@ -42,6 +42,7 @@
     el.indicators = Array.from(document.querySelectorAll(".step-indicator li"));
 
     el.evidenceForm = q("evidence-form");
+    el.evidenceLoadedBanner = q("evidence-loaded-banner");
     el.caseName = q("case-name");
     el.modeUpload = q("mode-upload");
     el.modePath = q("mode-path");
@@ -240,15 +241,6 @@
     const rawStep = Number(n);
     const normalizedStep = Number.isFinite(rawStep) ? Math.trunc(rawStep) : 1;
     st.step = Math.max(1, Math.min(A.STEP_IDS.length, normalizedStep));
-    if (priorStep === 3 && st.step !== 3) {
-      if (st.parse.run) A.cancelParse();
-      else A.closeParseSse();
-    }
-    if (priorStep === 4 && st.step !== 4) {
-      if (st.analysis.run) A.cancelAnalysis();
-      else A.closeAnalysisSse();
-    }
-    if (priorStep === 5 && st.step !== 5 && !st.chat.run) A.closeChatSse();
     el.steps.forEach((s) => {
       const on = Number(s.dataset.step || 0) === st.step;
       s.hidden = !on;
@@ -262,9 +254,15 @@
       else i.removeAttribute("aria-current");
     });
     updateNav();
+    syncEvidenceBanner();
     if (st.step === 5 && priorStep !== 5) {
       A.loadChatHistory().catch((e) => A.setMsg(el.resultsMsg, `Unable to load chat history: ${e.message}`, "error"));
     }
+  }
+
+  function syncEvidenceBanner() {
+    if (!el.evidenceLoadedBanner) return;
+    el.evidenceLoadedBanner.hidden = !A.activeCaseId();
   }
 
   function canGo(n) {
@@ -276,8 +274,8 @@
     if (!Number.isFinite(rawStep)) return "";
     const step = Math.trunc(rawStep);
     if (step <= 1) return "";
-    if (step === 2 && !A.activeCaseId()) return "Submit evidence first.";
-    if (step === 3 && st.selected.length === 0) return "Select artifacts and click Parse Selected first.";
+    if (step === 2) return A.activeCaseId() ? "" : "Submit evidence first.";
+    if (step === 3) return st.selected.length > 0 ? "" : "Select artifacts and click Parse Selected first.";
     if (step === 4) {
       if (st.parse.done && st.selectedAi.length > 0) return "";
       if (st.parse.done && st.selectedAi.length === 0) return "No artifacts are set to \u201cParse and use in AI.\u201d Re-parse with AI-enabled artifacts to unlock analysis.";
@@ -367,6 +365,7 @@
     if (el.runBtn) el.runBtn.disabled = false;
     A.updateCsvOutputHelp();
     updateNav();
+    syncEvidenceBanner();
   }
 
   // ── Expose functions needed by other modules ───────────────────────────────

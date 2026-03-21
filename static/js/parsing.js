@@ -30,6 +30,7 @@
     const dateRangeValidation = A.validateAnalysisDateRange();
     if (!dateRangeValidation.ok) return A.setMsg(el.artifactsMsg, dateRangeValidation.message, "error");
 
+    if (st.parse.run) cancelParse();
     if (st.parse.cancelPending) {
       await st.parse.cancelPending;
     }
@@ -41,7 +42,7 @@
     st.parse.abort = abortCtrl;
     initParseRows(arts);
     updateParseProgress();
-    if (el.parseBtn) el.parseBtn.disabled = true;
+    A.updateParseButton();
 
     try {
       const parsePayload = { artifacts: arts, ai_artifacts: aiArtifacts, artifact_options: artifactOptions };

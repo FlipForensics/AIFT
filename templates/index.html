@@ -60,6 +60,11 @@
   <main id="wizard" aria-live="polite">
     <section id="step-evidence" class="wizard-step is-active" data-step="1" aria-labelledby="step-evidence-title">
       <h2 id="step-evidence-title">Step 1: Evidence</h2>
+
+      <div id="evidence-loaded-banner" class="evidence-loaded-banner" hidden>
+        <p>Evidence already loaded for the current case. Submitting again will start a new case.</p>
+      </div>
+
       <form id="evidence-form">
         <div class="form-row">
           <label for="case-name">Case name (optional)</label>
