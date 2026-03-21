@@ -7,14 +7,21 @@ on:
       - 'app/**'
       - 'aift.py'
       - 'runtime_compat.py'
+      - 'example_reports/**'
   workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   build-docs:
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout repository
@@ -34,10 +41,22 @@ jobs:
       - name: Build documentation
         run: pdoc app aift runtime_compat -o _site/docs --docformat google
 
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
+      - name: Copy example reports
+        run: cp -r example_reports _site/example_reports
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: _site/docs
-          destination_dir: docs
-          keep_files: true
+          path: _site
+
+  deploy-docs:
+    needs: build-docs
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
