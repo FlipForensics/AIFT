@@ -74,7 +74,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
         "openai": {
             "api_key": "",
-            "model": "gpt-5.2",
+            "model": "gpt-5.4",
             "attach_csv_as_file": True,
             "request_timeout_seconds": 600,
         },

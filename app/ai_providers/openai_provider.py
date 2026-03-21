@@ -37,7 +37,7 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OPENAI_MODEL = "gpt-5.2"
+DEFAULT_OPENAI_MODEL = "gpt-5.4"
 
 
 class OpenAIProvider(AIProvider):
