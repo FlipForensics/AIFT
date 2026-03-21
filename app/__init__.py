@@ -27,7 +27,20 @@ from flask import Flask, jsonify, request
 from .config import PROJECT_ROOT, load_config
 from .routes import register_routes
 
-__all__ = ["create_app"]
+__all__ = [
+    "create_app",
+    "ai_providers",
+    "analyzer",
+    "audit",
+    "case_logging",
+    "chat",
+    "config",
+    "hasher",
+    "parser",
+    "reporter",
+    "routes",
+    "version",
+]
 
 CSRF_HEADER = "X-CSRF-Token"
 CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})

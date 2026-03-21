@@ -7,4 +7,4 @@ to work without modification.
 
 from .generator import ReportGenerator
 
-__all__ = ["ReportGenerator"]
+__all__ = ["ReportGenerator", "generator", "markdown"]

@@ -21,4 +21,6 @@ __all__ = [
     "MAX_RECORDS_PER_ARTIFACT",
     "UNKNOWN_VALUE",
     "UnsupportedPluginError",
+    "core",
+    "registry",
 ]

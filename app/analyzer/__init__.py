@@ -24,4 +24,12 @@ from .core import ForensicAnalyzer
 __all__ = [
     "ForensicAnalyzer",
     "PROJECT_ROOT",
+    "chunking",
+    "citations",
+    "constants",
+    "core",
+    "data_prep",
+    "ioc",
+    "prompts",
+    "utils",
 ]

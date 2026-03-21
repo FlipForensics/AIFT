@@ -62,4 +62,11 @@ __all__ = [
     "KimiProvider",
     "LocalProvider",
     "create_provider",
+    "base",
+    "claude_provider",
+    "factory",
+    "kimi_provider",
+    "local_provider",
+    "openai_provider",
+    "utils",
 ]

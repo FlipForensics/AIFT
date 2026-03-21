@@ -135,4 +135,13 @@ from .handlers import (  # noqa: F401
 from .analysis import analysis_bp  # noqa: F401
 from .chat import chat_bp  # noqa: F401
 
-__all__ = ["register_routes"]
+__all__ = [
+    "register_routes",
+    "analysis",
+    "artifacts",
+    "chat",
+    "evidence",
+    "handlers",
+    "state",
+    "tasks",
+]
