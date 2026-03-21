@@ -773,6 +773,104 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(projected_header, "row_ref,ts,name,command,username")
         self.assertEqual(fake_provider.attachments_calls[0][0]["mime_type"], "text/csv")
 
+    def test_analyze_artifact_emits_started_event_for_plain_analyze_path(self) -> None:
+        """Verify that the plain analyze() path (no attachments, no streaming)
+        emits an ``artifact_analysis_started`` progress event."""
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            prompts_dir = temp_path / "prompts"
+            self._write_prompt_template(prompts_dir)
+
+            csv_path = temp_path / "runkeys.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "name", "command", "key"])
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "ts": "2026-01-15T12:00:00+00:00",
+                        "name": "EntryA",
+                        "command": r"C:\Users\Public\evil.exe",
+                        "key": r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    }
+                )
+
+            progress_events: list[tuple] = []
+
+            def fake_progress(*args: object) -> None:
+                progress_events.append(args)
+
+            fake_provider = FakeProvider(responses=["analysis-output"])
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(
+                    case_dir=temp_dir,
+                    config={"ai": {"provider": "local"}},
+                    audit_logger=FakeAuditLogger(),
+                    artifact_csv_paths={"runkeys": csv_path},
+                    prompts_dir=prompts_dir,
+                )
+                analyzer.analyze_artifact(
+                    artifact_key="runkeys",
+                    investigation_context="Focus on January 15, 2026.",
+                    progress_callback=fake_progress,
+                )
+
+        # The first progress event must be the "started" notification.
+        self.assertGreaterEqual(len(progress_events), 1)
+        key, status, payload = progress_events[0]
+        self.assertEqual(key, "runkeys")
+        self.assertEqual(status, "started")
+        self.assertEqual(payload["artifact_key"], "runkeys")
+        self.assertEqual(payload["artifact_name"], "Run/RunOnce Keys")
+        self.assertIn("model", payload)
+
+    def test_analyze_artifact_emits_started_event_for_attachment_path(self) -> None:
+        """Verify that the analyze_with_attachments() path also emits an
+        ``artifact_analysis_started`` progress event."""
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            prompts_dir = temp_path / "prompts"
+            self._write_prompt_template(prompts_dir)
+
+            csv_path = temp_path / "runkeys.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "name", "command", "key"])
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "ts": "2026-01-15T12:00:00+00:00",
+                        "name": "EntryA",
+                        "command": r"C:\Users\Public\evil.exe",
+                        "key": r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    }
+                )
+
+            progress_events: list[tuple] = []
+
+            def fake_progress(*args: object) -> None:
+                progress_events.append(args)
+
+            fake_provider = FakeAttachmentProvider(responses=["analysis-output"])
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(
+                    case_dir=temp_dir,
+                    config={"ai": {"provider": "local"}},
+                    audit_logger=FakeAuditLogger(),
+                    artifact_csv_paths={"runkeys": csv_path},
+                    prompts_dir=prompts_dir,
+                )
+                analyzer.analyze_artifact(
+                    artifact_key="runkeys",
+                    investigation_context="Focus on January 15, 2026.",
+                    progress_callback=fake_progress,
+                )
+
+        self.assertGreaterEqual(len(progress_events), 1)
+        key, status, payload = progress_events[0]
+        self.assertEqual(key, "runkeys")
+        self.assertEqual(status, "started")
+        self.assertEqual(payload["artifact_key"], "runkeys")
+        self.assertEqual(payload["artifact_name"], "Run/RunOnce Keys")
+
     def test_prepare_artifact_data_deduplicates_rows_and_writes_deduplicated_csv(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
             temp_path = Path(temp_dir)

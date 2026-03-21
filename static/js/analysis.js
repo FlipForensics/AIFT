@@ -108,12 +108,19 @@
     const t = String(p.type || "");
     if (t === "analysis_started") {
       A.clearMsg(el.analysisMsg);
+      st.analysis.totalArtifacts = Number(p.analysis_artifact_count) || 0;
+      setAnalysisStatus("Preparing analysis\u2026");
       renderAnalysis();
       renderFindings();
       return;
     }
     if (t === "artifact_analysis_started") {
-      upsertAnalysisStarted(A.isObj(p.result) ? p.result : p);
+      const r = A.isObj(p.result) ? p.result : p;
+      upsertAnalysisStarted(r);
+      const name = String(r.artifact_name || A.artifactName(String(r.artifact_key || "")));
+      const idx = st.analysis.order.length;
+      const total = st.analysis.totalArtifacts || idx;
+      setAnalysisStatus(`Analysing (${idx}/${total}): ${name}`);
       renderAnalysis();
       renderFindings();
       return;
@@ -155,6 +162,7 @@
       st.analysis.fail = false;
       A.stopTimer("analysis");
       closeAnalysisSse();
+      setAnalysisStatus(null);
       if (el.runBtn) el.runBtn.disabled = false;
       if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
       A.clearMsg(el.analysisMsg);
@@ -167,6 +175,7 @@
       st.analysis.fail = true;
       A.stopTimer("analysis");
       closeAnalysisSse();
+      setAnalysisStatus(null);
       if (el.runBtn) el.runBtn.disabled = false;
       if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
       A.setMsg(el.analysisMsg, String(p.error || "Analysis failed."), "error");
@@ -237,6 +246,22 @@
       const resolvedText = A.stripLeadingReasoningBlocks(rawResolvedText) || rawResolvedText.trim();
       st.analysis.byKey[key] = { ...current, text: resolvedText, isThinking: false };
     });
+  }
+
+  // ── Status banner ─────────────────────────────────────────────────────
+
+  /**
+   * Show or update the analysis status banner with the given message.
+   * Pass null/empty to hide.
+   */
+  function setAnalysisStatus(msg) {
+    if (!el.analysisStatusBanner) return;
+    if (!msg) {
+      el.analysisStatusBanner.hidden = true;
+      return;
+    }
+    el.analysisStatusBanner.hidden = false;
+    if (el.analysisStatusText) el.analysisStatusText.textContent = msg;
   }
 
   // ── Rendering helpers ──────────────────────────────────────────────────────
@@ -368,6 +393,7 @@
     A.stopTimer("analysis");
     if (el.runBtn) el.runBtn.disabled = false;
     if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
+    setAnalysisStatus(null);
     A.setMsg(el.analysisMsg, "Analysis cancelled.", "info");
     A.updateNav();
     const caseId = A.activeCaseId();
@@ -389,9 +415,11 @@
     st.analysis.seq = -1;
     st.analysis.order = [];
     st.analysis.byKey = {};
+    st.analysis.totalArtifacts = 0;
     st.analysis.summary = "";
     st.analysis.model = {};
     A.clearMsg(el.analysisMsg);
+    setAnalysisStatus(null);
     if (el.runBtn) el.runBtn.disabled = false;
     if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
     renderAnalysis();
@@ -409,4 +437,5 @@
   A.renderExecSummary = renderExecSummary;
   A.renderFindings = renderFindings;
   A.setProvider = setProvider;
+  A._onAnalysisEvent = onAnalysisEvent;
 })();

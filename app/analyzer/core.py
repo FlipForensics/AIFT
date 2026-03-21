@@ -890,6 +890,10 @@ class ForensicAnalyzer:
                         progress_callback=_provider_progress, max_tokens=self.ai_response_max_tokens,
                     )
             else:
+                if progress_callback is not None:
+                    emit_analysis_progress(progress_callback, artifact_key, "started", {
+                        "artifact_key": artifact_key, "artifact_name": artifact_name, "model": model,
+                    })
                 analyze_with_attachments = getattr(self.ai_provider, "analyze_with_attachments", None)
                 if callable(analyze_with_attachments):
                     analysis_text = self._call_ai_with_retry(

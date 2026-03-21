@@ -297,6 +297,136 @@ describe("closeAnalysisSse", () => {
   });
 });
 
+// ── Analysis status banner ──────────────────────────────────────────────────
+
+describe("analysis status banner", () => {
+  test("banner is hidden initially", () => {
+    expect(A.el.analysisStatusBanner).not.toBeNull();
+    expect(A.el.analysisStatusBanner.hidden).toBe(true);
+  });
+
+  test("analysis_started event shows 'Preparing analysis' banner", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 3, sequence: 0 });
+    expect(A.el.analysisStatusBanner.hidden).toBe(false);
+    expect(A.el.analysisStatusText.textContent).toContain("Preparing analysis");
+  });
+
+  test("analysis_started stores totalArtifacts count", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 5, sequence: 0 });
+    expect(A.st.analysis.totalArtifacts).toBe(5);
+  });
+
+  test("artifact_analysis_started event shows artifact name and progress", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 3, sequence: 0 });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_started",
+      result: { artifact_key: "evtx", artifact_name: "Event Logs", model: "claude-3" },
+      sequence: 1,
+    });
+    expect(A.el.analysisStatusBanner.hidden).toBe(false);
+    expect(A.el.analysisStatusText.textContent).toContain("Event Logs");
+    expect(A.el.analysisStatusText.textContent).toContain("1/3");
+  });
+
+  test("second artifact_analysis_started updates progress counter", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 3, sequence: 0 });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_started",
+      result: { artifact_key: "evtx", artifact_name: "Event Logs", model: "claude-3" },
+      sequence: 1,
+    });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_completed",
+      result: { artifact_key: "evtx", analysis: "done", artifact_name: "Event Logs" },
+      sequence: 2,
+    });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_started",
+      result: { artifact_key: "mft", artifact_name: "MFT", model: "claude-3" },
+      sequence: 3,
+    });
+    expect(A.el.analysisStatusText.textContent).toContain("MFT");
+    expect(A.el.analysisStatusText.textContent).toContain("2/3");
+  });
+
+  test("artifact_analysis_started falls back to artifactName lookup when artifact_name missing", () => {
+    A.st.artifactNames["shimcache"] = "Shimcache";
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 2, sequence: 0 });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_started",
+      result: { artifact_key: "shimcache", model: "gpt-4" },
+      sequence: 1,
+    });
+    expect(A.el.analysisStatusText.textContent).toContain("Shimcache");
+  });
+
+  test("analysis_completed hides the banner", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 1, sequence: 0 });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_started",
+      result: { artifact_key: "evtx", artifact_name: "Event Logs", model: "m" },
+      sequence: 1,
+    });
+    expect(A.el.analysisStatusBanner.hidden).toBe(false);
+
+    // Mark analysis as running so the completed handler can transition state
+    A.st.analysis.run = true;
+    A._onAnalysisEvent({
+      type: "analysis_completed",
+      artifact_count: 1,
+      per_artifact: [{ artifact_key: "evtx", analysis: "result" }],
+      sequence: 2,
+    });
+    expect(A.el.analysisStatusBanner.hidden).toBe(true);
+  });
+
+  test("analysis_failed hides the banner", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 1, sequence: 0 });
+    expect(A.el.analysisStatusBanner.hidden).toBe(false);
+
+    A._onAnalysisEvent({ type: "analysis_failed", error: "Provider error", sequence: 1 });
+    expect(A.el.analysisStatusBanner.hidden).toBe(true);
+  });
+
+  test("resetAnalysisState hides the banner and clears totalArtifacts", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 3, sequence: 0 });
+    expect(A.el.analysisStatusBanner.hidden).toBe(false);
+    expect(A.st.analysis.totalArtifacts).toBe(3);
+
+    A.resetAnalysisState();
+    expect(A.el.analysisStatusBanner.hidden).toBe(true);
+    expect(A.st.analysis.totalArtifacts).toBe(0);
+  });
+
+  test("cancelAnalysis hides the banner", () => {
+    A.st.analysis.run = true;
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 2, sequence: 0 });
+    expect(A.el.analysisStatusBanner.hidden).toBe(false);
+
+    A.cancelAnalysis();
+    expect(A.el.analysisStatusBanner.hidden).toBe(true);
+  });
+
+  test("thinking event keeps the banner visible with current artifact name", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 2, sequence: 0 });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_started",
+      result: { artifact_key: "evtx", artifact_name: "Event Logs", model: "m" },
+      sequence: 1,
+    });
+    const textAfterStart = A.el.analysisStatusText.textContent;
+
+    A._onAnalysisEvent({
+      type: "artifact_analysis_thinking",
+      result: { artifact_key: "evtx", thinking_text: "Analyzing patterns..." },
+      sequence: 2,
+    });
+    // Banner text should still show the artifact name from the started event
+    expect(A.el.analysisStatusBanner.hidden).toBe(false);
+    expect(A.el.analysisStatusText.textContent).toBe(textAfterStart);
+  });
+});
+
 // ── Analysis navigation prerequisites ───────────────────────────────────────
 
 describe("analysis navigation prerequisites", () => {

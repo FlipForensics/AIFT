@@ -87,6 +87,8 @@
     el.providerName = q("provider-name");
     el.settingsLink = q("provider-settings-link");
     el.analysisList = q("analysis-results-list");
+    el.analysisStatusBanner = q("analysis-status-banner");
+    el.analysisStatusText = q("analysis-status-text");
 
     el.summaryOut = q("executive-summary-content");
     el.findings = q("artifact-findings");

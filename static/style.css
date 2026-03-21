@@ -821,6 +821,35 @@ tbody td:nth-child(3) {
   background: #cbd5e1;
 }
 
+.analysis-status-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: var(--space-3) 0;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: rgba(74, 158, 255, 0.08);
+  color: var(--accent);
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.analysis-status-spinner {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: analysis-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes analysis-spin {
+  to { transform: rotate(360deg); }
+}
+
 .analysis-card,
 #analysis-results-list > article,
 #analysis-results-list > div,

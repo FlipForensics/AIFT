@@ -395,6 +395,11 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
         <button id="cancel-analysis" type="button" hidden>Cancel Analysis</button>
       </form>
 
+      <div id="analysis-status-banner" class="analysis-status-banner" hidden>
+        <span class="analysis-status-spinner"></span>
+        <span id="analysis-status-text">Preparing analysis…</span>
+      </div>
+
       <section id="analysis-stream" aria-live="polite" aria-labelledby="analysis-stream-title">
         <h3 id="analysis-stream-title">Live Analysis Results</h3>
         <div id="analysis-results-list" aria-live="polite">
