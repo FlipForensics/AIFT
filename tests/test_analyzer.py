@@ -1281,9 +1281,16 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(output["per_artifact"][1]["analysis"], "tasks-analysis")
         self.assertEqual(output["summary"], "summary-analysis")
         self.assertEqual(output["model_info"]["model"], "fake-model-1")
-        self.assertEqual(len(progress_events), 2)
+        # Each artifact emits "started" + "complete" = 4 events for 2 artifacts
+        self.assertEqual(len(progress_events), 4)
         self.assertEqual(progress_events[0][0], "runkeys")
-        self.assertEqual(progress_events[0][1], "complete")
+        self.assertEqual(progress_events[0][1], "started")
+        self.assertEqual(progress_events[1][0], "runkeys")
+        self.assertEqual(progress_events[1][1], "complete")
+        self.assertEqual(progress_events[2][0], "tasks")
+        self.assertEqual(progress_events[2][1], "started")
+        self.assertEqual(progress_events[3][0], "tasks")
+        self.assertEqual(progress_events[3][1], "complete")
 
     def test_generate_summary_fills_template_and_calls_provider(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
