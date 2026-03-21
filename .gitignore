@@ -35,6 +35,12 @@ cases/
 # Logs
 *.log
 
+# Node.js (JS test tooling only)
+node_modules/
+package.json
+package-lock.json
+jest.config.js
+
 # IDE and OS files
 .vscode/
 .idea/
