@@ -11,6 +11,13 @@
 (() => {
   const A = window.AIFT;
 
+  /**
+   * Render a Markdown string into a DOM container, replacing its contents.
+   *
+   * @param {HTMLElement|null} container - Target DOM element.
+   * @param {string} text - Markdown source text.
+   * @param {string} emptyText - Placeholder shown when text is blank.
+   */
   function renderMarkdownInto(container, text, emptyText) {
     if (!container) return;
     container.innerHTML = "";
@@ -24,6 +31,15 @@
     container.appendChild(markdownToFragment(raw));
   }
 
+  /**
+   * Convert a Markdown string into a DocumentFragment.
+   *
+   * Supports headings, ordered/unordered lists, fenced code blocks,
+   * tables, and inline formatting (bold, italic, code, confidence tokens).
+   *
+   * @param {string} text - Markdown source text.
+   * @returns {DocumentFragment} Fragment ready for insertion into the DOM.
+   */
   function markdownToFragment(text) {
     const fragment = document.createDocumentFragment();
     const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
@@ -33,6 +49,7 @@
     let inCodeFence = false;
     let codeFenceLines = [];
 
+    /** Flush and append the current list node to the fragment. */
     const closeList = () => {
       if (!listNode) return;
       fragment.appendChild(listNode);
@@ -40,6 +57,7 @@
       listType = "";
     };
 
+    /** Flush accumulated paragraph lines into a <p> element. */
     const flushParagraph = () => {
       if (!paragraphLines.length) return;
       const p = document.createElement("p");
@@ -49,6 +67,7 @@
       paragraphLines = [];
     };
 
+    /** Flush accumulated code-fence lines into a <pre><code> block. */
     const flushCodeFence = () => {
       const pre = document.createElement("pre");
       const code = document.createElement("code");
@@ -191,6 +210,12 @@
     return fragment;
   }
 
+  /**
+   * Split a Markdown table row into trimmed cell strings.
+   *
+   * @param {string} line - A single line of text.
+   * @returns {string[]|null} Array of cell values, or null if not a table row.
+   */
   function splitMarkdownTableRow(line) {
     const raw = String(line || "");
     if (!raw.includes("|")) return null;
@@ -201,11 +226,25 @@
     return trimmed.split("|").map((cell) => cell.trim());
   }
 
+  /**
+   * Check whether an array of cells forms a valid Markdown table separator
+   * row (e.g. `| --- | :---: |`).
+   *
+   * @param {string[]} cells - Cell values from splitMarkdownTableRow.
+   * @returns {boolean}
+   */
   function isMarkdownTableSeparatorRow(cells) {
     if (!Array.isArray(cells) || !cells.length) return false;
     return cells.every((cell) => /^:?-{3,}:?$/.test(String(cell || "").trim()));
   }
 
+  /**
+   * Pad or trim an array of table cells to exactly `expectedCount` entries.
+   *
+   * @param {string[]} cells - Raw cells array.
+   * @param {number} expectedCount - Target column count.
+   * @returns {string[]} Normalised array of trimmed cell strings.
+   */
   function normalizeMarkdownTableCells(cells, expectedCount) {
     const normalized = Array.isArray(cells)
       ? cells.slice(0, expectedCount).map((cell) => String(cell || "").trim())
@@ -214,6 +253,15 @@
     return normalized;
   }
 
+  /**
+   * Render inline Markdown (bold, italic, code, confidence tokens) to HTML.
+   *
+   * Code spans are extracted first so their content is not processed for
+   * bold/italic, then the remaining text is HTML-escaped and formatted.
+   *
+   * @param {string} text - Inline Markdown source.
+   * @returns {string} HTML string with inline formatting applied.
+   */
   function renderInlineMarkdown(text) {
     const source = String(text || "");
     if (!source) return "";
@@ -234,6 +282,13 @@
       .join("");
   }
 
+  /**
+   * Wrap confidence-level tokens (CRITICAL, HIGH, MEDIUM, LOW) in coloured
+   * `<span>` badges using CONFIDENCE_CLASS_MAP.
+   *
+   * @param {string} text - HTML string (already escaped).
+   * @returns {string} HTML with confidence tokens highlighted.
+   */
   function highlightConfidenceTokens(text) {
     A.CONFIDENCE_TOKEN_PATTERN.lastIndex = 0;
     return String(text || "").replace(A.CONFIDENCE_TOKEN_PATTERN, (match, token) => {

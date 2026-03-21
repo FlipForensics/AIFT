@@ -15,6 +15,7 @@
 
   // ── Setup ──────────────────────────────────────────────────────────────────
 
+  /** Wire up the settings panel: tabs, open/close, provider, CSV help, form submit. */
   function setupSettings() {
     if (!el.settingsBtn || !el.settingsPanel || !el.settingsForm) return;
     ensureTestButton();
@@ -55,6 +56,7 @@
     showSettingsTab(st.settingsTab || "basic");
   }
 
+  /** Create the "Test Connection" button if it doesn't exist yet. */
   function ensureTestButton() {
     if (!el.settingsForm || q("test-connection")) return;
     const b = document.createElement("button");
@@ -103,6 +105,7 @@
     });
   }
 
+  /** Open the settings modal, show backdrop, trap focus, and refresh data. */
   function openSettings() {
     if (!el.settingsPanel || !el.settingsBtn) return;
     const backdrop = q("settings-backdrop");
@@ -118,6 +121,7 @@
     loadSettings().catch((e) => A.setMsg(el.settingsMsg, `Unable to refresh settings: ${e.message}`, "error"));
   }
 
+  /** Close the settings modal, hide backdrop, and release focus trap. */
   function closeSettings() {
     if (!el.settingsPanel || !el.settingsBtn) return;
     el.settingsPanel.removeEventListener("keydown", handleFocusTrap);
@@ -129,6 +133,11 @@
     el.settingsBtn.focus();
   }
 
+  /**
+   * Activate a settings tab ("basic" or "advanced") and show its panel.
+   *
+   * @param {string} tabName - "basic" or "advanced".
+   */
   function showSettingsTab(tabName) {
     const target = tabName === "advanced" ? "advanced" : "basic";
     st.settingsTab = target;
@@ -149,6 +158,7 @@
 
   // ── Load / Apply / Save ────────────────────────────────────────────────────
 
+  /** Fetch settings from the backend and apply them to the form. */
   async function loadSettings() {
     const s = await A.apiJson("/api/settings", { method: "GET" });
     st.settings = s;
@@ -157,6 +167,7 @@
     A.clearMsg(el.settingsMsg);
   }
 
+  /** Populate all settings form fields from a settings object. @param {Object} s */
   function applySettings(s) {
     if (!A.isObj(s)) return;
     const ai = A.obj(s.ai);
@@ -171,6 +182,7 @@
     syncProviderFields();
   }
 
+  /** Populate the advanced-tab settings fields from a settings object. @param {Object} s */
   function applyAdvancedSettings(s) {
     if (!A.isObj(s)) return;
     const analysis = A.obj(s.analysis);
@@ -201,12 +213,14 @@
     if (el.setAttachLocal) el.setAttachLocal.checked = A.boolSetting(A.obj(ai.local).attach_csv_as_file, true);
   }
 
+  /** Set a number input's value, falling back to a default if not finite. */
   function setNumberInput(input, value, fallback) {
     if (!input) return;
     const numeric = typeof value === "number" && Number.isFinite(value) ? value : fallback;
     input.value = String(numeric);
   }
 
+  /** Show/hide the AI max-tokens warning based on the current input value. */
   function updateAiMaxTokensWarning() {
     if (!el.setAiMaxTokensWarning || !el.setAiMaxTokens) return;
     const parsed = A.num(A.val(el.setAiMaxTokens), null);
@@ -216,6 +230,13 @@
     el.setAiMaxTokensWarning.hidden = !shouldWarn;
   }
 
+  /**
+   * Build a settings payload from the form and save it to the backend.
+   *
+   * @param {Object} [opts={}] - Options.
+   * @param {boolean} [opts.silent] - Suppress the success toast.
+   * @returns {Promise<boolean>} True if saved successfully.
+   */
   async function saveSettings(opts = {}) {
     const silent = !!opts.silent;
     A.clearMsg(el.settingsMsg);
@@ -233,6 +254,7 @@
     }
   }
 
+  /** Construct the settings JSON payload from all form fields and current state. */
   function buildSettingsPayload() {
     const base = A.clone(st.settings || {});
     if (!A.isObj(base.ai)) base.ai = {};
@@ -288,6 +310,14 @@
     return base;
   }
 
+  /**
+   * Read an integer from a number input, clamped to a minimum.
+   *
+   * @param {HTMLInputElement|null} input - The input element.
+   * @param {number} fallback - Default when the input is empty or invalid.
+   * @param {number} [minValue=1] - Minimum allowed value.
+   * @returns {number}
+   */
   function readIntInput(input, fallback, minValue = 1) {
     const parsed = A.num(A.val(input), null);
     if (typeof parsed !== "number" || !Number.isFinite(parsed)) return fallback;
@@ -296,6 +326,7 @@
 
   // ── Provider fields ────────────────────────────────────────────────────────
 
+  /** Fill API key, model, and endpoint URL fields from the stored settings for the selected provider. */
   function fillProviderFields() {
     if (!A.isObj(st.settings) || !el.setProvider) return;
     const provider = A.toBackendProvider(el.setProvider.value);
@@ -312,6 +343,7 @@
     }
   }
 
+  /** Show/hide and relabel provider-specific form rows based on the selected provider. */
   function syncProviderFields() {
     if (!el.setProvider) return;
     const p = el.setProvider.value;
@@ -341,6 +373,7 @@
     }
   }
 
+  /** Update the analysis step's provider name display from a settings object. */
   function updateProviderFromSettings(s) {
     const ai = A.obj(s.ai);
     const p = A.normProvider(String(ai.provider || ""));
@@ -352,12 +385,14 @@
 
   // ── CSV output path help ───────────────────────────────────────────────────
 
+  /** Return the default CSV output path for the active case. */
   function defaultCsvOutputForCurrentCase() {
     const caseId = A.activeCaseId();
     if (caseId) return `cases/${caseId}/parsed`;
     return "cases/<case_id>/parsed";
   }
 
+  /** Build the effective CSV output path from a configured root directory. */
   function configuredCsvOutputForCurrentCase(rootPath) {
     const text = String(rootPath || "").trim();
     if (!text) return "";
@@ -367,6 +402,7 @@
     return `${trimmed}${sep}${caseToken}${sep}parsed`;
   }
 
+  /** Update the CSV output path help text below the input field. */
   function updateCsvOutputHelp() {
     if (!el.setCsvOutputHelp) return;
     const configuredPath = A.val(el.setCsvOutputDir);
@@ -381,6 +417,7 @@
 
   // ── Connection test ────────────────────────────────────────────────────────
 
+  /** Save current settings, then test the AI provider connection. */
   async function testConnection() {
     A.clearMsg(el.settingsMsg);
     if (st.analysis.run) return A.setMsg(el.settingsMsg, "Stop active analysis before running connection test.", "error");
@@ -411,18 +448,20 @@
     }
   }
 
+  /**
+   * Start a visual feedback ticker for the connection test.
+   *
+   * @returns {function} Stop function — call to clear the interval.
+   */
   function startConnectionTestFeedback() {
     const startedAt = Date.now();
     let frame = 0;
     let ticker = 0;
     const tick = () => {
-      const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-      const minutes = String(Math.floor(elapsedSeconds / 60)).padStart(2, "0");
-      const seconds = String(elapsedSeconds % 60).padStart(2, "0");
       const dots = ".".repeat((frame % 3) + 1);
       frame += 1;
       if (el.testBtn) el.testBtn.textContent = `Testing${dots}`;
-      A.setMsg(el.settingsMsg, `Testing provider connection${dots} (${minutes}:${seconds})`, "info");
+      A.setMsg(el.settingsMsg, `Testing provider connection${dots} (${A.fmtElapsed(startedAt)})`, "info");
     };
     tick();
     ticker = window.setInterval(tick, 1000);

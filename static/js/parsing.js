@@ -14,6 +14,12 @@
 
   // ── Parse submission ───────────────────────────────────────────────────────
 
+  /**
+   * Submit selected artifacts for parsing.
+   *
+   * Validates selection and date range, cancels any running parse, posts
+   * the parse request, and opens the SSE progress stream.
+   */
   async function submitParse() {
     A.clearMsg(el.artifactsMsg);
     A.clearMsg(el.parseErr);
@@ -65,6 +71,11 @@
 
   // ── Parse progress rows ────────────────────────────────────────────────────
 
+  /**
+   * Create the initial progress table rows for each artifact being parsed.
+   *
+   * @param {string[]} keys - Artifact keys to track.
+   */
   function initParseRows(keys) {
     if (!el.parseRows) return;
     st.parse.rows = {};
@@ -88,6 +99,7 @@
     });
   }
 
+  /** Reset the parse table to a single "Awaiting selection" placeholder row. */
   function renderParsePlaceholder() {
     if (!el.parseRows) return;
     el.parseRows.innerHTML = "";
@@ -99,6 +111,14 @@
     if (el.parseProgress) el.parseProgress.value = 0;
   }
 
+  /**
+   * Update (or create) a parse progress row for the given artifact.
+   *
+   * @param {string} key - Artifact key.
+   * @param {string} status - Status label (e.g. "waiting", "parsing", "completed", "failed").
+   * @param {number|null} count - Record count to display.
+   * @param {string} [err] - Optional error message shown as a tooltip.
+   */
   function setParseRow(key, status, count, err) {
     if (!key) return;
     let row = st.parse.rows[key];
@@ -126,6 +146,11 @@
     st.parse.status[key] = status;
   }
 
+  /**
+   * Recompute and set the overall parse progress bar value (0–100).
+   *
+   * @param {boolean} [force=false] - When true, immediately set to 100%.
+   */
   function updateParseProgress(force = false) {
     if (!el.parseProgress) return;
     if (force) return (el.parseProgress.value = 100);
@@ -137,31 +162,24 @@
 
   // ── Parse SSE ──────────────────────────────────────────────────────────────
 
+  /** Open the parse-progress SSE stream for the active case. */
   function startParseSse() {
-    closeParseSse();
     A.clearMsg(el.parseErr);
     const caseId = A.activeCaseId();
     if (!caseId) return A.setMsg(el.parseErr, "No active case for parse stream.", "error");
-    const es = new EventSource(`/api/cases/${encodeURIComponent(caseId)}/parse/progress`);
-    st.parse.es = es;
-    es.onopen = () => { st.parse.retryCount = 0; };
-    es.onmessage = (ev) => {
-      st.parse.retryCount = 0;
-      const p = A.safeJson(ev.data);
-      if (!p) return;
-      const seq = A.num(p.sequence, -1);
-      if (seq >= 0) {
-        if (seq <= st.parse.seq) return;
-        st.parse.seq = seq;
-      }
-      onParseEvent(p);
-    };
-    es.onerror = () => {
-      if (st.parse.done || st.parse.fail || !st.parse.run) return;
-      retryParseSse();
-    };
+    A.openSseStream(
+      `/api/cases/${encodeURIComponent(caseId)}/parse/progress`,
+      st.parse,
+      {
+        onEvent: (p) => onParseEvent(p),
+        onError: () => {
+          if (!st.parse.done && !st.parse.fail && st.parse.run) retryParseSse();
+        },
+      },
+    );
   }
 
+  /** Dispatch a single parse SSE event to the appropriate UI handler. */
   function onParseEvent(p) {
     const t = String(p.type || "");
     if (t === "parse_started") {
@@ -212,36 +230,36 @@
 
   // ── SSE retry / close / cancel ─────────────────────────────────────────────
 
+  /** Attempt to reconnect the parse SSE stream with exponential backoff. */
   function retryParseSse() {
-    if (st.parse.retry || st.parse.done || st.parse.fail || !st.parse.run) return;
-    const attempt = st.parse.retryCount + 1;
-    if (attempt > A.SSE_MAX_RETRIES) return failParseSseReconnect();
-    st.parse.retryCount = attempt;
-    const delay = A.sseRetryDelayMs(attempt);
-    closeParseSse();
-    A.setMsg(el.parseErr, `Parse progress connection dropped. Reconnecting (${attempt}/${A.SSE_MAX_RETRIES}) in ${Math.ceil(delay / 1000)}s...`, "error");
-    st.parse.retry = window.setTimeout(() => {
-      st.parse.retry = null;
-      if (!st.parse.done && !st.parse.fail && st.parse.run) startParseSse();
-    }, delay);
+    if (st.parse.done || st.parse.fail || !st.parse.run) return;
+    A.retrySseStream(st.parse, {
+      reconnect: () => {
+        if (!st.parse.done && !st.parse.fail && st.parse.run) startParseSse();
+      },
+      onRetryScheduled: (attempt, delaySec) => {
+        A.setMsg(el.parseErr, `Parse progress connection dropped. Reconnecting (${attempt}/${A.SSE_MAX_RETRIES}) in ${delaySec}s...`, "error");
+      },
+      onMaxRetries: () => {
+        st.parse.run = false;
+        st.parse.done = false;
+        st.parse.fail = true;
+        st.parse.retryCount = 0;
+        A.stopTimer("parse");
+        closeParseSse();
+        A.setMsg(el.parseErr, `Parse progress connection lost after ${A.SSE_MAX_RETRIES} retries. Start parsing again.`, "error");
+        A.updateParseButton();
+        A.updateNav();
+      },
+    });
   }
 
-  function failParseSseReconnect() {
-    st.parse.run = false;
-    st.parse.done = false;
-    st.parse.fail = true;
-    st.parse.retryCount = 0;
-    A.stopTimer("parse");
-    closeParseSse();
-    A.setMsg(el.parseErr, `Parse progress connection lost after ${A.SSE_MAX_RETRIES} retries. Start parsing again.`, "error");
-    A.updateParseButton();
-    A.updateNav();
-  }
-
+  /** Close the parse SSE EventSource and clear pending retries. */
   function closeParseSse() {
     A.closeSseChannel(st.parse);
   }
 
+  /** Cancel any in-progress parse: abort HTTP, close SSE, notify backend. */
   function cancelParse() {
     if (st.parse.abort) {
       st.parse.abort.abort();
@@ -265,6 +283,7 @@
     }
   }
 
+  /** Reset all parse state, close SSE, clear UI, and cascade to analysis reset. */
   function resetParseState() {
     closeParseSse();
     A.stopTimer("parse");

@@ -14,6 +14,7 @@
 
   // ── Evidence intake ────────────────────────────────────────────────────────
 
+  /** Wire up the evidence form: mode toggle, file input, dropzone, and submit handler. */
   function setupEvidence() {
     if (!el.evidenceForm) return;
     if (el.modeUpload) el.modeUpload.addEventListener("change", syncMode);
@@ -32,12 +33,14 @@
     syncMode();
   }
 
+  /** Show/hide upload vs. path panels based on the selected intake mode radio. */
   function syncMode() {
     const pathMode = !!(el.modePath && el.modePath.checked);
     if (el.uploadPanel) el.uploadPanel.hidden = pathMode;
     if (el.pathPanel) el.pathPanel.hidden = !pathMode;
   }
 
+  /** Initialise drag-and-drop event listeners on the dropzone element. */
   function initDropzone() {
     if (!el.drop) return;
     const prevent = (e) => { e.preventDefault(); e.stopPropagation(); };
@@ -65,6 +68,11 @@
     });
   }
 
+  /**
+   * Store pending evidence files and update the dropzone help text.
+   *
+   * @param {File[]} files - Array of File objects selected by the user.
+   */
   function setPendingFiles(files) {
     st.pendingFiles = Array.isArray(files) ? files.filter(Boolean) : [];
     if (!el.dropHelp) return;
@@ -81,15 +89,21 @@
     el.dropHelp.textContent = `${st.pendingFiles.length} files selected (${A.fmtBytes(totalSize)})`;
   }
 
+  /** Return the files to upload from either the file input or pending state. */
   function selectedFiles() {
     if (el.file && el.file.files && el.file.files.length) return Array.from(el.file.files);
     return Array.from(st.pendingFiles || []);
   }
 
+  /** Strip curly/smart quotes and whitespace from a user-supplied evidence path. */
   function sanitizeEvidencePath(raw) {
     return String(raw || "").replace(/["\u201c\u201d]/g, "").trim();
   }
 
+  /**
+   * Submit evidence to the backend: create a case, upload/link evidence,
+   * populate artifacts, and advance to Step 2.
+   */
   async function submitEvidence() {
     A.clearMsg(el.evidenceMsg);
     A.clearMsg(el.artifactsMsg);
@@ -136,6 +150,14 @@
     }
   }
 
+  /**
+   * Create a progress tracker for the evidence intake operation.
+   *
+   * Returns an object with setPhase/complete/stop methods that drive the
+   * progress bar and elapsed-time message during upload.
+   *
+   * @returns {{setPhase: function, complete: function, stop: function}}
+   */
   function createIntakeProgressTracker() {
     if (!el.evidenceProg) return { setPhase: () => {}, complete: () => {}, stop: () => {} };
     let cap = 30;
@@ -144,10 +166,7 @@
     const startedAt = Date.now();
 
     const updateMessage = () => {
-      const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-      const minutes = String(Math.floor(elapsedSeconds / 60)).padStart(2, "0");
-      const seconds = String(elapsedSeconds % 60).padStart(2, "0");
-      A.setMsg(el.evidenceMsg, `Intake in progress... (${minutes}:${seconds})`, "info");
+      A.setMsg(el.evidenceMsg, `Intake in progress... (${A.fmtElapsed(startedAt)})`, "info");
     };
 
     const tickProgress = () => {
@@ -178,11 +197,20 @@
     };
   }
 
+  /** Toggle the evidence submit button and progress bar visibility. @param {boolean} on */
   function setEvidenceBusy(on) {
     if (el.submitEvidence) el.submitEvidence.disabled = on;
     if (el.evidenceProgWrap) el.evidenceProgWrap.hidden = !on;
   }
 
+  /**
+   * Apply evidence intake response data to the UI.
+   *
+   * Populates artifact checkboxes, renders the evidence summary card, and
+   * handles the unsupported-evidence error state.
+   *
+   * @param {Object} data - Backend response from the evidence endpoint.
+   */
   function applyEvidence(data) {
     st.artifacts = Array.isArray(data.available_artifacts) ? data.available_artifacts : [];
     st.artifactNames = {};
@@ -223,6 +251,12 @@
     updateParseButton();
   }
 
+  /**
+   * Populate the evidence summary card with metadata and hashes.
+   *
+   * @param {Object} m - Metadata object (hostname, os_version, domain, ips).
+   * @param {Object} h - Hashes object (sha256).
+   */
   function renderSummary(m, h) {
     if (el.sumHost) el.sumHost.textContent = String(m.hostname || "-");
     if (el.sumOs) el.sumOs.textContent = String(m.os_version || "-");
@@ -234,12 +268,19 @@
 
   // ── Artifact checkboxes & mode controls ────────────────────────────────────
 
+  /** Return all artifact checkbox `<input>` elements in the artifacts form. */
   function artifactBoxes() {
     return el.artifactsForm
       ? Array.from(el.artifactsForm.querySelectorAll("input[type='checkbox'][data-artifact-key]"))
       : [];
   }
 
+  /**
+   * Find the `<select>` mode dropdown for a given artifact key.
+   *
+   * @param {string} artifactKey - The artifact key to look up.
+   * @returns {HTMLSelectElement|null}
+   */
   function artifactModeSelectForKey(artifactKey) {
     if (!el.artifactsForm) return null;
     const key = String(artifactKey || "");
@@ -248,10 +289,19 @@
     return selects.find((select) => String(select.dataset.artifactKey || "") === key) || null;
   }
 
+  /** Normalise a mode string to MODE_PARSE_ONLY or MODE_PARSE_AND_AI. */
   function artifactModeValue(rawMode) {
     return String(rawMode || "").trim().toLowerCase() === A.MODE_PARSE_ONLY ? A.MODE_PARSE_ONLY : A.MODE_PARSE_AND_AI;
   }
 
+  /**
+   * Synchronise a mode `<select>` with its parent checkbox's state.
+   *
+   * Disables the select when the checkbox is unchecked or disabled.
+   *
+   * @param {HTMLInputElement} cb - The artifact checkbox.
+   * @param {HTMLSelectElement|null} [modeSelect] - Override for the select element.
+   */
   function syncArtifactModeControl(cb, modeSelect = null) {
     if (!(cb instanceof HTMLInputElement)) return;
     const select = modeSelect || artifactModeSelectForKey(cb.dataset.artifactKey || "");
@@ -260,6 +310,14 @@
     if (!select.disabled) select.value = artifactModeValue(select.value);
   }
 
+  /**
+   * Ensure a mode `<select>` dropdown exists for an artifact checkbox,
+   * creating one if necessary.
+   *
+   * @param {HTMLInputElement} cb - The artifact checkbox element.
+   * @param {string} [preferredMode=MODE_PARSE_AND_AI] - Initial mode value.
+   * @returns {HTMLSelectElement|null} The mode select element.
+   */
   function ensureArtifactModeControl(cb, preferredMode = A.MODE_PARSE_AND_AI) {
     if (!(cb instanceof HTMLInputElement)) return null;
     const key = String(cb.dataset.artifactKey || "").trim();
@@ -292,6 +350,7 @@
     return select;
   }
 
+  /** Ensure all artifact checkboxes have an associated mode `<select>`. */
   function ensureArtifactModeControls() {
     artifactBoxes().forEach((cb) => {
       const select = ensureArtifactModeControl(cb, A.MODE_PARSE_AND_AI);
@@ -299,6 +358,7 @@
     });
   }
 
+  /** Update the visible text of a checkbox's parent `<label>`. */
   function setLabelText(cb, text) {
     const label = cb.closest("label");
     if (!label) return;
@@ -307,11 +367,20 @@
     else label.appendChild(document.createTextNode(` ${text}`));
   }
 
+  /** Remove the dynamically-created "Additional" artifact category from the DOM. */
   function clearDynamicArtifacts() {
     const d = q("dynamic-artifact-category");
     if (d) d.remove();
   }
 
+  /**
+   * Populate the artifact selection UI from the backend's available-artifact list.
+   *
+   * Updates existing checkboxes (enabling available ones) and creates a
+   * dynamic "Additional" category for any artifacts not in the static HTML.
+   *
+   * @param {Object[]} list - Array of artifact descriptors with key, name, available.
+   */
   function populateArtifacts(list) {
     clearDynamicArtifacts();
     const map = new Map();
@@ -376,6 +445,11 @@
 
   // ── Selection helpers ──────────────────────────────────────────────────────
 
+  /**
+   * Collect the selected artifact options (key + mode) from all checked checkboxes.
+   *
+   * @returns {{artifact_key: string, mode: string}[]}
+   */
   function selectedArtifactOptions() {
     return artifactBoxes()
       .filter((cb) => cb.checked && !cb.disabled && cb.dataset.artifactKey)
@@ -386,10 +460,18 @@
       });
   }
 
+  /** Return an array of selected artifact keys (all modes). */
   function selectedArtifacts() {
     return selectedArtifactOptions().map((option) => option.artifact_key);
   }
 
+  /**
+   * Return artifact keys that are set to "Parse and use in AI" mode.
+   *
+   * @param {Object[]|null} [options] - Pre-computed options array; defaults to
+   *     selectedArtifactOptions().
+   * @returns {string[]}
+   */
   function selectedAiArtifacts(options = null) {
     const artifactOptions = Array.isArray(options) ? options : selectedArtifactOptions();
     return artifactOptions
@@ -400,10 +482,16 @@
 
   // ── Date range ─────────────────────────────────────────────────────────────
 
+  /** Read start and end date strings from the analysis date-range inputs. */
   function readAnalysisDateRangeInputs() {
     return { start: A.val(el.analysisDateStart), end: A.val(el.analysisDateEnd) };
   }
 
+  /**
+   * Validate the analysis date-range inputs.
+   *
+   * @returns {{ok: boolean, message?: string, range?: {start_date: string, end_date: string}|null}}
+   */
   function validateAnalysisDateRange() {
     const { start, end } = readAnalysisDateRangeInputs();
     if (!start && !end) return { ok: true, range: null };
@@ -414,6 +502,12 @@
 
   // ── Artifact profiles ──────────────────────────────────────────────────────
 
+  /**
+   * Normalise a raw profile object from the backend into a consistent shape.
+   *
+   * @param {Object} rawProfile - Raw profile descriptor.
+   * @returns {{name: string, builtin: boolean, artifact_options: Object[]}|null}
+   */
   function normalizeArtifactProfile(rawProfile) {
     if (!A.isObj(rawProfile)) return null;
     const name = String(rawProfile.name || "").trim();
@@ -430,12 +524,18 @@
     return { name, builtin: !!rawProfile.builtin, artifact_options: artifactOptions };
   }
 
+  /** Find a profile in st.profiles by case-insensitive name match. */
   function findProfileByName(name) {
     const wanted = String(name || "").trim().toLowerCase();
     if (!wanted) return null;
     return st.profiles.find((profile) => String(profile.name || "").trim().toLowerCase() === wanted) || null;
   }
 
+  /**
+   * Rebuild the profile `<select>` dropdown options from st.profiles.
+   *
+   * @param {string} [preferredName=""] - Profile name to select after render.
+   */
   function renderArtifactProfileOptions(preferredName = "") {
     if (!el.profileSelect) return;
     const currentValue = String(preferredName || el.profileSelect.value || A.RECOMMENDED_PROFILE).trim().toLowerCase();
@@ -453,6 +553,11 @@
     if (selected) el.profileSelect.value = selected.name;
   }
 
+  /**
+   * Fetch artifact profiles from the backend and populate the dropdown.
+   *
+   * @param {string} [preferredName=""] - Profile name to select after loading.
+   */
   async function loadArtifactProfiles(preferredName = "") {
     const response = await A.apiJson("/api/artifact-profiles", { method: "GET" });
     const profilesRaw = Array.isArray(response && response.profiles) ? response.profiles : [];
@@ -463,6 +568,14 @@
     renderArtifactProfileOptions(preferredName);
   }
 
+  /**
+   * Apply a profile to the artifact checkboxes and mode selects.
+   *
+   * @param {Object} profile - Normalised profile object.
+   * @param {Object} [opts={}] - Options.
+   * @param {boolean} [opts.silent] - Suppress the success toast.
+   * @returns {boolean} True if the profile was applied.
+   */
   function applyArtifactProfile(profile, opts = {}) {
     if (!profile) return false;
     const silent = !!opts.silent;
@@ -487,6 +600,7 @@
     return true;
   }
 
+  /** Load and apply the currently selected profile from the dropdown. */
   function applySelectedProfile() {
     A.clearMsg(el.artifactsMsg);
     const selectedName = el.profileSelect ? el.profileSelect.value : A.RECOMMENDED_PROFILE;
@@ -495,6 +609,7 @@
     applyArtifactProfile(profile);
   }
 
+  /** Save the current artifact selection as a named profile on the backend. */
   async function saveCurrentProfile() {
     A.clearMsg(el.artifactsMsg);
     const profileName = A.val(el.profileName);
@@ -518,6 +633,7 @@
 
   // ── Artifact step wiring ───────────────────────────────────────────────────
 
+  /** Wire up event listeners for the artifact selection step (Step 2). */
   function setupArtifacts() {
     if (!el.artifactsForm) return;
     el.artifactsForm.addEventListener("change", (e) => {
@@ -550,6 +666,11 @@
     if (el.cancelParse) el.cancelParse.addEventListener("click", A.cancelParse);
   }
 
+  /**
+   * Apply a checkbox preset ("recommended" selects most, "clear" unchecks all).
+   *
+   * @param {string} mode - "recommended" or "clear".
+   */
   function applyPreset(mode) {
     artifactBoxes().forEach((cb) => {
       const select = ensureArtifactModeControl(cb, A.MODE_PARSE_AND_AI);
@@ -566,6 +687,7 @@
     updateParseButton();
   }
 
+  /** Update the parse button's disabled state, label, and cancel button visibility. */
   function updateParseButton() {
     const options = selectedArtifactOptions();
     const parseArtifacts = options.map((option) => option.artifact_key);

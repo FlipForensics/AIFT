@@ -16,6 +16,7 @@
 
   document.addEventListener("DOMContentLoaded", init);
 
+  /** Initialise the application: cache DOM, wire wizard, set up all modules. */
   function init() {
     cache();
     if (!el.wizard) return;
@@ -36,6 +37,7 @@
 
   // ── DOM cache ──────────────────────────────────────────────────────────────
 
+  /** Look up and cache all DOM element references used across the application. */
   function cache() {
     el.wizard = q("wizard");
     el.steps = Array.from(document.querySelectorAll(".wizard-step"));
@@ -138,6 +140,7 @@
 
   // ── Messages & timers ──────────────────────────────────────────────────────
 
+  /** Create status-message elements for each wizard step and settings panel. */
   function addMessages() {
     el.evidenceMsg = A.ensureMsg(el.evidenceForm, "evidence-message");
     el.artifactsMsg = A.ensureMsg(el.artifactsForm, "artifacts-message");
@@ -147,6 +150,7 @@
     if (el.parseErr) el.parseErr.hidden = true;
   }
 
+  /** Create elapsed-time display elements for parse and analysis steps. */
   function addTimers() {
     el.parseElapsed = A.ensureTimer(q("step-parsing"), "parse-elapsed");
     el.analysisElapsed = A.ensureTimer(q("step-analysis"), "analysis-elapsed");
@@ -154,6 +158,7 @@
 
   // ── Wizard navigation ─────────────────────────────────────────────────────
 
+  /** Set up wizard navigation buttons and step-indicator click handlers. */
   function setupWizard() {
     addNavButtons();
     el.indicators.forEach((i) => {
@@ -166,6 +171,7 @@
     });
   }
 
+  /** Inject Back/Next buttons and hint paragraphs into each wizard step. */
   function addNavButtons() {
     const total = A.STEP_IDS.length;
     const stepLabels = ["Evidence", "Artifact Selection", "Parsing", "Analysis", "Results"];
@@ -204,6 +210,7 @@
     updateNav();
   }
 
+  /** Refresh the enabled/disabled state of all Next buttons and step indicators. */
   function updateNav() {
     Array.from(document.querySelectorAll(".wizard-nav button[data-next-step]")).forEach((b) => {
       const nextStep = Number(b.dataset.nextStep || 1);
@@ -236,6 +243,14 @@
     });
   }
 
+  /**
+   * Navigate to a wizard step by number (1-based).
+   *
+   * Updates visibility, indicator highlights, navigation state, and
+   * triggers side effects (e.g. loading chat history when entering Step 5).
+   *
+   * @param {number} n - Target step number.
+   */
   function showStep(n) {
     const priorStep = st.step;
     const rawStep = Number(n);
@@ -260,15 +275,23 @@
     }
   }
 
+  /** Show or hide the evidence-loaded banner based on whether a case is active. */
   function syncEvidenceBanner() {
     if (!el.evidenceLoadedBanner) return;
     el.evidenceLoadedBanner.hidden = !A.activeCaseId();
   }
 
+  /** Return true if the user can navigate to step n. @param {number} n */
   function canGo(n) {
     return !navBlockReason(n);
   }
 
+  /**
+   * Return a human-readable reason why step n is blocked, or "" if accessible.
+   *
+   * @param {number} n - Target step number.
+   * @returns {string} Blocking reason, or empty string.
+   */
   function navBlockReason(n) {
     const rawStep = Number(n);
     if (!Number.isFinite(rawStep)) return "";
@@ -292,6 +315,7 @@
     return "Complete the previous step first.";
   }
 
+  /** Display the navigation-blocked reason as an error in the relevant step. */
   function blockedMsg(n) {
     const reason = navBlockReason(n);
     if (!reason) return;
@@ -303,6 +327,7 @@
 
   // ── Full case reset ────────────────────────────────────────────────────────
 
+  /** Reset the entire application UI to its initial state (no active case). */
   function resetCaseUi() {
     A.closeParseSse();
     A.closeAnalysisSse();

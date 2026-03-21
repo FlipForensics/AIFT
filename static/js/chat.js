@@ -18,6 +18,7 @@
 
   // ── Results step wiring ────────────────────────────────────────────────────
 
+  /** Wire up results-step event listeners: downloads, new-analysis, chat UI. */
   function setupResults() {
     if (el.downloadReport) el.downloadReport.addEventListener("click", async () => downloadCaseFile("report"));
     if (el.downloadCsvs) el.downloadCsvs.addEventListener("click", async () => downloadCaseFile("csvs"));
@@ -40,6 +41,11 @@
 
   // ── Downloads ──────────────────────────────────────────────────────────────
 
+  /**
+   * Download a case artifact (report HTML or parsed CSVs zip).
+   *
+   * @param {string} kind - "report" or "csvs".
+   */
   async function downloadCaseFile(kind) {
     A.clearMsg(el.resultsMsg);
     const caseId = A.activeCaseId();
@@ -60,6 +66,7 @@
     }
   }
 
+  /** Create a temporary anchor to trigger a browser download for the given blob. */
   function triggerDownload(blob, name) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -73,6 +80,11 @@
 
   // ── Chat toggle & controls ─────────────────────────────────────────────────
 
+  /**
+   * Toggle the chat panel open/closed, optionally forcing a specific state.
+   *
+   * @param {boolean|null} [forceOpen=null] - True to open, false to close, null to toggle.
+   */
   function toggleChat(forceOpen = null) {
     if (!el.chatPanel || !el.chatToggle) return;
     const open = typeof forceOpen === "boolean" ? forceOpen : !!el.chatPanel.hidden;
@@ -87,6 +99,7 @@
     if (el.chatInput && !el.chatInput.disabled) el.chatInput.focus();
   }
 
+  /** Update disabled state of chat input, send button, and clear button. */
   function syncChatControls() {
     const busy = !!st.chat.run;
     if (el.chatInput) el.chatInput.disabled = busy;
@@ -94,15 +107,18 @@
     if (el.chatClear) el.chatClear.disabled = busy || !hasChatMessages();
   }
 
+  /** Return true if the chat thread contains at least one message row. */
   function hasChatMessages() {
     return !!(el.chatThread && el.chatThread.querySelector(".chat-message-row"));
   }
 
+  /** Scroll the chat thread container to the bottom. */
   function scrollChatToBottom() {
     if (!el.chatThread) return;
     el.chatThread.scrollTop = el.chatThread.scrollHeight;
   }
 
+  /** Normalise a role value to "user", "assistant", or empty string. */
   function strRole(value) {
     const role = String(value || "").trim().toLowerCase();
     if (role === "assistant" || role === "user") return role;
@@ -111,6 +127,7 @@
 
   // ── Chat history ───────────────────────────────────────────────────────────
 
+  /** Fetch and render chat history for the active case (no-op if already loaded). */
   async function loadChatHistory() {
     const caseId = A.activeCaseId();
     if (!caseId || !el.chatThread || st.chat.run) return;
@@ -123,6 +140,11 @@
     st.chat.historyLoadedCaseId = caseId;
   }
 
+  /**
+   * Render a full chat history array, paginating to show the last page first.
+   *
+   * @param {Object[]} history - Array of {role, content, metadata} message objects.
+   */
   function renderChatHistory(history) {
     if (!el.chatThread) return;
     el.chatThread.innerHTML = "";
@@ -227,6 +249,7 @@
     el.chatThread.scrollTop += addedHeight;
   }
 
+  /** Replace the chat thread contents with a "no messages" placeholder. */
   function renderChatEmptyState() {
     if (!el.chatThread) return;
     el.chatThread.innerHTML = "";
@@ -236,6 +259,7 @@
     el.chatThread.appendChild(empty);
   }
 
+  /** Remove the empty-state placeholder from the chat thread if present. */
   function removeChatEmptyState() {
     if (!el.chatThread) return;
     const empty = el.chatThread.querySelector("#chat-empty-state");
@@ -282,6 +306,14 @@
     return { row, bubble, contentNode, typingNode };
   }
 
+  /**
+   * Append a chat message to the thread and scroll to bottom.
+   *
+   * @param {string} role - "user" or "assistant".
+   * @param {string} content - Message text (Markdown).
+   * @param {Object} [opts] - Options (typing indicator, data retrieved).
+   * @returns {Object|null} The created DOM node references, or null.
+   */
   function appendChatMessage(role, content, opts = {}) {
     if (!el.chatThread) return null;
     removeChatEmptyState();
@@ -292,6 +324,7 @@
     return nodes;
   }
 
+  /** Render Markdown chat message text into a container element. */
   function renderChatMessageText(container, text) {
     if (!container) return;
     const value = String(text || "");
@@ -299,6 +332,7 @@
     A.renderMarkdownInto(container, value, "");
   }
 
+  /** Create an animated typing indicator (three bouncing dots). */
   function createTypingIndicator() {
     const indicator = document.createElement("div");
     indicator.className = "chat-typing-indicator";
@@ -313,6 +347,12 @@
     return indicator;
   }
 
+  /**
+   * Append or update a "Referenced: ..." indicator below a chat bubble.
+   *
+   * @param {HTMLElement} target - The chat bubble element.
+   * @param {string[]} artifacts - List of artifact names referenced.
+   */
   function appendDataRetrievedIndicator(target, artifacts) {
     if (!target) return;
     const clean = Array.isArray(artifacts)
@@ -330,6 +370,7 @@
 
   // ── Send message & SSE ─────────────────────────────────────────────────────
 
+  /** Validate, send the user's chat message, and open the response SSE stream. */
   async function sendChatMessage() {
     A.clearMsg(el.resultsMsg);
     const caseId = A.activeCaseId();
@@ -359,28 +400,25 @@
     }
   }
 
+  /**
+   * Open the chat response SSE stream for the given case.
+   *
+   * @param {string} caseId - Active case identifier.
+   */
   function startChatSse(caseId) {
-    closeChatSse();
-    const es = new EventSource(`/api/cases/${encodeURIComponent(caseId)}/chat/stream`);
-    st.chat.es = es;
-    es.onopen = () => { st.chat.retryCount = 0; };
-    es.onmessage = (ev) => {
-      st.chat.retryCount = 0;
-      const payload = A.safeJson(ev.data);
-      if (!payload) return;
-      const seq = A.num(payload.sequence, -1);
-      if (seq >= 0) {
-        if (seq <= st.chat.seq) return;
-        st.chat.seq = seq;
-      }
-      onChatEvent(caseId, payload);
-    };
-    es.onerror = () => {
-      if (!st.chat.run) return;
-      retryChatSse(caseId);
-    };
+    A.openSseStream(
+      `/api/cases/${encodeURIComponent(caseId)}/chat/stream`,
+      st.chat,
+      {
+        onEvent: (payload) => onChatEvent(caseId, payload),
+        onError: () => {
+          if (st.chat.run) retryChatSse(caseId);
+        },
+      },
+    );
   }
 
+  /** Dispatch a single chat SSE event (token, done, error) to the UI. */
   function onChatEvent(caseId, payload) {
     if (caseId !== A.activeCaseId()) { finalizeChatStream(); return; }
     const type = String(payload.type || "");
@@ -419,6 +457,7 @@
     }
   }
 
+  /** Ensure a pending assistant chat bubble exists (create one if needed). */
   function ensurePendingChatMessage() {
     if (st.chat.pending && st.chat.pending.contentNode) return st.chat.pending;
     const created = appendChatMessage("assistant", "", { typing: true });
@@ -428,6 +467,7 @@
     return st.chat.pending;
   }
 
+  /** Remove the typing indicator from the pending bubble and clear pending state. */
   function finalizePendingChatMessage() {
     if (!st.chat.pending) return;
     if (st.chat.pending.typingNode && st.chat.pending.typingNode.parentNode) {
@@ -440,22 +480,24 @@
 
   // ── SSE retry / close ──────────────────────────────────────────────────────
 
+  /**
+   * Attempt to reconnect the chat SSE stream with exponential backoff.
+   *
+   * @param {string} caseId - Active case identifier.
+   */
   function retryChatSse(caseId) {
-    if (st.chat.retry || !st.chat.run) return;
-    const attempt = st.chat.retryCount + 1;
-    if (attempt > A.SSE_MAX_RETRIES) {
-      finalizeChatError(`Chat connection lost after ${A.SSE_MAX_RETRIES} retries.`);
-      return;
-    }
-    st.chat.retryCount = attempt;
-    const delay = A.sseRetryDelayMs(attempt);
-    closeChatSse();
-    st.chat.retry = window.setTimeout(() => {
-      st.chat.retry = null;
-      if (st.chat.run) startChatSse(caseId);
-    }, delay);
+    if (!st.chat.run) return;
+    A.retrySseStream(st.chat, {
+      reconnect: () => {
+        if (st.chat.run) startChatSse(caseId);
+      },
+      onMaxRetries: () => {
+        finalizeChatError(`Chat connection lost after ${A.SSE_MAX_RETRIES} retries.`);
+      },
+    });
   }
 
+  /** Display an error in the pending chat bubble and finalise the stream. */
   function finalizeChatError(message) {
     const pending = ensurePendingChatMessage();
     const current = String(pending.text || "").trim();
@@ -466,10 +508,12 @@
     A.setMsg(el.resultsMsg, message, "error");
   }
 
+  /** Close the chat SSE EventSource and clear pending retries. */
   function closeChatSse() {
     A.closeSseChannel(st.chat);
   }
 
+  /** Close SSE, mark chat as idle, and refresh controls. */
   function finalizeChatStream() {
     closeChatSse();
     st.chat.run = false;
@@ -478,6 +522,7 @@
     syncChatControls();
   }
 
+  /** Reset all chat state, close SSE, clear UI, and restore the empty state. */
   function resetChatState() {
     closeChatSse();
     st.chat.run = false;
@@ -498,6 +543,7 @@
     syncChatControls();
   }
 
+  /** Confirm and delete chat history for the active case on the backend. */
   async function clearChat() {
     const caseId = A.activeCaseId();
     if (!caseId) return A.setMsg(el.resultsMsg, "No active case for chat.", "error");

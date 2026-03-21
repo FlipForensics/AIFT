@@ -14,6 +14,7 @@
 
   // ── Analysis submission ────────────────────────────────────────────────────
 
+  /** Wire up the analysis form: submit, cancel, and settings link handlers. */
   function setupAnalysis() {
     if (!el.analysisForm) return;
     el.analysisForm.addEventListener("submit", async (e) => {
@@ -29,6 +30,12 @@
     }
   }
 
+  /**
+   * Submit the analysis request.
+   *
+   * Validates preconditions (case exists, parse complete, AI artifacts selected),
+   * posts to the analyze endpoint, and opens the SSE progress stream.
+   */
   async function submitAnalysis() {
     A.clearMsg(el.analysisMsg);
     const caseId = A.activeCaseId();
@@ -80,30 +87,23 @@
 
   // ── Analysis SSE ───────────────────────────────────────────────────────────
 
+  /** Open the analysis-progress SSE stream for the active case. */
   function startAnalysisSse() {
-    closeAnalysisSse();
     const caseId = A.activeCaseId();
     if (!caseId) return A.setMsg(el.analysisMsg, "No case ID for analysis stream.", "error");
-    const es = new EventSource(`/api/cases/${encodeURIComponent(caseId)}/analyze/progress`);
-    st.analysis.es = es;
-    es.onopen = () => { st.analysis.retryCount = 0; };
-    es.onmessage = (ev) => {
-      st.analysis.retryCount = 0;
-      const p = A.safeJson(ev.data);
-      if (!p) return;
-      const seq = A.num(p.sequence, -1);
-      if (seq >= 0) {
-        if (seq <= st.analysis.seq) return;
-        st.analysis.seq = seq;
-      }
-      onAnalysisEvent(p);
-    };
-    es.onerror = () => {
-      if (st.analysis.done || st.analysis.fail || !st.analysis.run) return;
-      retryAnalysisSse();
-    };
+    A.openSseStream(
+      `/api/cases/${encodeURIComponent(caseId)}/analyze/progress`,
+      st.analysis,
+      {
+        onEvent: (p) => onAnalysisEvent(p),
+        onError: () => {
+          if (!st.analysis.done && !st.analysis.fail && st.analysis.run) retryAnalysisSse();
+        },
+      },
+    );
   }
 
+  /** Dispatch a single analysis SSE event to the appropriate UI handler. */
   function onAnalysisEvent(p) {
     const t = String(p.type || "");
     if (t === "analysis_started") {
@@ -178,22 +178,33 @@
 
   // ── Analysis data upserts ──────────────────────────────────────────────────
 
-  function upsertAnalysis(r) {
-    const key = String(r.artifact_key || r.key || `artifact_${st.analysis.order.length + 1}`);
-    const name = String(r.artifact_name || A.artifactName(key));
-    const rawText = String(r.analysis || r.result || "");
-    const text = A.stripLeadingReasoningBlocks(rawText) || rawText;
-    const model = String(r.model || "");
-    if (!st.analysis.byKey[key]) st.analysis.order.push(key);
-    st.analysis.byKey[key] = { key, name, text, model, thinkingText: "", partialText: "", isThinking: false };
-  }
-
-  function upsertAnalysisStarted(r) {
+  /**
+   * Extract the common key, name, and model from an analysis SSE payload,
+   * and ensure the key is tracked in st.analysis.order.
+   *
+   * @param {Object} r - Raw event payload.
+   * @returns {{key: string, name: string, model: string, current: Object}}
+   */
+  function extractAnalysisIdentifiers(r) {
     const key = String(r.artifact_key || r.key || `artifact_${st.analysis.order.length + 1}`);
     const name = String(r.artifact_name || A.artifactName(key));
     const model = String(r.model || "");
     if (!st.analysis.byKey[key]) st.analysis.order.push(key);
     const current = st.analysis.byKey[key] || {};
+    return { key, name, model, current };
+  }
+
+  /** Record a completed artifact analysis result. */
+  function upsertAnalysis(r) {
+    const { key, name, model } = extractAnalysisIdentifiers(r);
+    const rawText = String(r.analysis || r.result || "");
+    const text = A.stripLeadingReasoningBlocks(rawText) || rawText;
+    st.analysis.byKey[key] = { key, name, text, model, thinkingText: "", partialText: "", isThinking: false };
+  }
+
+  /** Record that artifact analysis has started (sets thinking state). */
+  function upsertAnalysisStarted(r) {
+    const { key, name, model, current } = extractAnalysisIdentifiers(r);
     st.analysis.byKey[key] = {
       key, name,
       text: String(current.text || ""),
@@ -204,12 +215,9 @@
     };
   }
 
+  /** Update thinking/partial text for an in-progress artifact analysis. */
   function upsertAnalysisThinking(r) {
-    const key = String(r.artifact_key || r.key || `artifact_${st.analysis.order.length + 1}`);
-    const name = String(r.artifact_name || A.artifactName(key));
-    const model = String(r.model || "");
-    if (!st.analysis.byKey[key]) st.analysis.order.push(key);
-    const current = st.analysis.byKey[key] || {};
+    const { key, name, model, current } = extractAnalysisIdentifiers(r);
     st.analysis.byKey[key] = {
       key, name,
       text: String(current.text || ""),
@@ -220,6 +228,7 @@
     };
   }
 
+  /** Resolve all still-thinking artifacts to their best available text. */
   function finalizeAnyThinkingArtifacts() {
     st.analysis.order.forEach((key) => {
       const current = st.analysis.byKey[key];
@@ -232,6 +241,7 @@
 
   // ── Rendering helpers ──────────────────────────────────────────────────────
 
+  /** Return the best display text for an analysis entry (thinking placeholder or final). */
   function resolveAnalysisText(r) {
     if (r.isThinking && !String(r.text || "").trim()) {
       return String(r.thinkingText || r.partialText || "Model is thinking...");
@@ -239,6 +249,7 @@
     return r.text;
   }
 
+  /** Render all per-artifact analysis cards into the analysis results list. */
   function renderAnalysis() {
     if (!el.analysisList) return;
     el.analysisList.innerHTML = "";
@@ -270,11 +281,13 @@
     });
   }
 
+  /** Render the executive summary markdown into the results page. */
   function renderExecSummary() {
     if (!el.summaryOut) return;
     A.renderMarkdownInto(el.summaryOut, st.analysis.summary, "Summary is generated after analysis completes.");
   }
 
+  /** Render collapsible per-artifact findings `<details>` elements. */
   function renderFindings() {
     if (!el.findings) return;
     Array.from(el.findings.children).forEach((c) => {
@@ -304,42 +317,43 @@
     });
   }
 
+  /** Update the provider name display in the analysis step header. */
   function setProvider(text) {
     if (el.providerName) el.providerName.textContent = text || "Not configured";
   }
 
   // ── SSE retry / close / cancel ─────────────────────────────────────────────
 
+  /** Attempt to reconnect the analysis SSE stream with exponential backoff. */
   function retryAnalysisSse() {
-    if (st.analysis.retry || st.analysis.done || st.analysis.fail || !st.analysis.run) return;
-    const attempt = st.analysis.retryCount + 1;
-    if (attempt > A.SSE_MAX_RETRIES) return failAnalysisSseReconnect();
-    st.analysis.retryCount = attempt;
-    const delay = A.sseRetryDelayMs(attempt);
-    closeAnalysisSse();
-    A.setMsg(el.analysisMsg, `Analysis progress connection dropped. Reconnecting (${attempt}/${A.SSE_MAX_RETRIES}) in ${Math.ceil(delay / 1000)}s...`, "error");
-    st.analysis.retry = window.setTimeout(() => {
-      st.analysis.retry = null;
-      if (!st.analysis.done && !st.analysis.fail && st.analysis.run) startAnalysisSse();
-    }, delay);
+    if (st.analysis.done || st.analysis.fail || !st.analysis.run) return;
+    A.retrySseStream(st.analysis, {
+      reconnect: () => {
+        if (!st.analysis.done && !st.analysis.fail && st.analysis.run) startAnalysisSse();
+      },
+      onRetryScheduled: (attempt, delaySec) => {
+        A.setMsg(el.analysisMsg, `Analysis progress connection dropped. Reconnecting (${attempt}/${A.SSE_MAX_RETRIES}) in ${delaySec}s...`, "error");
+      },
+      onMaxRetries: () => {
+        st.analysis.run = false;
+        st.analysis.done = false;
+        st.analysis.fail = true;
+        st.analysis.retryCount = 0;
+        A.stopTimer("analysis");
+        closeAnalysisSse();
+        if (el.runBtn) el.runBtn.disabled = false;
+        A.setMsg(el.analysisMsg, `Analysis progress connection lost after ${A.SSE_MAX_RETRIES} retries. Run analysis again.`, "error");
+        A.updateNav();
+      },
+    });
   }
 
-  function failAnalysisSseReconnect() {
-    st.analysis.run = false;
-    st.analysis.done = false;
-    st.analysis.fail = true;
-    st.analysis.retryCount = 0;
-    A.stopTimer("analysis");
-    closeAnalysisSse();
-    if (el.runBtn) el.runBtn.disabled = false;
-    A.setMsg(el.analysisMsg, `Analysis progress connection lost after ${A.SSE_MAX_RETRIES} retries. Run analysis again.`, "error");
-    A.updateNav();
-  }
-
+  /** Close the analysis SSE EventSource and clear pending retries. */
   function closeAnalysisSse() {
     A.closeSseChannel(st.analysis);
   }
 
+  /** Cancel any in-progress analysis: abort HTTP, close SSE, notify backend. */
   function cancelAnalysis() {
     if (st.analysis.abort) {
       st.analysis.abort.abort();
@@ -364,6 +378,7 @@
     }
   }
 
+  /** Reset all analysis state, close SSE, and clear rendered results. */
   function resetAnalysisState() {
     closeAnalysisSse();
     A.stopTimer("analysis");
