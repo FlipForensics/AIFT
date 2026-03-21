@@ -232,40 +232,6 @@ Parsed artifact data is also available as a downloadable CSV bundle for further 
 
 ---
 
-## Project Structure
-
-```
-aift/
-├── aift.py              # Entry point - run this
-├── config.yaml          # Created on first run
-├── requirements.txt     # Python dependencies
-├── app/                 # Backend (Flask routes, parsing, analysis, reporting)
-├── config/              # Application configuration files
-├── images/              # Branding assets
-├── profile/             # Artifact selection presets
-├── prompts/             # AI prompt templates (customizable)
-│   ├── artifact_instructions/  # Per-artifact analysis guidance
-├── static/              # Frontend assets (CSS + vanilla JS)
-├── templates/           # Jinja2 templates (UI + report)
-├── tests/               # Unit tests
-└── cases/               # Case data (created at runtime)
-    └── <case-id>/
-        ├── evidence/            # Uploaded evidence files
-        ├── parsed/              # Parsed artifact CSVs
-        ├── prompts/             # Saved AI prompts (auto-generated)
-        ├── reports/             # Generated HTML reports
-        ├── chat_history.jsonl   # Chat conversation log (per case)
-        └── audit.jsonl          # Append-only audit trail
-```
-
-Prompt templates in `prompts/` are plain markdown files. Edit them to tune AI analysis behavior without touching code. The `chunk_merge.md` template controls how findings from chunked analysis (used for small-context local models) are merged into a single result.
-
-The `config/artifact_ai_columns.yaml` file controls which columns from each parsed artifact are sent to the AI - edit it to include or exclude fields per artifact to fine-tune what the AI sees.
-
-During analysis, every prompt sent to the AI is saved to the case's `prompts/` directory for audit and reproducibility.
-
----
-
 ## Disclaimer
 
 AIFT output is AI-assisted. All findings must be independently verified by a qualified forensic examiner before use in any legal, regulatory, or formal investigative proceeding. The AI analyzes only the data provided and may not capture all relevant artifacts or context.
