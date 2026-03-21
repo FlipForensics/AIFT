@@ -258,3 +258,57 @@ describe("parse button label", () => {
     expect(document.getElementById("parse-selected").textContent).toBe("Parse Selected");
   });
 });
+
+// ── Re-parse state cleanup ─────────────────────────────────────────────────
+
+describe("re-parse clears stale frontend state", () => {
+  test("resetParseState clears analysis state", () => {
+    A.setCaseId("test-case-123");
+    // Simulate completed parse and analysis
+    A.st.parse.done = true;
+    A.st.parse.run = false;
+    A.st.analysis.done = true;
+    A.st.analysis.run = false;
+    A.st.analysis.order = ["runkeys"];
+    A.st.analysis.byKey = { runkeys: { analysis: "old" } };
+    A.st.analysis.summary = "old summary";
+
+    // resetParseState should also reset analysis
+    A.resetParseState();
+
+    expect(A.st.parse.done).toBe(false);
+    expect(A.st.parse.run).toBe(false);
+    expect(A.st.parse.rows).toEqual({});
+    expect(A.st.parse.status).toEqual({});
+    expect(A.st.analysis.done).toBe(false);
+    expect(A.st.analysis.run).toBe(false);
+    expect(A.st.analysis.order).toEqual([]);
+    expect(A.st.analysis.byKey).toEqual({});
+    expect(A.st.analysis.summary).toBe("");
+  });
+
+  test("resetParseState resets parse button to 'Parse Selected'", () => {
+    A.setCaseId("test-case-123");
+    A.st.parse.done = true;
+    A.updateParseButton();
+    expect(document.getElementById("parse-selected").textContent).toBe("Restart Parsing");
+
+    A.resetParseState();
+    expect(document.getElementById("parse-selected").textContent).toBe("Parse Selected");
+  });
+
+  test("resetParseState updates nav so analysis step becomes blocked", () => {
+    A.setCaseId("test-case-123");
+    A.st.selected = ["evtx"];
+    A.st.selectedAi = ["evtx"];
+    A.st.parse.done = true;
+
+    A.updateNav();
+    // Step 4 (analysis) should be reachable when parse is done
+    expect(A.el.indicators[3].classList.contains("is-disabled")).toBe(false);
+
+    A.resetParseState();
+    // After reset, step 4 should be blocked again
+    expect(A.el.indicators[3].classList.contains("is-disabled")).toBe(true);
+  });
+});
