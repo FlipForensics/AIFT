@@ -75,6 +75,7 @@ from .state import (
     deep_merge,
     audit_config_change,
     cleanup_terminal_cases,
+    safe_name,
 )
 from .artifacts import (
     RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS,  # noqa: F401 -- re-exported for test access
@@ -193,10 +194,17 @@ def create_case() -> tuple[Response, int]:
     if not isinstance(payload, dict):
         return error_response("Request body must be a JSON object.", 400)
     case_name = str(payload.get("case_name", "")).strip()
+    has_custom_name = bool(case_name)
     if not case_name:
         case_name = datetime.now().strftime("Case %Y-%m-%d %H:%M:%S")
 
-    case_id = str(uuid4())
+    # Use sanitised case name + timestamp as folder name for readability;
+    # fall back to UUID if no custom name was provided.
+    if has_custom_name:
+        folder_name = safe_name(case_name, "case") + "_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+    else:
+        folder_name = str(uuid4())
+    case_id = folder_name
     case_dir = CASES_ROOT / case_id
     (case_dir / "evidence").mkdir(parents=True, exist_ok=True)
     (case_dir / "parsed").mkdir(parents=True, exist_ok=True)
