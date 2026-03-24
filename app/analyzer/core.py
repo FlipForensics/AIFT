@@ -57,14 +57,15 @@ from .utils import (
 LOGGER = logging.getLogger(__name__)
 
 try:
-    from ..parser import ARTIFACT_REGISTRY
+    from ..parser import LINUX_ARTIFACT_REGISTRY, WINDOWS_ARTIFACT_REGISTRY
 except Exception as error:
     LOGGER.warning(
-        "Failed to import artifact registry from app.parser: %s. "
+        "Failed to import artifact registries from app.parser: %s. "
         "Artifact metadata lookups will be unavailable.",
         error,
     )
-    ARTIFACT_REGISTRY: dict[str, dict[str, str]] = {}
+    WINDOWS_ARTIFACT_REGISTRY: dict[str, dict[str, str]] = {}
+    LINUX_ARTIFACT_REGISTRY: dict[str, dict[str, str]] = {}
 
 __all__ = ["AnalysisCancelledError", "ForensicAnalyzer"]
 
@@ -603,7 +604,10 @@ class ForensicAnalyzer:
         return fallback
 
     def _resolve_artifact_metadata(self, artifact_key: str) -> dict[str, str]:
-        """Look up artifact metadata from the registry.
+        """Look up artifact metadata from the Windows and Linux registries.
+
+        Searches both OS-specific registries so that metadata resolution
+        works regardless of which OS the evidence originated from.
 
         Args:
             artifact_key: Artifact identifier.
@@ -612,14 +616,16 @@ class ForensicAnalyzer:
             A dict with at least ``name``, ``description``, and
             ``analysis_hint`` keys.
         """
-        if artifact_key in ARTIFACT_REGISTRY:
-            metadata = ARTIFACT_REGISTRY[artifact_key]
-            return {str(key): str(value) for key, value in metadata.items()}
+        for registry in (WINDOWS_ARTIFACT_REGISTRY, LINUX_ARTIFACT_REGISTRY):
+            if artifact_key in registry:
+                metadata = registry[artifact_key]
+                return {str(key): str(value) for key, value in metadata.items()}
 
         normalized = normalize_artifact_key(artifact_key)
-        if normalized in ARTIFACT_REGISTRY:
-            metadata = ARTIFACT_REGISTRY[normalized]
-            return {str(key): str(value) for key, value in metadata.items()}
+        for registry in (WINDOWS_ARTIFACT_REGISTRY, LINUX_ARTIFACT_REGISTRY):
+            if normalized in registry:
+                metadata = registry[normalized]
+                return {str(key): str(value) for key, value in metadata.items()}
 
         return {
             "name": artifact_key,

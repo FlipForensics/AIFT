@@ -1,23 +1,29 @@
 """Artifact registry and prompt-loading helpers for forensic parsing.
 
-Maintains the :data:`ARTIFACT_REGISTRY` catalogue that maps each supported
-forensic artifact to its Dissect function name, category, human-readable
-description, and analysis guidance.  Guidance text is loaded from Markdown
-files in ``prompts/artifact_instructions/`` when available, falling back to
-inline ``analysis_hint`` values.
+Maintains OS-specific artifact registries that map each supported forensic
+artifact to its Dissect function name, category, human-readable description,
+and analysis guidance.  Guidance text is loaded from Markdown files in
+``prompts/artifact_instructions/`` (Windows) or
+``prompts/artifacts_linux/`` (Linux) when available, falling back to inline
+``analysis_hint`` values.
 
 Attributes:
-    ARTIFACT_REGISTRY: Mapping of artifact key to metadata dict (name,
-        category, Dissect function, description, analysis hints).
+    WINDOWS_ARTIFACT_REGISTRY: Windows artifact catalogue.
+    LINUX_ARTIFACT_REGISTRY: Linux artifact catalogue.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-__all__ = ["ARTIFACT_REGISTRY"]
+__all__ = [
+    "LINUX_ARTIFACT_REGISTRY",
+    "WINDOWS_ARTIFACT_REGISTRY",
+    "get_artifact_registry",
+]
 
 _ARTIFACT_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts" / "artifact_instructions"
+_LINUX_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts" / "artifacts_linux"
 
 
 def _artifact_prompt_name_candidates(artifact_key: str) -> list[str]:
@@ -45,17 +51,23 @@ def _artifact_prompt_name_candidates(artifact_key: str) -> list[str]:
     return candidates
 
 
-def _load_artifact_guidance_prompt(artifact_key: str) -> str:
-    """Load a Markdown guidance prompt for an artifact from the prompts directory.
+def _load_artifact_guidance_prompt(
+    artifact_key: str,
+    prompts_dir: Path | None = None,
+) -> str:
+    """Load a Markdown guidance prompt for an artifact from a prompts directory.
 
     Args:
         artifact_key: Artifact identifier to look up.
+        prompts_dir: Directory to search for prompt files.  Defaults to
+            :data:`_ARTIFACT_PROMPTS_DIR` (Windows prompts).
 
     Returns:
         The prompt text, or an empty string if no matching file is found.
     """
+    search_dir = prompts_dir if prompts_dir is not None else _ARTIFACT_PROMPTS_DIR
     for prompt_stem in _artifact_prompt_name_candidates(artifact_key):
-        prompt_path = _ARTIFACT_PROMPTS_DIR / f"{prompt_stem}.md"
+        prompt_path = search_dir / f"{prompt_stem}.md"
         try:
             if prompt_path.is_file():
                 prompt_text = prompt_path.read_text(encoding="utf-8").strip()
@@ -66,18 +78,23 @@ def _load_artifact_guidance_prompt(artifact_key: str) -> str:
     return ""
 
 
-def _apply_artifact_guidance_from_prompts(registry: dict[str, dict[str, str]]) -> None:
+def _apply_artifact_guidance_from_prompts(
+    registry: dict[str, dict[str, str]],
+    prompts_dir: Path | None = None,
+) -> None:
     """Populate ``artifact_guidance`` on each registry entry from prompt files.
 
     For every artifact, attempts to load a matching Markdown prompt from
-    ``prompts/artifact_instructions/``.  Falls back to the inline
+    the given prompts directory.  Falls back to the inline
     ``analysis_instructions`` or ``analysis_hint`` when no file exists.
 
     Args:
-        registry: The mutable :data:`ARTIFACT_REGISTRY` dictionary.
+        registry: The mutable artifact registry dictionary.
+        prompts_dir: Directory to search for prompt files.  Defaults to
+            :data:`_ARTIFACT_PROMPTS_DIR` (Windows prompts).
     """
     for artifact_key, artifact_details in registry.items():
-        prompt_guidance = _load_artifact_guidance_prompt(artifact_key)
+        prompt_guidance = _load_artifact_guidance_prompt(artifact_key, prompts_dir)
         if prompt_guidance:
             artifact_details["artifact_guidance"] = prompt_guidance
             continue
@@ -92,7 +109,7 @@ def _apply_artifact_guidance_from_prompts(registry: dict[str, dict[str, str]]) -
             artifact_details.setdefault("analysis_instructions", fallback_guidance)
 
 
-ARTIFACT_REGISTRY = {
+WINDOWS_ARTIFACT_REGISTRY: dict[str, dict[str, str]] = {
     "runkeys": {
         "name": "Run/RunOnce Keys",
         "category": "Persistence",
@@ -420,4 +437,283 @@ ARTIFACT_REGISTRY = {
     },
 }
 
-_apply_artifact_guidance_from_prompts(ARTIFACT_REGISTRY)
+_apply_artifact_guidance_from_prompts(WINDOWS_ARTIFACT_REGISTRY)
+
+# ---------------------------------------------------------------------------
+# Linux artifact registry
+# ---------------------------------------------------------------------------
+
+LINUX_ARTIFACT_REGISTRY: dict[str, dict[str, str]] = {
+    # -- Persistence --------------------------------------------------------
+    "cronjobs": {
+        "name": "Cron Jobs",
+        "category": "Persistence",
+        "function": "cronjobs",
+        "description": (
+            "Scheduled tasks defined in user crontabs and system-wide /etc/cron.* directories. "
+            "Cron is a common persistence and periodic-execution mechanism on Linux systems."
+        ),
+        "analysis_hint": (
+            "Flag cron entries that download or execute from /tmp, /dev/shm, or user-writable paths. "
+            "Look for base64-encoded commands, reverse shells, and entries added near the incident window."
+        ),
+    },
+    "services": {
+        "name": "Systemd Services",
+        "category": "Persistence",
+        "function": "services",
+        "description": (
+            "Systemd unit files describing services, their startup configuration, and current state. "
+            "Dissect's services function is OS-aware and returns Linux systemd units on Linux targets."
+        ),
+        "analysis_hint": (
+            "Identify services with ExecStart pointing to unusual paths (/tmp, /var/tmp, user home dirs). "
+            "Flag recently created or modified unit files, units set to restart on failure, and masked units."
+        ),
+    },
+    # -- Shell History ------------------------------------------------------
+    "bash_history": {
+        "name": "Bash History",
+        "category": "Shell History",
+        "function": "bash_history",
+        "description": (
+            "Per-user .bash_history files recording interactive shell commands. "
+            "Highest-value artifact on Linux for understanding attacker activity."
+        ),
+        "analysis_hint": (
+            "Hunt for curl/wget downloads, base64 encoding/decoding, reverse shells (bash -i, /dev/tcp), "
+            "credential access (cat /etc/shadow), reconnaissance (id, whoami, uname -a), persistence "
+            "installation (crontab -e, systemctl enable), and log tampering (truncate, shred, rm /var/log). "
+            "Sparse or empty history for active accounts may indicate clearing (history -c, HISTFILE=/dev/null)."
+        ),
+    },
+    "zsh_history": {
+        "name": "Zsh History",
+        "category": "Shell History",
+        "function": "zsh_history",
+        "description": (
+            "Per-user .zsh_history files recording Zsh shell commands with optional timestamps. "
+            "Zsh history may include timing data not present in bash history."
+        ),
+        "analysis_hint": (
+            "Apply the same suspicious-command patterns as bash_history. "
+            "Zsh extended history format includes timestamps — use them for timeline correlation."
+        ),
+    },
+    "fish_history": {
+        "name": "Fish History",
+        "category": "Shell History",
+        "function": "fish_history",
+        "description": (
+            "Per-user Fish shell history stored in YAML-like format with timestamps. "
+            "Less common but may capture activity missed by bash/zsh."
+        ),
+        "analysis_hint": (
+            "Apply the same suspicious-command patterns as bash_history. "
+            "Fish history includes timestamps per command — correlate with login records."
+        ),
+    },
+    "python_history": {
+        "name": "Python History",
+        "category": "Shell History",
+        "function": "python_history",
+        "description": (
+            "Python REPL history from interactive interpreter sessions. "
+            "May reveal attacker use of Python for scripting, exploitation, or data manipulation."
+        ),
+        "analysis_hint": (
+            "Look for import of socket/subprocess/os modules, file read/write operations on "
+            "sensitive paths, and network connection attempts. Python is commonly used for "
+            "exploit development and post-exploitation tooling."
+        ),
+    },
+    # -- Authentication -----------------------------------------------------
+    "wtmp": {
+        "name": "Login Records (wtmp)",
+        "category": "Authentication",
+        "function": "wtmp",
+        "description": (
+            "Successful login/logout records including user, terminal, source IP, and timestamps. "
+            "Linux equivalent of Windows logon events."
+        ),
+        "analysis_hint": (
+            "Flag logins from unexpected IPs, logins at unusual hours, root logins via SSH, "
+            "and logins from accounts that should not be interactive. Cross-check with auth logs "
+            "and shell history. wtmp can be tampered with — missing records or time gaps may "
+            "indicate editing."
+        ),
+    },
+    "btmp": {
+        "name": "Failed Logins (btmp)",
+        "category": "Authentication",
+        "function": "btmp",
+        "description": (
+            "Failed login attempt records including user, source IP, and timestamps. "
+            "High volumes indicate brute-force attacks or credential stuffing."
+        ),
+        "analysis_hint": (
+            "Look for high-frequency failures from single IPs (brute force), failures for "
+            "non-existent accounts (enumeration), and failures immediately before a successful "
+            "wtmp login (successful brute force). Correlate source IPs with successful logins."
+        ),
+    },
+    "lastlog": {
+        "name": "Last Login Records",
+        "category": "Authentication",
+        "function": "lastlog",
+        "description": (
+            "Last login timestamp and source for each user account on the system. "
+            "Provides a quick overview of account usage recency."
+        ),
+        "analysis_hint": (
+            "Identify accounts with recent logins that should be dormant or disabled. "
+            "Compare with wtmp for consistency — discrepancies may indicate log tampering."
+        ),
+    },
+    "users": {
+        "name": "User Accounts",
+        "category": "Authentication",
+        "function": "users",
+        "description": (
+            "User account information parsed from /etc/passwd and /etc/shadow, including "
+            "UIDs, shells, home directories, and password metadata."
+        ),
+        "analysis_hint": (
+            "Flag accounts with UID 0 (root-equivalent), accounts with login shells that "
+            "should have /sbin/nologin, recently created accounts (check shadow dates), and "
+            "accounts with empty password fields."
+        ),
+    },
+    "groups": {
+        "name": "Groups",
+        "category": "Authentication",
+        "function": "groups",
+        "description": (
+            "Group definitions from /etc/group including group members. "
+            "Shows privilege group membership such as sudo, wheel, and docker."
+        ),
+        "analysis_hint": (
+            "Check membership of privileged groups (sudo, wheel, docker, adm, root). "
+            "Flag unexpected users in administrative groups."
+        ),
+    },
+    "sudoers": {
+        "name": "Sudoers Config",
+        "category": "Authentication",
+        "function": "sudoers",
+        "description": (
+            "Sudo configuration from /etc/sudoers and /etc/sudoers.d/, defining which "
+            "users can run which commands with elevated privileges."
+        ),
+        "analysis_hint": (
+            "Flag NOPASSWD entries, overly broad command allowances (ALL), and rules for "
+            "unexpected users. Attackers often modify sudoers for passwordless privilege escalation."
+        ),
+    },
+    # -- Network ------------------------------------------------------------
+    "network.interfaces": {
+        "name": "Network Interfaces",
+        "category": "Network",
+        "function": "network.interfaces",
+        "description": (
+            "Network interface configuration including IP addresses, subnets, and interface names. "
+            "Provides context for understanding the system's network position."
+        ),
+        "analysis_hint": (
+            "Document all configured interfaces and IPs for correlation with login source IPs "
+            "and network artifacts from other systems. Flag unexpected interfaces (tunnels, bridges)."
+        ),
+    },
+    # -- Logs ---------------------------------------------------------------
+    "syslog": {
+        "name": "Syslog",
+        "category": "Logs",
+        "function": "syslog",
+        "description": (
+            "System log entries from /var/log/syslog, /var/log/messages, and /var/log/auth.log. "
+            "Central log source for authentication, service, and kernel events on Linux."
+        ),
+        "analysis_hint": (
+            "Filter for sshd, sudo, su, and PAM messages to reconstruct authentication activity. "
+            "Look for service start/stop events, kernel warnings, and log gaps that may indicate "
+            "tampering or system downtime."
+        ),
+    },
+    "journalctl": {
+        "name": "Systemd Journal",
+        "category": "Logs",
+        "function": "journalctl",
+        "description": (
+            "Structured journal entries from systemd-journald, covering services, kernel, and "
+            "user-session events with rich metadata."
+        ),
+        "analysis_hint": (
+            "Use unit and priority fields to filter for security-relevant events. "
+            "Journal entries complement syslog and may contain structured fields not "
+            "present in plain-text logs."
+        ),
+    },
+    "packagemanager": {
+        "name": "Package History",
+        "category": "Logs",
+        "function": "packagemanager",
+        "description": (
+            "Package installation, removal, and update history from apt, yum, dnf, or other "
+            "package managers. Shows software changes over time."
+        ),
+        "analysis_hint": (
+            "Flag recently installed packages, especially compilers (gcc, make), network tools "
+            "(nmap, netcat, socat), and packages installed outside normal maintenance windows. "
+            "Package removal near incident time may indicate cleanup."
+        ),
+    },
+    # -- SSH ----------------------------------------------------------------
+    "ssh.authorized_keys": {
+        "name": "SSH Authorized Keys",
+        "category": "SSH",
+        "function": "ssh.authorized_keys",
+        "description": (
+            "Per-user authorized_keys files listing public keys allowed for SSH authentication. "
+            "A primary persistence mechanism for SSH-based access."
+        ),
+        "analysis_hint": (
+            "Flag keys added recently or for unexpected accounts. Compare key fingerprints "
+            "across systems to identify lateral movement. Look for command-restricted keys "
+            "and keys with 'from=' options limiting source IPs."
+        ),
+    },
+    "ssh.known_hosts": {
+        "name": "SSH Known Hosts",
+        "category": "SSH",
+        "function": "ssh.known_hosts",
+        "description": (
+            "Per-user known_hosts files recording SSH server fingerprints the user has connected to. "
+            "Reveals outbound SSH connections and lateral movement targets."
+        ),
+        "analysis_hint": (
+            "Identify internal hosts the user SSHed to (lateral movement) and external hosts "
+            "(potential C2 or data exfiltration). Hashed known_hosts entries obscure hostnames "
+            "but IP-based entries may still be readable."
+        ),
+    },
+}
+
+_apply_artifact_guidance_from_prompts(LINUX_ARTIFACT_REGISTRY, _LINUX_PROMPTS_DIR)
+
+
+def get_artifact_registry(os_type: str) -> dict[str, dict[str, str]]:
+    """Return the artifact registry appropriate for the given OS type.
+
+    Args:
+        os_type: Operating system identifier as returned by Dissect's
+            ``target.os`` (e.g. ``"windows"``, ``"linux"``).  The value
+            is normalised to lowercase before comparison.
+
+    Returns:
+        The OS-specific artifact registry dictionary.  Defaults to
+        :data:`WINDOWS_ARTIFACT_REGISTRY` for unrecognised OS types.
+    """
+    normalized = str(os_type).strip().lower() if os_type else ""
+    if normalized == "linux":
+        return LINUX_ARTIFACT_REGISTRY
+    return WINDOWS_ARTIFACT_REGISTRY

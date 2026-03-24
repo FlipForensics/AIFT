@@ -51,7 +51,7 @@ from ..case_logging import (
 )
 from ..config import load_config, save_config, validate_config
 from ..hasher import compute_hashes, verify_hash  # noqa: F401 -- re-exported
-from ..parser import ARTIFACT_REGISTRY, ForensicParser  # noqa: F401 -- re-exported
+from ..parser import WINDOWS_ARTIFACT_REGISTRY, ForensicParser  # noqa: F401 -- re-exported
 from ..reporter import ReportGenerator  # noqa: F401 -- re-exported
 from ..version import TOOL_VERSION  # noqa: F401 -- re-exported
 

@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch, MagicMock
 
-from app.parser import ARTIFACT_REGISTRY, EVTX_MAX_RECORDS_PER_FILE, ForensicParser, UnsupportedPluginError
+from app.parser import WINDOWS_ARTIFACT_REGISTRY, EVTX_MAX_RECORDS_PER_FILE, ForensicParser, UnsupportedPluginError
 from app.parser.registry import (
     _artifact_prompt_name_candidates,
     _load_artifact_guidance_prompt,
@@ -267,7 +267,7 @@ class ParserTests(unittest.TestCase):
             self.assertFalse(artifact["available"])
 
     def test_get_available_artifacts_returns_all_registry_entries(self) -> None:
-        """Every artifact in ARTIFACT_REGISTRY should appear in the result."""
+        """Every artifact in WINDOWS_ARTIFACT_REGISTRY should appear in the result."""
         class NoOpTarget:
             def has_function(self, function_name: str) -> bool:
                 return False
@@ -278,15 +278,15 @@ class ParserTests(unittest.TestCase):
             artifacts = parser.get_available_artifacts()
 
         returned_keys = {a["key"] for a in artifacts}
-        self.assertEqual(returned_keys, set(ARTIFACT_REGISTRY.keys()))
+        self.assertEqual(returned_keys, set(WINDOWS_ARTIFACT_REGISTRY.keys()))
 
     def test_registry_artifact_guidance_comes_from_prompt_files(self) -> None:
         runkeys_prompt_path = Path(__file__).resolve().parents[1] / "prompts" / "artifact_instructions" / "runkeys.md"
         expected_prompt = runkeys_prompt_path.read_text(encoding="utf-8").strip()
 
         self.assertTrue(expected_prompt)
-        self.assertIn("runkeys", ARTIFACT_REGISTRY)
-        self.assertEqual(ARTIFACT_REGISTRY["runkeys"].get("artifact_guidance", ""), expected_prompt)
+        self.assertIn("runkeys", WINDOWS_ARTIFACT_REGISTRY)
+        self.assertEqual(WINDOWS_ARTIFACT_REGISTRY["runkeys"].get("artifact_guidance", ""), expected_prompt)
 
     def test_call_target_function_handles_namespaced_functions(self) -> None:
         class DispatchTarget:
@@ -1409,27 +1409,27 @@ class ApplyArtifactGuidanceFromPromptsTests(unittest.TestCase):
 
 
 class ArtifactRegistryTests(unittest.TestCase):
-    """Tests for the ARTIFACT_REGISTRY data structure."""
+    """Tests for the WINDOWS_ARTIFACT_REGISTRY data structure."""
 
     def test_all_entries_have_required_keys(self) -> None:
         """Every registry entry should have name, category, function, description."""
-        for key, details in ARTIFACT_REGISTRY.items():
+        for key, details in WINDOWS_ARTIFACT_REGISTRY.items():
             self.assertIn("name", details, f"{key} missing 'name'")
             self.assertIn("category", details, f"{key} missing 'category'")
             self.assertIn("function", details, f"{key} missing 'function'")
             self.assertIn("description", details, f"{key} missing 'description'")
 
     def test_registry_is_not_empty(self) -> None:
-        self.assertGreater(len(ARTIFACT_REGISTRY), 0)
+        self.assertGreater(len(WINDOWS_ARTIFACT_REGISTRY), 0)
 
     def test_known_artifacts_present(self) -> None:
         expected_keys = {"runkeys", "tasks", "services", "evtx", "mft", "shimcache", "prefetch"}
         for key in expected_keys:
-            self.assertIn(key, ARTIFACT_REGISTRY)
+            self.assertIn(key, WINDOWS_ARTIFACT_REGISTRY)
 
     def test_evtx_artifacts_identified_correctly(self) -> None:
         """EVTX-type artifacts should have function names ending with 'evtx'."""
-        for key, details in ARTIFACT_REGISTRY.items():
+        for key, details in WINDOWS_ARTIFACT_REGISTRY.items():
             func = details["function"]
             if "evtx" in key:
                 self.assertTrue(

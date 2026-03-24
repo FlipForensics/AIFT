@@ -39,7 +39,7 @@ from typing import Any, Callable, Iterable
 from dissect.target import Target
 from dissect.target.exceptions import PluginError, UnsupportedPluginError
 
-from .registry import ARTIFACT_REGISTRY
+from .registry import WINDOWS_ARTIFACT_REGISTRY, get_artifact_registry
 
 __all__ = ["ForensicParser"]
 
@@ -89,6 +89,11 @@ class ForensicParser:
         self.parsed_dir.mkdir(parents=True, exist_ok=True)
         self.target = Target.open(self.evidence_path)
         self._closed = False
+
+        try:
+            self.os_type: str = str(self.target.os).strip().lower()
+        except Exception:
+            self.os_type = "windows"
 
     def close(self) -> None:
         """Close the underlying Dissect target handle."""
@@ -155,15 +160,18 @@ class ForensicParser:
     def get_available_artifacts(self) -> list[dict[str, Any]]:
         """Return the artifact registry annotated with availability flags.
 
-        Probes the Dissect target for each registered artifact and sets
-        an ``available`` boolean on the returned metadata dictionaries.
+        Detects the target OS via ``target.os`` and selects the
+        appropriate artifact registry (Windows or Linux).  Probes the
+        Dissect target for each registered artifact and sets an
+        ``available`` boolean on the returned metadata dictionaries.
 
         Returns:
             List of artifact metadata dicts, each augmented with ``key``
             and ``available`` fields.
         """
+        registry = get_artifact_registry(self.os_type)
         available_artifacts: list[dict[str, Any]] = []
-        for artifact_key, artifact_details in ARTIFACT_REGISTRY.items():
+        for artifact_key, artifact_details in registry.items():
             function_name = str(artifact_details.get("function", artifact_key))
             try:
                 available = bool(self.target.has_function(function_name))
@@ -216,7 +224,7 @@ class ForensicParser:
         into separate CSV files.
 
         Args:
-            artifact_key: Key from :data:`ARTIFACT_REGISTRY` identifying
+            artifact_key: Key from the OS-specific artifact registry identifying
                 the artifact to parse.
             progress_callback: Optional callback invoked every 1 000 records
                 with progress information.
@@ -226,7 +234,8 @@ class ForensicParser:
             ``duration_seconds``, ``success``, and ``error``.  EVTX
             results also include a ``csv_paths`` list.
         """
-        artifact = ARTIFACT_REGISTRY.get(artifact_key)
+        registry = get_artifact_registry(self.os_type)
+        artifact = registry.get(artifact_key)
         if artifact is None:
             return {
                 "csv_path": "",

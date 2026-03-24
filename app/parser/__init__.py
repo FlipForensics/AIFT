@@ -12,15 +12,21 @@ from .core import (
     UNKNOWN_VALUE,
     ForensicParser,
 )
-from .registry import ARTIFACT_REGISTRY
+from .registry import (
+    LINUX_ARTIFACT_REGISTRY,
+    WINDOWS_ARTIFACT_REGISTRY,
+    get_artifact_registry,
+)
 
 __all__ = [
-    "ARTIFACT_REGISTRY",
     "EVTX_MAX_RECORDS_PER_FILE",
     "ForensicParser",
+    "LINUX_ARTIFACT_REGISTRY",
     "MAX_RECORDS_PER_ARTIFACT",
     "UNKNOWN_VALUE",
     "UnsupportedPluginError",
+    "WINDOWS_ARTIFACT_REGISTRY",
     "core",
+    "get_artifact_registry",
     "registry",
 ]

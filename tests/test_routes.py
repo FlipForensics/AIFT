@@ -787,7 +787,7 @@ class RoutesTests(unittest.TestCase):
 
         expected_keys = [
             artifact_key
-            for artifact_key in routes.ARTIFACT_REGISTRY
+            for artifact_key in routes.WINDOWS_ARTIFACT_REGISTRY
             if artifact_key.lower() not in routes.RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS
         ]
 

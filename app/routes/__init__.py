@@ -117,7 +117,7 @@ from .tasks import (  # noqa: F401
 
 # Re-export names from handlers.py that tests patch directly on ``routes``.
 from .handlers import (  # noqa: F401
-    ARTIFACT_REGISTRY,
+    WINDOWS_ARTIFACT_REGISTRY,
     ForensicAnalyzer,
     ForensicParser,
     ReportGenerator,

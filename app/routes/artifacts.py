@@ -34,7 +34,7 @@ from typing import Any
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
-from ..parser import ARTIFACT_REGISTRY
+from ..parser import WINDOWS_ARTIFACT_REGISTRY
 from .state import (
     MODE_PARSE_AND_AI,
     MODE_PARSE_ONLY,
@@ -353,7 +353,7 @@ def _recommended_artifact_options() -> list[dict[str, str]]:
         List of artifact option dicts for the recommended profile.
     """
     profile: list[dict[str, str]] = []
-    for artifact_key in ARTIFACT_REGISTRY:
+    for artifact_key in WINDOWS_ARTIFACT_REGISTRY:
         normalized_key = str(artifact_key).strip().lower()
         if normalized_key in RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS:
             continue
