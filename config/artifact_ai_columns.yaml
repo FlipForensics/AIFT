@@ -120,3 +120,146 @@ artifact_ai_columns:
     - param1
     - param2
     - param3
+
+  # ─── Linux Artifacts ───
+
+  # All shell histories share the same record: unix/history
+  bash_history:
+    - ts
+    - command
+    - shell
+    - username
+
+  zsh_history:
+    - ts
+    - command
+    - shell
+    - username
+
+  fish_history:
+    - ts
+    - command
+    - shell
+    - username
+
+  python_history:
+    - ts
+    - command
+    - shell
+    - username
+
+  # Login records (utmp-based)
+  wtmp:
+    - ts
+    - ut_type
+    - ut_user
+    - ut_host
+    - ut_line
+    - ut_pid
+
+  btmp:
+    - ts
+    - ut_type
+    - ut_user
+    - ut_host
+    - ut_line
+    - ut_addr
+
+  lastlog:
+    - ts
+    - uid
+    - ut_user
+    - ut_host
+    - ut_tty
+
+  # User and group management
+  users:
+    - name
+    - uid
+    - gid
+    - home
+    - shell
+    - gecos
+    - source
+
+  # Cron jobs
+  cronjobs:
+    - minute
+    - hour
+    - day
+    - month
+    - weekday
+    - command
+    - username
+    - source
+
+  # Systemd / init.d services (linux/service record)
+  # NOTE: systemd units have dynamic fields (Unit_Description, Service_ExecStart, etc.)
+  # These base columns are always present; dynamic fields pass through if available.
+  linux_services:
+    - ts
+    - type
+    - name
+    - source
+
+  # Syslog (linux/log/messages)
+  syslog:
+    - ts
+    - service
+    - pid
+    - message
+    - source
+
+  # Systemd journal (linux/log/journal)
+  journal:
+    - ts
+    - unit
+    - priority
+    - message
+    - syslog_identifier
+    - pid
+    - comm
+
+  # Package manager logs (unix/packagemanager/log)
+  packagemanager:
+    - ts
+    - package_manager
+    - operation
+    - package_name
+    - command
+    - requested_by_user
+
+  # SSH artifacts (application/openssh)
+  ssh.authorized_keys:
+    - key_type
+    - comment
+    - fingerprint
+    - options
+    - username
+
+  ssh.known_hosts:
+    - mtime_ts
+    - key_type
+    - host
+    - port
+    - fingerprint
+    - username
+
+  # Network interfaces (unix/network/interface)
+  network.interfaces:
+    - name
+    - type
+    - enabled
+    - cidr
+    - gateway
+    - dns
+    - mac
+    - source
+
+  # Auth log (linux/log/auth) — dynamic fields per service
+  auth:
+    - ts
+    - service
+    - pid
+    - message
+    - source
