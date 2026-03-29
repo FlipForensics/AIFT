@@ -9,6 +9,8 @@ from unittest.mock import Mock, patch, MagicMock
 
 from app.parser import WINDOWS_ARTIFACT_REGISTRY, EVTX_MAX_RECORDS_PER_FILE, ForensicParser, UnsupportedPluginError
 from app.parser.registry import (
+    LINUX_ARTIFACT_REGISTRY,
+    get_artifact_registry,
     _artifact_prompt_name_candidates,
     _load_artifact_guidance_prompt,
     _apply_artifact_guidance_from_prompts,
@@ -1436,6 +1438,48 @@ class ArtifactRegistryTests(unittest.TestCase):
                     ForensicParser._is_evtx_artifact(func),
                     f"{key} with function '{func}' should be identified as EVTX",
                 )
+
+
+class LinuxArtifactRegistryTests(unittest.TestCase):
+    """Tests for the LINUX_ARTIFACT_REGISTRY and get_artifact_registry."""
+
+    def test_linux_registry_is_not_empty(self) -> None:
+        """The Linux registry should contain artifacts."""
+        self.assertGreater(len(LINUX_ARTIFACT_REGISTRY), 0)
+
+    def test_linux_registry_has_required_keys(self) -> None:
+        """Every Linux registry entry should have name, category, function, description."""
+        for key, details in LINUX_ARTIFACT_REGISTRY.items():
+            self.assertIn("name", details, f"{key} missing 'name'")
+            self.assertIn("category", details, f"{key} missing 'category'")
+            self.assertIn("function", details, f"{key} missing 'function'")
+            self.assertIn("description", details, f"{key} missing 'description'")
+
+    def test_known_linux_artifacts_present(self) -> None:
+        """Key Linux artifacts should be present in the registry."""
+        expected = {"bash_history", "wtmp", "cronjobs", "syslog", "services", "users"}
+        for key in expected:
+            self.assertIn(key, LINUX_ARTIFACT_REGISTRY, f"Expected Linux artifact '{key}' not found")
+
+    def test_get_artifact_registry_returns_linux_for_linux(self) -> None:
+        """get_artifact_registry('linux') should return the Linux registry."""
+        result = get_artifact_registry("linux")
+        self.assertIs(result, LINUX_ARTIFACT_REGISTRY)
+
+    def test_get_artifact_registry_returns_windows_for_windows(self) -> None:
+        """get_artifact_registry('windows') should return the Windows registry."""
+        result = get_artifact_registry("windows")
+        self.assertIs(result, WINDOWS_ARTIFACT_REGISTRY)
+
+    def test_get_artifact_registry_defaults_to_windows(self) -> None:
+        """get_artifact_registry with unknown OS should default to Windows."""
+        result = get_artifact_registry("esxi")
+        self.assertIs(result, WINDOWS_ARTIFACT_REGISTRY)
+
+    def test_get_artifact_registry_handles_none(self) -> None:
+        """get_artifact_registry(None) should default to Windows."""
+        result = get_artifact_registry(None)  # type: ignore[arg-type]
+        self.assertIs(result, WINDOWS_ARTIFACT_REGISTRY)
 
 
 if __name__ == "__main__":

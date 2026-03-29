@@ -75,6 +75,7 @@ class FakeParser:
         self.case_dir = Path(case_dir)
         self.parsed_dir = Path(parsed_dir) if parsed_dir is not None else self.case_dir / "parsed"
         self.parsed_dir.mkdir(parents=True, exist_ok=True)
+        self.os_type = "windows"
 
     def __enter__(self) -> "FakeParser":
         return self

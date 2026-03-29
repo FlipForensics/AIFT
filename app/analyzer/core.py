@@ -111,6 +111,7 @@ class ForensicAnalyzer:
         artifact_csv_paths: Mapping[str, str | Path] | None = None,
         prompts_dir: str | Path | None = None,
         random_seed: int | None = None,
+        os_type: str = "windows",
     ) -> None:
         """Initialize the forensic analyzer with case context and configuration.
 
@@ -123,6 +124,9 @@ class ForensicAnalyzer:
             artifact_csv_paths: Mapping of artifact keys to CSV paths.
             prompts_dir: Directory containing prompt template files.
             random_seed: Optional seed for the internal RNG.
+            os_type: Detected operating system type (``"windows"``,
+                ``"linux"``, etc.).  Controls which artifact instruction
+                prompts are loaded.
         """
         if (
             isinstance(case_dir, Mapping)
@@ -146,6 +150,7 @@ class ForensicAnalyzer:
                 self.artifact_csv_paths[key] = Path(str(csv_path))
         self._analysis_input_csv_paths: dict[str, Path] = {}
         self.prompts_dir = Path(prompts_dir) if prompts_dir is not None else PROJECT_ROOT / "prompts"
+        self.os_type = str(os_type).strip().lower() if os_type else "windows"
         import random
         self._random = random.Random(random_seed)
         self._load_analysis_settings()
@@ -245,12 +250,14 @@ class ForensicAnalyzer:
     def _load_artifact_instruction_prompts(self) -> dict[str, str]:
         """Load per-artifact analysis instruction prompts.
 
-        Delegates to :func:`prompts.load_artifact_instruction_prompts`.
+        Delegates to :func:`prompts.load_artifact_instruction_prompts`,
+        passing :attr:`os_type` so the correct OS-specific instruction
+        directory is selected.
 
         Returns:
             A dict mapping artifact keys to instruction prompt text.
         """
-        return load_artifact_instruction_prompts(self.prompts_dir)
+        return load_artifact_instruction_prompts(self.prompts_dir, os_type=self.os_type)
 
     # ------------------------------------------------------------------
     # AI provider

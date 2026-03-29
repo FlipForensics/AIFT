@@ -831,6 +831,7 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
         ) as parser:
             metadata = parser.get_image_metadata()
             available_artifacts = parser.get_available_artifacts()
+            detected_os_type = parser.os_type
 
         audit_logger.log(
             "evidence_intake",
@@ -855,6 +856,7 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
             {
                 "hostname": metadata.get("hostname", "Unknown"),
                 "os_version": metadata.get("os_version", "Unknown"),
+                "os_type": detected_os_type,
                 "domain": metadata.get("domain", "Unknown"),
                 "available_artifacts": [
                     str(item.get("key"))
@@ -882,6 +884,7 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
                 for h in file_hashes
             ]
             case["image_metadata"] = metadata
+            case["os_type"] = detected_os_type
             case["available_artifacts"] = available_artifacts
 
             # Invalidate all downstream state derived from prior evidence.
@@ -912,18 +915,29 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
             if stale_path.exists():
                 stale_path.unlink(missing_ok=True)
 
-        return success_response(
-            {
-                "case_id": case_id,
-                "source_mode": evidence_payload["mode"],
-                "source_path": evidence_payload["source_path"],
-                "evidence_path": str(dissect_path),
-                "uploaded_files": list(evidence_payload.get("uploaded_files", [])),
-                "hashes": hashes,
-                "metadata": metadata,
-                "available_artifacts": available_artifacts,
-            }
-        )
+        os_warning = ""
+        if detected_os_type == "unknown":
+            os_warning = (
+                "Could not detect the operating system of this image. "
+                "Artifact availability may be incomplete — verify that the "
+                "image format is supported by Dissect."
+            )
+
+        response_data: dict[str, Any] = {
+            "case_id": case_id,
+            "source_mode": evidence_payload["mode"],
+            "source_path": evidence_payload["source_path"],
+            "evidence_path": str(dissect_path),
+            "uploaded_files": list(evidence_payload.get("uploaded_files", [])),
+            "hashes": hashes,
+            "metadata": metadata,
+            "os_type": detected_os_type,
+            "available_artifacts": available_artifacts,
+        }
+        if os_warning:
+            response_data["os_warning"] = os_warning
+
+        return success_response(response_data)
     except (ValueError, FileNotFoundError) as error:
         return error_response(str(error), 400)
     except Exception:

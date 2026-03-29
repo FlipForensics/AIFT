@@ -223,7 +223,13 @@
     st.selected = [];
     st.selectedAi = [];
 
-    renderSummary(data.metadata || {}, data.hashes || {});
+    renderSummary(data.metadata || {}, data.hashes || {}, data.os_type || "");
+
+    /* Log OS detection warning when the backend could not determine the OS.
+       The unsupported-evidence error box below handles the visual feedback. */
+    if (data.os_warning) {
+      console.warn("[AIFT] OS detection warning:", data.os_warning);
+    }
 
     const osVersion = String((data.metadata || {}).os_version || "").trim().toLowerCase();
     const isUnsupported = !osVersion || osVersion === "unknown" || osVersion === "-";
@@ -256,10 +262,26 @@
    *
    * @param {Object} m - Metadata object (hostname, os_version, domain, ips).
    * @param {Object} h - Hashes object (sha256).
+   * @param {string} osType - Detected OS type ("windows", "linux", etc.).
    */
-  function renderSummary(m, h) {
+  function renderSummary(m, h, osType) {
     if (el.sumHost) el.sumHost.textContent = String(m.hostname || "-");
-    if (el.sumOs) el.sumOs.textContent = String(m.os_version || "-");
+
+    /* Build the OS display string: include the OS type label when it
+       differs meaningfully from the version string (e.g. "Linux" prefix
+       for a version like "Ubuntu 22.04"). */
+    var osVersion = String(m.os_version || "-");
+    var osLabel = String(osType || "").trim().toLowerCase();
+    if (osLabel && osLabel !== "unknown" && osVersion !== "-") {
+      var versionLower = osVersion.toLowerCase();
+      /* Only prepend the type if it is not already part of the version. */
+      if (versionLower.indexOf(osLabel) === -1) {
+        var capitalized = osLabel.charAt(0).toUpperCase() + osLabel.slice(1);
+        osVersion = capitalized + " \u2014 " + osVersion;
+      }
+    }
+    if (el.sumOs) el.sumOs.textContent = osVersion;
+
     if (el.sumDomain) el.sumDomain.textContent = String(m.domain || "-");
     if (el.sumIps) el.sumIps.textContent = String(m.ips || "-");
     if (el.sumSha) el.sumSha.textContent = String(h.sha256 || "-");

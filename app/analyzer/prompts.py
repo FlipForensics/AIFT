@@ -52,19 +52,34 @@ def load_prompt_template(prompts_dir: Path, filename: str, default: str) -> str:
         return default
 
 
-def load_artifact_instruction_prompts(prompts_dir: Path) -> dict[str, str]:
+def load_artifact_instruction_prompts(
+    prompts_dir: Path,
+    os_type: str = "windows",
+) -> dict[str, str]:
     """Load per-artifact analysis instruction prompts from disk.
 
-    Scans the ``artifact_instructions/`` sub-directory under *prompts_dir*
-    for ``.md`` files and returns their contents keyed by stem name.
+    Selects the OS-specific instruction directory based on *os_type*:
+
+    - ``"windows"`` (default): ``artifact_instructions/``
+    - ``"linux"``: ``artifact_instructions_linux/``
+
+    For any other OS value the function falls back to the Windows
+    directory.
 
     Args:
         prompts_dir: Directory containing prompt template files.
+        os_type: Operating system identifier (e.g. ``"windows"``,
+            ``"linux"``).  Determines which sub-directory to scan.
 
     Returns:
         A dict mapping lowercased artifact keys to instruction prompt text.
     """
-    instructions_dir = prompts_dir / "artifact_instructions"
+    normalized_os = str(os_type).strip().lower() if os_type else "windows"
+    if normalized_os == "linux":
+        instructions_dir = prompts_dir / "artifact_instructions_linux"
+    else:
+        instructions_dir = prompts_dir / "artifact_instructions"
+
     if not instructions_dir.exists() or not instructions_dir.is_dir():
         return {}
 
@@ -205,6 +220,7 @@ def build_summary_prompt(
         "ioc_targets": ioc_targets,
         "hostname": str(metadata_map.get("hostname", "Unknown")),
         "os_version": str(metadata_map.get("os_version", "Unknown")),
+        "os_type": str(metadata_map.get("os_type", "Unknown")),
         "domain": str(metadata_map.get("domain", "Unknown")),
         "per_artifact_findings": findings_text,
     }

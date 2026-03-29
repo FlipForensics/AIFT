@@ -57,6 +57,7 @@ class FakeParser:
         self.case_dir = Path(case_dir)
         self.parsed_dir = Path(parsed_dir) if parsed_dir is not None else self.case_dir / "parsed"
         self.parsed_dir.mkdir(parents=True, exist_ok=True)
+        self.os_type = "windows"
 
     def __enter__(self) -> "FakeParser":
         return self
@@ -107,8 +108,9 @@ class FakeAnalyzer:
         config: dict[str, object] | None,
         audit_logger: object,
         artifact_csv_paths: dict[str, str],
+        os_type: str = "windows",
     ) -> None:
-        del case_dir, config, audit_logger, artifact_csv_paths
+        del case_dir, config, audit_logger, artifact_csv_paths, os_type
 
     def run_full_analysis(
         self,

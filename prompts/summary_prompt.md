@@ -6,7 +6,7 @@ Correlate findings across all artifacts below. Do not introduce evidence that is
 {{investigation_context}}
 
 ## Host
-{{hostname}} | {{os_version}} | Domain: {{domain}}
+{{hostname}} | Operating System: {{os_type}} — {{os_version}} | Domain: {{domain}}
 
 ## Per-Artifact Findings
 {{per_artifact_findings}}

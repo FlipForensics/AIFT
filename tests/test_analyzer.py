@@ -684,6 +684,28 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(analyzer.model_info["provider"], "fake")
         self.assertEqual(analyzer.model_info["model"], "fake-model-1")
 
+    def test_init_with_linux_os_type_loads_linux_instructions(self) -> None:
+        """ForensicAnalyzer(os_type='linux') loads from artifact_instructions_linux/."""
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            prompts_dir = Path(temp_dir) / "prompts"
+            self._write_prompt_template(prompts_dir)
+            linux_dir = prompts_dir / "artifact_instructions_linux"
+            linux_dir.mkdir(parents=True, exist_ok=True)
+            (linux_dir / "bash_history.md").write_text("BASH GUIDE", encoding="utf-8")
+            fake_provider = FakeProvider()
+
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(
+                    case_dir=temp_dir,
+                    config={"ai": {"provider": "local", "local": {"model": "m"}}},
+                    prompts_dir=prompts_dir,
+                    os_type="linux",
+                )
+
+        self.assertEqual(analyzer.os_type, "linux")
+        self.assertIn("bash_history", analyzer.artifact_instruction_prompts)
+        self.assertEqual(analyzer.artifact_instruction_prompts["bash_history"], "BASH GUIDE")
+
     def test_analyze_artifact_calls_provider_and_logs_audit(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
             temp_path = Path(temp_dir)
@@ -3182,6 +3204,56 @@ class TestLoadArtifactInstructionPrompts(unittest.TestCase):
         self.assertNotIn("empty", result)
         self.assertIn("valid", result)
 
+    def test_linux_os_type_loads_linux_instructions(self) -> None:
+        """When os_type='linux', the function reads from artifact_instructions_linux/."""
+        from app.analyzer.prompts import load_artifact_instruction_prompts
+        with TemporaryDirectory(prefix="aift-prompt-") as tmp_dir:
+            p = Path(tmp_dir)
+            linux_dir = p / "artifact_instructions_linux"
+            linux_dir.mkdir()
+            (linux_dir / "bash_history.md").write_text("BASH INSTRUCTIONS", encoding="utf-8")
+            (linux_dir / "syslog.md").write_text("SYSLOG INSTRUCTIONS", encoding="utf-8")
+            result = load_artifact_instruction_prompts(p, os_type="linux")
+        self.assertEqual(result["bash_history"], "BASH INSTRUCTIONS")
+        self.assertEqual(result["syslog"], "SYSLOG INSTRUCTIONS")
+
+    def test_windows_os_type_loads_windows_instructions(self) -> None:
+        """When os_type='windows', the function reads from artifact_instructions/."""
+        from app.analyzer.prompts import load_artifact_instruction_prompts
+        with TemporaryDirectory(prefix="aift-prompt-") as tmp_dir:
+            p = Path(tmp_dir)
+            win_dir = p / "artifact_instructions"
+            win_dir.mkdir()
+            (win_dir / "evtx.md").write_text("EVTX WIN", encoding="utf-8")
+            linux_dir = p / "artifact_instructions_linux"
+            linux_dir.mkdir()
+            (linux_dir / "bash_history.md").write_text("BASH LINUX", encoding="utf-8")
+            result = load_artifact_instruction_prompts(p, os_type="windows")
+        self.assertIn("evtx", result)
+        self.assertNotIn("bash_history", result)
+
+    def test_default_os_type_is_windows(self) -> None:
+        """Without os_type the function defaults to the Windows directory."""
+        from app.analyzer.prompts import load_artifact_instruction_prompts
+        with TemporaryDirectory(prefix="aift-prompt-") as tmp_dir:
+            p = Path(tmp_dir)
+            win_dir = p / "artifact_instructions"
+            win_dir.mkdir()
+            (win_dir / "mft.md").write_text("MFT DATA", encoding="utf-8")
+            result = load_artifact_instruction_prompts(p)
+        self.assertIn("mft", result)
+
+    def test_unknown_os_type_falls_back_to_windows(self) -> None:
+        """An unrecognised OS type should fall back to Windows instructions."""
+        from app.analyzer.prompts import load_artifact_instruction_prompts
+        with TemporaryDirectory(prefix="aift-prompt-") as tmp_dir:
+            p = Path(tmp_dir)
+            win_dir = p / "artifact_instructions"
+            win_dir.mkdir()
+            (win_dir / "prefetch.md").write_text("PREFETCH DATA", encoding="utf-8")
+            result = load_artifact_instruction_prompts(p, os_type="esxi")
+        self.assertIn("prefetch", result)
+
 
 class TestResolveArtifactAiColumnsConfigPath(unittest.TestCase):
     """Tests for prompts.resolve_artifact_ai_columns_config_path."""
@@ -3282,6 +3354,19 @@ class TestBuildSummaryPrompt(unittest.TestCase):
         )
         self.assertIn("Host: Unknown", result)
         self.assertIn("OS: Unknown", result)
+
+    def test_os_type_placeholder_filled(self) -> None:
+        """The {{os_type}} placeholder should be filled from metadata_map."""
+        from app.analyzer.prompts import build_summary_prompt
+        template = "OS Type: {{os_type}} | Version: {{os_version}}"
+        result = build_summary_prompt(
+            summary_prompt_template=template,
+            investigation_context="ctx",
+            per_artifact_results=[],
+            metadata_map={"os_type": "linux", "os_version": "Ubuntu 22.04"},
+        )
+        self.assertIn("OS Type: linux", result)
+        self.assertIn("Version: Ubuntu 22.04", result)
 
 
 ###############################################################################
