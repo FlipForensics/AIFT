@@ -223,6 +223,9 @@
     st.selected = [];
     st.selectedAi = [];
 
+    const detectedOs = String(data.os_type || "").trim().toLowerCase();
+    st.detectedOs = detectedOs;
+
     renderSummary(data.metadata || {}, data.hashes || {}, data.os_type || "");
 
     /* Log OS detection warning when the backend could not determine the OS.
@@ -247,6 +250,7 @@
     } else {
       if (errorBox) errorBox.hidden = true;
       if (artifactContent) artifactContent.hidden = false;
+      showOsArtifactFieldsets(detectedOs);
       populateArtifacts(st.artifacts);
     }
 
@@ -255,6 +259,42 @@
     A.renderExecSummary();
     A.renderFindings();
     updateParseButton();
+  }
+
+  /**
+   * Show/hide OS-specific artifact fieldsets based on the detected OS.
+   *
+   * Windows fieldsets (no data-os attribute) are shown for Windows images.
+   * Linux fieldsets (data-os="linux") are shown for Linux images.
+   *
+   * @param {string} osType - Detected OS type ("windows", "linux", etc.).
+   */
+  function showOsArtifactFieldsets(osType) {
+    if (!el.artifactsForm) return;
+    const isLinux = osType === "linux";
+    const fieldsets = el.artifactsForm.querySelectorAll("fieldset.artifact-category");
+    fieldsets.forEach((fs) => {
+      const fsOs = String(fs.dataset.os || "").trim().toLowerCase();
+      var hide;
+      if (fsOs === "linux") {
+        hide = !isLinux;
+      } else if (!fsOs) {
+        /* Windows fieldsets have no data-os attribute */
+        hide = isLinux;
+      } else {
+        return;
+      }
+      fs.hidden = hide;
+      /* Force-disable checkboxes in hidden fieldsets so they cannot be
+         selected by profiles or presets (prevents duplicate keys like
+         'services' from being selected in the wrong OS context). */
+      fs.querySelectorAll("input[type='checkbox']").forEach((cb) => {
+        if (hide) {
+          cb.disabled = true;
+          cb.checked = false;
+        }
+      });
+    });
   }
 
   /**

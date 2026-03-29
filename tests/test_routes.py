@@ -787,17 +787,29 @@ class RoutesTests(unittest.TestCase):
         options = list(recommended.get("artifact_options", []))
         option_keys = [str(option.get("artifact_key", "")).strip() for option in options]
 
-        expected_keys = [
-            artifact_key
-            for artifact_key in routes.WINDOWS_ARTIFACT_REGISTRY
-            if artifact_key.lower() not in routes.RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS
-        ]
+        # The recommended profile now includes both Windows and Linux
+        # artifacts (minus the excluded set), so profiles work for any OS.
+        from app.parser import LINUX_ARTIFACT_REGISTRY
+        expected_keys: list[str] = []
+        seen: set[str] = set()
+        for registry in (routes.WINDOWS_ARTIFACT_REGISTRY, LINUX_ARTIFACT_REGISTRY):
+            for artifact_key in registry:
+                normalized = artifact_key.lower()
+                if normalized in routes.RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS:
+                    continue
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                expected_keys.append(artifact_key)
 
         self.assertEqual(option_keys, expected_keys)
         self.assertNotIn("mft", option_keys)
         self.assertNotIn("usnjrnl", option_keys)
         self.assertNotIn("evtx", option_keys)
         self.assertNotIn("defender.evtx", option_keys)
+        # Linux artifacts should now be present.
+        self.assertIn("bash_history", option_keys)
+        self.assertIn("syslog", option_keys)
         self.assertTrue(all(str(option.get("mode", "")) == "parse_and_ai" for option in options))
 
     def test_settings_update_persists_csv_output_dir(self) -> None:

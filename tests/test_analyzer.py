@@ -4071,6 +4071,40 @@ class TestResolveArtifactMetadata(unittest.TestCase):
         self.assertEqual(result["name"], "completely_unknown_artifact_xyz")
         self.assertIn("No artifact description", result["description"])
 
+    def test_linux_os_type_resolves_services_to_linux_registry(self) -> None:
+        """When os_type='linux', shared keys like 'services' resolve to the Linux entry."""
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer(os_type="linux")
+        result = analyzer._resolve_artifact_metadata("services")
+        # Linux registry describes systemd services; Windows describes Windows services.
+        self.assertIn("Systemd", result.get("name", ""), "Expected Linux 'Systemd Services' entry")
+
+    def test_windows_os_type_resolves_services_to_windows_registry(self) -> None:
+        """When os_type='windows', shared keys like 'services' resolve to the Windows entry."""
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer(os_type="windows")
+        result = analyzer._resolve_artifact_metadata("services")
+        # Windows registry name is just "Services" (not "Systemd Services").
+        self.assertNotIn("Systemd", result.get("name", ""))
+
+    def test_linux_analyzer_resolves_linux_only_artifact(self) -> None:
+        """Linux-only artifacts like bash_history resolve from the Linux registry."""
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer(os_type="linux")
+        result = analyzer._resolve_artifact_metadata("bash_history")
+        self.assertEqual(result["name"], "Bash History")
+
+    def test_windows_analyzer_resolves_windows_only_artifact(self) -> None:
+        """Windows-only artifacts like shimcache resolve from the Windows registry."""
+        fake_provider = FakeProvider()
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            analyzer = ForensicAnalyzer(os_type="windows")
+        result = analyzer._resolve_artifact_metadata("shimcache")
+        self.assertEqual(result["name"], "Shimcache")
+
 
 class TestReadModelInfo(unittest.TestCase):
     """Tests for ForensicAnalyzer._read_model_info."""

@@ -85,6 +85,74 @@
     {
       "artifact_key": "defender.quarantine",
       "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "cronjobs",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "bash_history",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "zsh_history",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "fish_history",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "python_history",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "wtmp",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "btmp",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "lastlog",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "users",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "groups",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "sudoers",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "network.interfaces",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "syslog",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "journalctl",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "packagemanager",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "ssh.authorized_keys",
+      "mode": "parse_and_ai"
+    },
+    {
+      "artifact_key": "ssh.known_hosts",
+      "mode": "parse_and_ai"
     }
   ]
 }

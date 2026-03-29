@@ -34,7 +34,7 @@ from typing import Any
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
-from ..parser import WINDOWS_ARTIFACT_REGISTRY
+from ..parser import LINUX_ARTIFACT_REGISTRY, WINDOWS_ARTIFACT_REGISTRY
 from .state import (
     MODE_PARSE_AND_AI,
     MODE_PARSE_ONLY,
@@ -349,15 +349,24 @@ def sanitize_prompt(prompt: str, max_chars: int = 2000) -> str:
 def _recommended_artifact_options() -> list[dict[str, str]]:
     """Build artifact options for the built-in 'recommended' profile.
 
+    Includes artifacts from both the Windows and Linux registries so that
+    a single profile works regardless of the evidence OS.  Duplicate keys
+    (e.g. ``services``) are emitted only once.
+
     Returns:
         List of artifact option dicts for the recommended profile.
     """
     profile: list[dict[str, str]] = []
-    for artifact_key in WINDOWS_ARTIFACT_REGISTRY:
-        normalized_key = str(artifact_key).strip().lower()
-        if normalized_key in RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS:
-            continue
-        profile.append({"artifact_key": str(artifact_key), "mode": MODE_PARSE_AND_AI})
+    seen: set[str] = set()
+    for registry in (WINDOWS_ARTIFACT_REGISTRY, LINUX_ARTIFACT_REGISTRY):
+        for artifact_key in registry:
+            normalized_key = str(artifact_key).strip().lower()
+            if normalized_key in RECOMMENDED_PROFILE_EXCLUDED_ARTIFACTS:
+                continue
+            if normalized_key in seen:
+                continue
+            seen.add(normalized_key)
+            profile.append({"artifact_key": str(artifact_key), "mode": MODE_PARSE_AND_AI})
     return profile
 
 

@@ -322,6 +322,98 @@
           </ul>
         </fieldset>
 
+        <!-- Linux artifact categories -->
+
+        <fieldset class="artifact-category artifact-category-linux" data-category="linux-persistence" data-os="linux" hidden>
+          <legend>Persistence (Linux)</legend>
+          <ul>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="cronjobs" disabled> Cron Jobs</label>
+            </li>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="services" disabled> Systemd Services</label>
+            </li>
+          </ul>
+        </fieldset>
+
+        <fieldset class="artifact-category artifact-category-linux" data-category="linux-shell-history" data-os="linux" hidden>
+          <legend>Shell History (Linux)</legend>
+          <ul>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="bash_history" disabled> Bash History</label>
+            </li>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="zsh_history" disabled> Zsh History</label>
+            </li>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="fish_history" disabled> Fish History</label>
+            </li>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="python_history" disabled> Python History</label>
+            </li>
+          </ul>
+        </fieldset>
+
+        <fieldset class="artifact-category artifact-category-linux" data-category="linux-authentication" data-os="linux" hidden>
+          <legend>Authentication (Linux)</legend>
+          <ul>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="wtmp" disabled> Login Records (wtmp)</label>
+            </li>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="btmp" disabled> Failed Logins (btmp)</label>
+            </li>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="lastlog" disabled> Last Login Records</label>
+            </li>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="users" disabled> User Accounts</label>
+            </li>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="groups" disabled> Groups</label>
+            </li>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="sudoers" disabled> Sudoers Config</label>
+            </li>
+          </ul>
+        </fieldset>
+
+        <fieldset class="artifact-category artifact-category-linux" data-category="linux-logs" data-os="linux" hidden>
+          <legend>Logs (Linux)</legend>
+          <ul>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="syslog" disabled> Syslog</label>
+            </li>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="journalctl" disabled> Systemd Journal</label>
+            </li>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="packagemanager" disabled> Package History</label>
+            </li>
+          </ul>
+        </fieldset>
+
+        <fieldset class="artifact-category artifact-category-linux" data-category="linux-ssh" data-os="linux" hidden>
+          <legend>SSH (Linux)</legend>
+          <ul>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="ssh.authorized_keys" disabled> SSH Authorized Keys</label>
+            </li>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="ssh.known_hosts" disabled> SSH Known Hosts</label>
+            </li>
+          </ul>
+        </fieldset>
+
+        <fieldset class="artifact-category artifact-category-linux" data-category="linux-network" data-os="linux" hidden>
+          <legend>Network (Linux)</legend>
+          <ul>
+            <li data-available="false">
+              <label><input type="checkbox" data-artifact-key="network.interfaces" disabled> Network Interfaces</label>
+            </li>
+          </ul>
+        </fieldset>
+
         <button id="parse-selected" type="submit" disabled>Parse Selected</button>
       </form>
       </div><!-- /artifact-selection-content -->

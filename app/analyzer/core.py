@@ -611,10 +611,11 @@ class ForensicAnalyzer:
         return fallback
 
     def _resolve_artifact_metadata(self, artifact_key: str) -> dict[str, str]:
-        """Look up artifact metadata from the Windows and Linux registries.
+        """Look up artifact metadata from the OS-appropriate registry first.
 
-        Searches both OS-specific registries so that metadata resolution
-        works regardless of which OS the evidence originated from.
+        Searches the registry matching :attr:`os_type` first so that
+        shared keys like ``services`` resolve to the correct OS-specific
+        entry.  Falls back to the other registry for cross-OS lookups.
 
         Args:
             artifact_key: Artifact identifier.
@@ -623,13 +624,18 @@ class ForensicAnalyzer:
             A dict with at least ``name``, ``description``, and
             ``analysis_hint`` keys.
         """
-        for registry in (WINDOWS_ARTIFACT_REGISTRY, LINUX_ARTIFACT_REGISTRY):
+        if self.os_type == "linux":
+            registries = (LINUX_ARTIFACT_REGISTRY, WINDOWS_ARTIFACT_REGISTRY)
+        else:
+            registries = (WINDOWS_ARTIFACT_REGISTRY, LINUX_ARTIFACT_REGISTRY)
+
+        for registry in registries:
             if artifact_key in registry:
                 metadata = registry[artifact_key]
                 return {str(key): str(value) for key, value in metadata.items()}
 
         normalized = normalize_artifact_key(artifact_key)
-        for registry in (WINDOWS_ARTIFACT_REGISTRY, LINUX_ARTIFACT_REGISTRY):
+        for registry in registries:
             if normalized in registry:
                 metadata = registry[normalized]
                 return {str(key): str(value) for key, value in metadata.items()}
