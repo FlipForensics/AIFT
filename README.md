@@ -22,7 +22,7 @@ Upload Evidence → Select Artifacts → Parse → AI Analysis → HTML Report
 
 1. **Run the app** - a local web interface opens in your browser.
 2. **Upload evidence** - drag-and-drop an E01, VMDK, VHD, raw image, or archive, or point to a local path for large images.
-3. **Pick artifacts** - choose from 25+ Windows or 30+ Linux forensic artifacts, which will be parsed by [Dissect](https://github.com/fox-it/dissect).
+3. **Pick artifacts** - choose from 25+ Windows or 19 Linux forensic artifacts, which will be parsed by [Dissect](https://github.com/fox-it/dissect).
 4. **Get results** - AI analyzes each artifact for indicators of compromise, correlates findings across artifacts, and generates a self-contained HTML report with evidence hashes and full audit trail.
 
 No Elasticsearch. No Docker. No database. One Python script, one command.
