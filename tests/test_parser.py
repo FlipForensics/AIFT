@@ -1608,6 +1608,42 @@ class LinuxArtifactRegistryTests(unittest.TestCase):
             f"Unexpected key overlap between Linux and Windows registries: {overlap}",
         )
 
+    def test_get_artifact_registry_whitespace_and_case_variants(self) -> None:
+        """get_artifact_registry should handle whitespace and case variations."""
+        self.assertIs(get_artifact_registry("  Linux  "), LINUX_ARTIFACT_REGISTRY)
+        self.assertIs(get_artifact_registry("LINUX"), LINUX_ARTIFACT_REGISTRY)
+        self.assertIs(get_artifact_registry("  WINDOWS  "), WINDOWS_ARTIFACT_REGISTRY)
+        self.assertIs(get_artifact_registry(""), WINDOWS_ARTIFACT_REGISTRY)
+
+    def test_every_linux_artifact_has_prompt_file(self) -> None:
+        """Every Linux registry entry should have a matching prompt file loaded."""
+        from app.parser.registry import _LINUX_PROMPTS_DIR, _artifact_prompt_name_candidates
+
+        missing: list[str] = []
+        for artifact_key in LINUX_ARTIFACT_REGISTRY:
+            candidates = _artifact_prompt_name_candidates(artifact_key)
+            found = any(
+                (_LINUX_PROMPTS_DIR / f"{stem}.md").is_file()
+                for stem in candidates
+            )
+            if not found:
+                missing.append(artifact_key)
+        self.assertEqual(
+            missing, [],
+            f"Linux artifacts missing prompt files in {_LINUX_PROMPTS_DIR}: {missing}",
+        )
+
+    def test_every_linux_artifact_has_guidance_loaded(self) -> None:
+        """Every Linux registry entry should have artifact_guidance populated."""
+        missing = [
+            key for key, details in LINUX_ARTIFACT_REGISTRY.items()
+            if not details.get("artifact_guidance")
+        ]
+        self.assertEqual(
+            missing, [],
+            f"Linux artifacts missing artifact_guidance: {missing}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

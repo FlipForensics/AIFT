@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..os_utils import normalize_os_type
+
 __all__ = [
     "LINUX_ARTIFACT_REGISTRY",
     "WINDOWS_ARTIFACT_REGISTRY",
@@ -704,6 +706,9 @@ _apply_artifact_guidance_from_prompts(LINUX_ARTIFACT_REGISTRY, _LINUX_PROMPTS_DI
 def get_artifact_registry(os_type: str) -> dict[str, dict[str, str]]:
     """Return the artifact registry appropriate for the given OS type.
 
+    Uses :func:`~app.os_utils.normalize_os_type` for consistent
+    normalisation across the codebase.
+
     Args:
         os_type: Operating system identifier as returned by Dissect's
             ``target.os`` (e.g. ``"windows"``, ``"linux"``).  The value
@@ -713,7 +718,6 @@ def get_artifact_registry(os_type: str) -> dict[str, dict[str, str]]:
         The OS-specific artifact registry dictionary.  Defaults to
         :data:`WINDOWS_ARTIFACT_REGISTRY` for unrecognised OS types.
     """
-    normalized = str(os_type).strip().lower() if os_type else ""
-    if normalized == "linux":
+    if normalize_os_type(os_type) == "linux":
         return LINUX_ARTIFACT_REGISTRY
     return WINDOWS_ARTIFACT_REGISTRY

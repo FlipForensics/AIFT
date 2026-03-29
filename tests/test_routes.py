@@ -643,6 +643,17 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(payload.get("os_type"), "linux")
             self.assertNotIn("os_warning", payload)
 
+            # Returned artifact keys should come from the Linux registry.
+            from app.parser import LINUX_ARTIFACT_REGISTRY
+            returned_keys = {
+                str(a["key"]) for a in payload.get("available_artifacts", [])
+            }
+            linux_keys = set(LINUX_ARTIFACT_REGISTRY.keys())
+            self.assertTrue(
+                returned_keys.issubset(linux_keys),
+                f"Returned keys {returned_keys - linux_keys} are not in Linux registry",
+            )
+
     def test_evidence_upload_unknown_os_returns_warning(self) -> None:
         """Evidence intake with unknown OS should include os_warning."""
         class UnknownOsParser(FakeParser):

