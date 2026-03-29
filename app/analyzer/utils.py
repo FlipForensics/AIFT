@@ -45,6 +45,7 @@ __all__ = [
     "emit_analysis_progress",
     "estimate_tokens",
     "is_dedup_safe_identifier_column",
+    "normalize_os_type",
     "read_int_setting",
     "read_bool_setting",
     "read_path_setting",
@@ -373,6 +374,21 @@ def time_range_for_rows(rows: Iterable[dict[str, str]]) -> tuple[datetime | None
 # ---------------------------------------------------------------------------
 # Artifact key normalisation
 # ---------------------------------------------------------------------------
+
+def normalize_os_type(os_type: str | None) -> str:
+    """Normalize an OS type identifier to its canonical lowercase form.
+
+    Args:
+        os_type: Operating system identifier (e.g. ``"windows"``,
+            ``"linux"``, ``"Linux "``).  ``None`` or empty values
+            default to ``"windows"``.
+
+    Returns:
+        The lowercased, stripped OS type string, defaulting to
+        ``"windows"`` when *os_type* is falsy.
+    """
+    return str(os_type).strip().lower() if os_type else "windows"
+
 
 def normalize_artifact_key(artifact_key: str) -> str:
     """Normalize an artifact key to its canonical short form.

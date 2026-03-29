@@ -50,7 +50,7 @@ from .prompts import (
 from .utils import (
     build_datetime, coerce_projection_columns, emit_analysis_progress,
     estimate_tokens, is_dedup_safe_identifier_column, normalize_artifact_key,
-    read_bool_setting, read_int_setting, read_path_setting,
+    normalize_os_type, read_bool_setting, read_int_setting, read_path_setting,
     sanitize_filename, stringify_value,
 )
 
@@ -150,7 +150,7 @@ class ForensicAnalyzer:
                 self.artifact_csv_paths[key] = Path(str(csv_path))
         self._analysis_input_csv_paths: dict[str, Path] = {}
         self.prompts_dir = Path(prompts_dir) if prompts_dir is not None else PROJECT_ROOT / "prompts"
-        self.os_type = str(os_type).strip().lower() if os_type else "windows"
+        self.os_type = normalize_os_type(os_type)
         import random
         self._random = random.Random(random_seed)
         self._load_analysis_settings()

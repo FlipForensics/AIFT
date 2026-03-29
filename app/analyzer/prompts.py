@@ -21,7 +21,7 @@ import yaml
 
 from .constants import PROJECT_ROOT
 from .ioc import build_priority_directives, format_ioc_targets
-from .utils import coerce_projection_columns, normalize_artifact_key
+from .utils import coerce_projection_columns, normalize_artifact_key, normalize_os_type
 
 LOGGER = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ def load_artifact_instruction_prompts(
     Returns:
         A dict mapping lowercased artifact keys to instruction prompt text.
     """
-    normalized_os = str(os_type).strip().lower() if os_type else "windows"
+    normalized_os = normalize_os_type(os_type)
     if normalized_os == "linux":
         instructions_dir = prompts_dir / "artifact_instructions_linux"
     else:
@@ -146,7 +146,7 @@ def load_artifact_ai_column_projections(
     Returns:
         A dict mapping normalized artifact keys to tuples of column names.
     """
-    normalized_os = str(os_type).strip().lower() if os_type else "windows"
+    normalized_os = normalize_os_type(os_type)
 
     try:
         with config_path.open("r", encoding="utf-8") as handle:
