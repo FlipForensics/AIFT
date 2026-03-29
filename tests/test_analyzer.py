@@ -3647,6 +3647,25 @@ class TestSelectAiColumns(unittest.TestCase):
         self.assertEqual(cols, ["ts", "name"])
         self.assertFalse(applied)
 
+    def test_wildcard_passes_through_remaining_columns(self) -> None:
+        """A ``*`` entry should include all columns not already listed."""
+        from app.analyzer.data_prep import select_ai_columns
+        projections = {"services": ("ts", "name", "*")}
+        available = ["ts", "name", "Unit_Description", "Service_ExecStart"]
+        cols, applied = select_ai_columns("services_linux", available, projections)
+        self.assertTrue(applied)
+        # Explicit columns come first in order, then the dynamic ones.
+        self.assertEqual(cols, ["ts", "name", "Unit_Description", "Service_ExecStart"])
+
+    def test_wildcard_does_not_duplicate_explicit_columns(self) -> None:
+        """Wildcard pass-through must not re-add columns already selected."""
+        from app.analyzer.data_prep import select_ai_columns
+        projections = {"myart": ("ts", "name", "*")}
+        available = ["ts", "name", "extra"]
+        cols, applied = select_ai_columns("myart", available, projections)
+        self.assertEqual(cols, ["ts", "name", "extra"])
+        self.assertEqual(cols.count("ts"), 1)
+
 
 class TestProjectRowsForAnalysis(unittest.TestCase):
     """Tests for data_prep.project_rows_for_analysis."""

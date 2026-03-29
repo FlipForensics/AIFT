@@ -227,12 +227,25 @@ def select_ai_columns(
     lookup = {column.strip().lower(): column for column in available_columns}
     projected_columns: list[str] = []
     missing_columns: list[str] = []
+    has_wildcard = False
     for column_name in configured_columns:
+        if column_name.strip() == "*":
+            has_wildcard = True
+            continue
         matched = lookup.get(column_name.strip().lower())
         if matched is not None:
             projected_columns.append(matched)
         else:
             missing_columns.append(column_name)
+
+    # A trailing ``*`` means "pass through any remaining columns not already
+    # listed".  This is used for artifacts with dynamic/variable fields (e.g.
+    # systemd service records whose fields vary per unit).
+    if has_wildcard:
+        already_selected = {c.strip().lower() for c in projected_columns}
+        for col in available_columns:
+            if col.strip().lower() not in already_selected:
+                projected_columns.append(col)
 
     if missing_columns and audit_log_fn is not None:
         audit_log_fn(

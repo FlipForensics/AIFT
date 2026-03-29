@@ -215,12 +215,14 @@ artifact_ai_columns:
 
   # Systemd / init.d services (linux/service record)
   # NOTE: systemd units have dynamic fields (Unit_Description, Service_ExecStart, etc.)
-  # These base columns are always present; dynamic fields pass through if available.
+  # The base columns are listed first; the trailing "*" passes through any
+  # additional dynamic fields that are present in the parsed CSV.
   services_linux:
     - ts
     - type
     - name
-    - source    
+    - source
+    - "*"
 
   # Syslog (linux/log/messages)
   syslog:
