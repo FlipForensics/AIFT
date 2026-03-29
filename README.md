@@ -2,11 +2,11 @@
   <img src="images/AIFT Logo - White Text.png" alt="AIFT Logo" width="400">
 </p>
 
-# AIFT - AI Forensic Triage V1.3
+# AIFT - AI Forensic Triage V1.4
 
-**Automated Windows forensic triage, powered by AI.**
+**Automated Windows and Linux forensic triage, powered by AI.**
 
-AIFT turns hours of manual artifact analysis into minutes. Upload a disk image, select what to parse, and get an AI-generated forensic report - all from your browser, all running locally on your machine.
+AIFT turns hours of manual artifact analysis into minutes. Upload a disk image, select what to parse, and get an AI-generated forensic report - all from your browser, all running locally on your machine. Supports both Windows and Linux disk images.
 
 Built for incident responders who need fast answers, and simple enough for non-forensic team members to operate.
 
@@ -22,7 +22,7 @@ Upload Evidence → Select Artifacts → Parse → AI Analysis → HTML Report
 
 1. **Run the app** - a local web interface opens in your browser.
 2. **Upload evidence** - drag-and-drop an E01, VMDK, VHD, raw image, or archive, or point to a local path for large images.
-3. **Pick artifacts** - choose from 25+ Windows forensic artifacts, which will be parsed by [Dissect](https://github.com/fox-it/dissect).
+3. **Pick artifacts** - choose from 25+ Windows or 30+ Linux forensic artifacts, which will be parsed by [Dissect](https://github.com/fox-it/dissect).
 4. **Get results** - AI analyzes each artifact for indicators of compromise, correlates findings across artifacts, and generates a self-contained HTML report with evidence hashes and full audit trail.
 
 No Elasticsearch. No Docker. No database. One Python script, one command.
@@ -141,7 +141,9 @@ export KIMI_API_KEY="sk-..."
 
 ## Supported Artifacts
 
-AIFT uses [Dissect](https://github.com/fox-it/dissect) by Fox-IT (NCC Group) for forensic parsing - pure Python, no external dependencies.
+AIFT uses [Dissect](https://github.com/fox-it/dissect) by Fox-IT (NCC Group) for forensic parsing - pure Python, no external dependencies. The OS type is detected automatically when the image is opened.
+
+### Windows (25 artifacts)
 
 | Category | Artifacts |
 |----------|----------|
@@ -153,6 +155,17 @@ AIFT uses [Dissect](https://github.com/fox-it/dissect) by Fox-IT (NCC Group) for
 | **Network** | SRUM Network Data, SRUM Application Usage |
 | **Registry** | Shellbags, USB Device History |
 | **Security** | SAM User Accounts, Defender Quarantine |
+
+### Linux (19 artifacts)
+
+| Category | Artifacts |
+|----------|----------|
+| **Persistence** | Cron Jobs, Systemd Services |
+| **Shell History** | Bash History, Zsh History, Fish History, Python History |
+| **Authentication** | Login Records (wtmp), Failed Logins (btmp), Last Login, User Accounts, Groups, Sudoers Config |
+| **Network** | Network Interfaces |
+| **Logs** | Syslog, Systemd Journal, Package History |
+| **SSH** | SSH Authorized Keys, SSH Known Hosts |
 
 Only artifacts present in the image are shown. Unavailable artifacts are automatically grayed out.
 
@@ -179,7 +192,7 @@ AIFT uses [Dissect](https://github.com/fox-it/dissect) for evidence loading, whi
 | **FTK / AccessData** | `.ad1` | Logical images |
 | **Archives** | `.zip`, `.7z`, `.tar`, `.tar.gz` | Extracted and scanned for evidence files inside |
 
-Evidence can also be provided as a **directory path** (e.g., KAPE, Velociraptor, or UAC triage output).
+Evidence can also be provided as a **directory path** (e.g., KAPE or Velociraptor triage output for Windows, or UAC triage output for Linux).
 
 For images over 2 GB, use **Path Mode** instead of uploading - enter the local file path and AIFT reads it directly.
 
@@ -190,7 +203,6 @@ For images over 2 GB, use **Path Mode** instead of uploading - enter the local f
 Features under active development:
 
 - **Multi-Image Support**: Analyze multiple evidence sources in a single case (e.g., workstation + server + domain controller). Includes cross-system correlation to identify lateral movement and shared IOCs.
-- **Linux Support**: Full analysis of Linux disk images using Dissect. Covers bash/zsh/fish history, wtmp/btmp, syslog, journald, cron jobs, systemd services, SSH keys, package history, and user accounts.
 - **Mobile Support**: iOS and Android device analysis using [iLEAPP](https://github.com/abrignoni/iLEAPP) and [ALEAPP](https://github.com/abrignoni/ALEAPP). Covers call logs, SMS, browser history, installed apps, location data, and more.
 
 ---
