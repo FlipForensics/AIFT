@@ -824,14 +824,30 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
             file_hashes = []
         hashes["filename"] = source_path.name
 
-        with ForensicParser(
-            evidence_path=dissect_path,
-            case_dir=case_dir,
-            audit_logger=audit_logger,
-        ) as parser:
-            metadata = parser.get_image_metadata()
-            available_artifacts = parser.get_available_artifacts()
-            detected_os_type = parser.os_type
+        try:
+            with ForensicParser(
+                evidence_path=dissect_path,
+                case_dir=case_dir,
+                audit_logger=audit_logger,
+            ) as parser:
+                metadata = parser.get_image_metadata()
+                available_artifacts = parser.get_available_artifacts()
+                detected_os_type = parser.os_type
+        except Exception:
+            LOGGER.warning(
+                "Failed to open evidence with Dissect for case %s — "
+                "returning degraded response so the user sees the "
+                "unsupported-evidence screen.",
+                case_id,
+                exc_info=True,
+            )
+            metadata = {
+                "hostname": "Unknown",
+                "os_version": "Unknown",
+                "domain": "Unknown",
+            }
+            available_artifacts = []
+            detected_os_type = "unknown"
 
         audit_logger.log(
             "evidence_intake",
