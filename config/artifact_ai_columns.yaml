@@ -193,10 +193,26 @@ artifact_ai_columns:
     - username
     - source
 
+  # User groups (linux)
+  groups:
+    - name
+    - gid
+    - members
+    - source
+
+  # Sudoers configuration (linux)
+  sudoers:
+    - source
+    - user
+    - host
+    - command
+    - runas_user
+    - options
+
   # Systemd / init.d services (linux/service record)
   # NOTE: systemd units have dynamic fields (Unit_Description, Service_ExecStart, etc.)
   # These base columns are always present; dynamic fields pass through if available.
-  linux_services:
+  services_linux:
     - ts
     - type
     - name
@@ -211,7 +227,7 @@ artifact_ai_columns:
     - source
 
   # Systemd journal (linux/log/journal)
-  journal:
+  journalctl:
     - ts
     - unit
     - priority

@@ -1481,6 +1481,44 @@ class LinuxArtifactRegistryTests(unittest.TestCase):
         result = get_artifact_registry(None)  # type: ignore[arg-type]
         self.assertIs(result, WINDOWS_ARTIFACT_REGISTRY)
 
+    def test_linux_registry_loads_guidance_from_correct_directory(self) -> None:
+        """Linux artifact guidance should be loaded from artifact_instructions_linux/."""
+        from app.parser.registry import _LINUX_PROMPTS_DIR
+        self.assertTrue(
+            str(_LINUX_PROMPTS_DIR).endswith("artifact_instructions_linux"),
+            f"_LINUX_PROMPTS_DIR should point to artifact_instructions_linux, got: {_LINUX_PROMPTS_DIR}",
+        )
+
+    def test_linux_registry_has_artifact_guidance(self) -> None:
+        """At least some Linux artifacts should have artifact_guidance loaded from prompt files."""
+        guided = [key for key, d in LINUX_ARTIFACT_REGISTRY.items() if d.get("artifact_guidance")]
+        self.assertGreater(
+            len(guided), 0,
+            "No Linux artifacts have 'artifact_guidance' — prompt loading may be broken.",
+        )
+
+    def test_apply_guidance_from_linux_prompts_dir(self) -> None:
+        """_apply_artifact_guidance_from_prompts loads from the Linux prompts directory."""
+        with TemporaryDirectory() as tmpdir:
+            prompts_dir = Path(tmpdir)
+            (prompts_dir / "bash_history.md").write_text("LINUX BASH GUIDE", encoding="utf-8")
+            registry = {"bash_history": {"name": "Bash History", "analysis_hint": "fallback"}}
+            _apply_artifact_guidance_from_prompts(registry, prompts_dir)
+            self.assertEqual(registry["bash_history"]["artifact_guidance"], "LINUX BASH GUIDE")
+
+    def test_linux_no_duplicate_artifact_keys_with_windows(self) -> None:
+        """Linux-only artifacts should not accidentally collide with Windows keys.
+
+        'services' is intentionally shared (Dissect uses the same function
+        name), but other Linux keys should be distinct.
+        """
+        shared_allowed = {"services"}
+        overlap = set(LINUX_ARTIFACT_REGISTRY) & set(WINDOWS_ARTIFACT_REGISTRY) - shared_allowed
+        self.assertEqual(
+            overlap, set(),
+            f"Unexpected key overlap between Linux and Windows registries: {overlap}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

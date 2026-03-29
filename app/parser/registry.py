@@ -4,7 +4,7 @@ Maintains OS-specific artifact registries that map each supported forensic
 artifact to its Dissect function name, category, human-readable description,
 and analysis guidance.  Guidance text is loaded from Markdown files in
 ``prompts/artifact_instructions/`` (Windows) or
-``prompts/artifacts_linux/`` (Linux) when available, falling back to inline
+``prompts/artifact_instructions_linux/`` (Linux) when available, falling back to inline
 ``analysis_hint`` values.
 
 Attributes:
@@ -23,7 +23,7 @@ __all__ = [
 ]
 
 _ARTIFACT_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts" / "artifact_instructions"
-_LINUX_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts" / "artifacts_linux"
+_LINUX_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts" / "artifact_instructions_linux"
 
 
 def _artifact_prompt_name_candidates(artifact_key: str) -> list[str]:
