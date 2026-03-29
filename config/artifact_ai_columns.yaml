@@ -175,6 +175,7 @@ artifact_ai_columns:
   # User and group management
   users:
     - name
+    - passwd
     - uid
     - gid
     - home
@@ -184,6 +185,8 @@ artifact_ai_columns:
 
   # Cron jobs
   cronjobs:
+    - key
+    - value
     - minute
     - hour
     - day
@@ -192,6 +195,7 @@ artifact_ai_columns:
     - command
     - username
     - source
+    - user_home
 
   # User groups (linux)
   groups:
@@ -216,7 +220,7 @@ artifact_ai_columns:
     - ts
     - type
     - name
-    - source
+    - source    
 
   # Syslog (linux/log/messages)
   syslog:
