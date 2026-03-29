@@ -73,7 +73,7 @@ def _load_artifact_guidance_prompt(
                 prompt_text = prompt_path.read_text(encoding="utf-8").strip()
                 if prompt_text:
                     return prompt_text
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
     return ""
 

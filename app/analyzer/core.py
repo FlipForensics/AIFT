@@ -231,7 +231,7 @@ class ForensicAnalyzer:
             A dict mapping normalized artifact keys to tuples of column names.
         """
         config_path = self._resolve_artifact_ai_columns_config_path()
-        return load_artifact_ai_column_projections(config_path)
+        return load_artifact_ai_column_projections(config_path, os_type=self.os_type)
 
     def _load_prompt_template(self, filename: str, default: str) -> str:
         """Read a prompt template file from the prompts directory.

@@ -1440,6 +1440,88 @@ class ArtifactRegistryTests(unittest.TestCase):
                 )
 
 
+class LinuxParserTests(unittest.TestCase):
+    """Tests for ForensicParser with Linux targets."""
+
+    def _create_parser(self, target: object, case_dir: Path, audit: FakeAuditLogger) -> ForensicParser:
+        """Create a ForensicParser with a mock target."""
+        with patch(_PATCH_TARGET_OPEN, return_value=target):
+            return ForensicParser("evidence.tar", case_dir, audit)
+
+    def test_linux_target_sets_os_type_to_linux(self) -> None:
+        """Parser should detect os_type='linux' from target.os."""
+        class LinuxTarget:
+            os = "linux"
+            def has_function(self, function_name: str) -> bool:
+                return False
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(LinuxTarget(), Path(temp_dir), audit)
+            self.assertEqual(parser.os_type, "linux")
+
+    def test_get_available_artifacts_returns_linux_entries_for_linux_target(self) -> None:
+        """A Linux target should return Linux registry artifacts."""
+        class LinuxTarget:
+            os = "linux"
+            def has_function(self, function_name: str) -> bool:
+                return False
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(LinuxTarget(), Path(temp_dir), audit)
+            artifacts = parser.get_available_artifacts()
+
+        returned_keys = {a["key"] for a in artifacts}
+        self.assertEqual(returned_keys, set(LINUX_ARTIFACT_REGISTRY.keys()))
+
+    def test_parse_artifact_resolves_linux_key(self) -> None:
+        """Parsing a Linux-only artifact key should work on a Linux target."""
+        class LinuxParseTarget:
+            os = "linux"
+            def has_function(self, function_name: str) -> bool:
+                return True
+            def bash_history(self) -> list[FakeRecord]:
+                return [
+                    FakeRecord({"ts": "2025-01-15 10:00:00", "command": "whoami", "shell": "bash"}),
+                ]
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(LinuxParseTarget(), Path(temp_dir), audit)
+            result = parser.parse_artifact("bash_history")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["record_count"], 1)
+
+    def test_os_type_defaults_to_unknown_on_detection_failure(self) -> None:
+        """When target.os raises, os_type should default to 'unknown'."""
+        class BrokenOsTarget:
+            @property
+            def os(self) -> str:
+                raise RuntimeError("cannot detect OS")
+            def has_function(self, function_name: str) -> bool:
+                return False
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(BrokenOsTarget(), Path(temp_dir), audit)
+            self.assertEqual(parser.os_type, "unknown")
+
+    def test_parse_unknown_linux_artifact_returns_error(self) -> None:
+        """Parsing an artifact not in the Linux registry returns error."""
+        class LinuxTarget:
+            os = "linux"
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(LinuxTarget(), Path(temp_dir), audit)
+            result = parser.parse_artifact("shimcache")
+
+        self.assertFalse(result["success"])
+        self.assertIn("Unknown artifact key", result["error"])
+
+
 class LinuxArtifactRegistryTests(unittest.TestCase):
     """Tests for the LINUX_ARTIFACT_REGISTRY and get_artifact_registry."""
 
@@ -1456,8 +1538,15 @@ class LinuxArtifactRegistryTests(unittest.TestCase):
             self.assertIn("description", details, f"{key} missing 'description'")
 
     def test_known_linux_artifacts_present(self) -> None:
-        """Key Linux artifacts should be present in the registry."""
-        expected = {"bash_history", "wtmp", "cronjobs", "syslog", "services", "users"}
+        """All registered Linux artifacts should be present in the registry."""
+        expected = {
+            "bash_history", "zsh_history", "fish_history", "python_history",
+            "wtmp", "btmp", "lastlog", "users", "groups", "sudoers",
+            "cronjobs", "services",
+            "syslog", "journalctl", "packagemanager",
+            "ssh.authorized_keys", "ssh.known_hosts",
+            "network.interfaces",
+        }
         for key in expected:
             self.assertIn(key, LINUX_ARTIFACT_REGISTRY, f"Expected Linux artifact '{key}' not found")
 

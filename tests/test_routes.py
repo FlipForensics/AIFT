@@ -594,6 +594,89 @@ class RoutesTests(unittest.TestCase):
             self.assertTrue(CapturingParser.opened_paths)
             self.assertTrue(CapturingParser.opened_paths[-1].endswith("Disk.E01"))
 
+    def test_evidence_upload_linux_returns_os_type(self) -> None:
+        """Evidence intake with a Linux image should return os_type='linux'."""
+        class LinuxParser(FakeParser):
+            def __init__(self, evidence_path: str | Path, case_dir: str | Path, audit_logger: object) -> None:
+                super().__init__(evidence_path, case_dir, audit_logger)
+                self.os_type = "linux"
+
+            def get_image_metadata(self) -> dict[str, str]:
+                return {
+                    "hostname": "linux-host",
+                    "os_version": "Ubuntu 22.04",
+                    "domain": "-",
+                    "ips": "10.1.1.20",
+                    "timezone": "UTC",
+                    "install_date": "2025-01-01",
+                }
+
+            def get_available_artifacts(self) -> list[dict[str, object]]:
+                return [
+                    {"key": "bash_history", "name": "Bash History", "available": True},
+                    {"key": "syslog", "name": "Syslog", "available": True},
+                ]
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", LinuxParser),
+            patch.object(routes_handlers, "ForensicParser", LinuxParser),
+            patch.object(routes_tasks, "ForensicParser", LinuxParser),
+            patch.object(routes_evidence, "ForensicParser", LinuxParser),
+            patch.object(
+                routes_evidence,
+                "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 12},
+            ),
+        ):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Linux Case"})
+            case_id = create_resp.get_json()["case_id"]
+
+            upload_resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                data={"evidence_file": (BytesIO(b"linux-image"), "disk.E01")},
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(upload_resp.status_code, 200)
+            payload = upload_resp.get_json()
+            self.assertEqual(payload.get("os_type"), "linux")
+            self.assertNotIn("os_warning", payload)
+
+    def test_evidence_upload_unknown_os_returns_warning(self) -> None:
+        """Evidence intake with unknown OS should include os_warning."""
+        class UnknownOsParser(FakeParser):
+            def __init__(self, evidence_path: str | Path, case_dir: str | Path, audit_logger: object) -> None:
+                super().__init__(evidence_path, case_dir, audit_logger)
+                self.os_type = "unknown"
+
+        with (
+            patch.object(routes, "CASES_ROOT", self.cases_root),
+            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes, "ForensicParser", UnknownOsParser),
+            patch.object(routes_handlers, "ForensicParser", UnknownOsParser),
+            patch.object(routes_tasks, "ForensicParser", UnknownOsParser),
+            patch.object(routes_evidence, "ForensicParser", UnknownOsParser),
+            patch.object(
+                routes_evidence,
+                "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 12},
+            ),
+        ):
+            create_resp = self.client.post("/api/cases", json={"case_name": "Unknown OS"})
+            case_id = create_resp.get_json()["case_id"]
+
+            upload_resp = self.client.post(
+                f"/api/cases/{case_id}/evidence",
+                data={"evidence_file": (BytesIO(b"mystery"), "disk.E01")},
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(upload_resp.status_code, 200)
+            payload = upload_resp.get_json()
+            self.assertEqual(payload.get("os_type"), "unknown")
+            self.assertIn("os_warning", payload)
+            self.assertIn("Could not detect", payload["os_warning"])
+
     def test_settings_endpoints_mask_api_keys(self) -> None:
         with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
             update_resp = self.client.post(

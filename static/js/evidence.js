@@ -250,8 +250,8 @@
     } else {
       if (errorBox) errorBox.hidden = true;
       if (artifactContent) artifactContent.hidden = false;
-      showOsArtifactFieldsets(detectedOs);
       populateArtifacts(st.artifacts);
+      showOsArtifactFieldsets(detectedOs);
     }
 
     A.renderParsePlaceholder();

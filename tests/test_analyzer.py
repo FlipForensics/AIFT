@@ -3309,6 +3309,40 @@ class TestLoadArtifactAiColumnProjections(unittest.TestCase):
         self.assertEqual(result, {})
 
 
+    def test_os_suffixed_key_used_for_matching_os(self) -> None:
+        """services_linux columns should be used when os_type='linux'."""
+        from app.analyzer.prompts import load_artifact_ai_column_projections
+        with TemporaryDirectory(prefix="aift-proj-") as tmp_dir:
+            config_path = Path(tmp_dir) / "config.yaml"
+            config_path.write_text(
+                "artifact_ai_columns:\n"
+                "  services:\n    - ts\n    - servicedll\n"
+                "  services_linux:\n    - ts\n    - type\n    - source\n",
+                encoding="utf-8",
+            )
+            result = load_artifact_ai_column_projections(config_path, os_type="linux")
+        # services_linux should override services for Linux
+        self.assertIn("services", result)
+        self.assertIn("source", result["services"])
+        self.assertNotIn("servicedll", result["services"])
+
+    def test_os_suffixed_key_skipped_for_other_os(self) -> None:
+        """services_linux columns should NOT be used when os_type='windows'."""
+        from app.analyzer.prompts import load_artifact_ai_column_projections
+        with TemporaryDirectory(prefix="aift-proj-") as tmp_dir:
+            config_path = Path(tmp_dir) / "config.yaml"
+            config_path.write_text(
+                "artifact_ai_columns:\n"
+                "  services:\n    - ts\n    - servicedll\n"
+                "  services_linux:\n    - ts\n    - type\n    - source\n",
+                encoding="utf-8",
+            )
+            result = load_artifact_ai_column_projections(config_path, os_type="windows")
+        self.assertIn("services", result)
+        self.assertIn("servicedll", result["services"])
+        self.assertNotIn("source", result["services"])
+
+
 class TestBuildSummaryPrompt(unittest.TestCase):
     """Tests for prompts.build_summary_prompt."""
 
@@ -3587,6 +3621,26 @@ class TestResolveAnalysisInstructions(unittest.TestCase):
             artifact_instruction_prompts={},
         )
         self.assertIn("No specific analysis instructions", result)
+
+    def test_dotted_key_matches_underscore_prompt(self) -> None:
+        """ssh.authorized_keys should match prompt keyed as ssh_authorized_keys."""
+        from app.analyzer.data_prep import _resolve_analysis_instructions
+        result = _resolve_analysis_instructions(
+            artifact_key="ssh.authorized_keys",
+            artifact_metadata={},
+            artifact_instruction_prompts={"ssh_authorized_keys": "SSH KEY GUIDE"},
+        )
+        self.assertEqual(result, "SSH KEY GUIDE")
+
+    def test_underscore_key_matches_dotted_prompt(self) -> None:
+        """network_interfaces should match prompt keyed as network.interfaces."""
+        from app.analyzer.data_prep import _resolve_analysis_instructions
+        result = _resolve_analysis_instructions(
+            artifact_key="network_interfaces",
+            artifact_metadata={},
+            artifact_instruction_prompts={"network.interfaces": "NETWORK GUIDE"},
+        )
+        self.assertEqual(result, "NETWORK GUIDE")
 
 
 ###############################################################################

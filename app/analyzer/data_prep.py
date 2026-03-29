@@ -684,7 +684,13 @@ def _resolve_analysis_instructions(
         The analysis instruction text.
     """
     normalized_key = normalize_artifact_key(artifact_key)
-    for key in (artifact_key, normalized_key):
+    # Try the raw key, the normalised key, and dot/underscore variants
+    # so that "ssh.authorized_keys" matches "ssh_authorized_keys.md".
+    candidates: list[str] = [artifact_key, normalized_key]
+    for variant in (artifact_key.replace(".", "_"), artifact_key.replace("_", ".")):
+        if variant not in candidates:
+            candidates.append(variant)
+    for key in candidates:
         prompt = artifact_instruction_prompts.get(key.strip().lower(), "").strip()
         if prompt:
             return prompt

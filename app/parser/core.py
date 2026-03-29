@@ -39,7 +39,7 @@ from typing import Any, Callable, Iterable
 from dissect.target import Target
 from dissect.target.exceptions import PluginError, UnsupportedPluginError
 
-from .registry import WINDOWS_ARTIFACT_REGISTRY, get_artifact_registry
+from .registry import get_artifact_registry
 
 __all__ = ["ForensicParser"]
 
@@ -93,7 +93,7 @@ class ForensicParser:
         try:
             self.os_type: str = str(self.target.os).strip().lower()
         except Exception:
-            self.os_type = "windows"
+            self.os_type = "unknown"
 
     def close(self) -> None:
         """Close the underlying Dissect target handle."""

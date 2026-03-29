@@ -128,15 +128,26 @@ def resolve_artifact_ai_columns_config_path(
 
 def load_artifact_ai_column_projections(
     config_path: Path,
+    os_type: str = "windows",
 ) -> dict[str, tuple[str, ...]]:
     """Load per-artifact column projection configuration from YAML.
 
+    Handles OS-suffixed keys (e.g. ``services_linux``) by mapping them
+    to the base key only when the active *os_type* matches the suffix.
+    This prevents Linux-specific column definitions from overwriting
+    their Windows counterparts (and vice-versa).
+
     Args:
         config_path: Absolute path to the YAML config file.
+        os_type: Active operating system type (``"windows"``,
+            ``"linux"``, etc.).  Controls which OS-suffixed keys are
+            accepted.
 
     Returns:
         A dict mapping normalized artifact keys to tuples of column names.
     """
+    normalized_os = str(os_type).strip().lower() if os_type else "windows"
+
     try:
         with config_path.open("r", encoding="utf-8") as handle:
             parsed = yaml.safe_load(handle) or {}
@@ -166,7 +177,21 @@ def load_artifact_ai_column_projections(
     for artifact_key, raw_columns in source.items():
         if artifact_key is None:
             continue
-        normalized_key = normalize_artifact_key(str(artifact_key))
+        raw_key = str(artifact_key)
+
+        # Handle OS-suffixed keys like "services_linux": accept only
+        # when the suffix matches the current OS, and store under the
+        # base key so the correct projection wins.
+        os_suffix = f"_{normalized_os}"
+        if raw_key.endswith(os_suffix):
+            effective_key = raw_key[: -len(os_suffix)]
+        elif raw_key.rsplit("_", 1)[-1] in ("linux", "windows", "esxi"):
+            # OS-suffixed key for a *different* OS — skip it.
+            continue
+        else:
+            effective_key = raw_key
+
+        normalized_key = normalize_artifact_key(effective_key)
         columns = coerce_projection_columns(raw_columns)
         if columns:
             projections[normalized_key] = tuple(columns)
@@ -192,7 +217,7 @@ def build_summary_prompt(
         per_artifact_results: List of per-artifact result dicts, each
             with ``artifact_key``, ``artifact_name``, and ``analysis``.
         metadata_map: Host metadata mapping with optional ``hostname``,
-            ``os_version``, and ``domain`` keys.
+            ``os_version``, ``os_type``, and ``domain`` keys.
 
     Returns:
         The fully rendered summary prompt string.
