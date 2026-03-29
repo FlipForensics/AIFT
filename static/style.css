@@ -548,6 +548,10 @@ input[type="radio"] {
   gap: var(--space-3);
 }
 
+#artifacts-form > #parse-selected {
+  grid-column: 1 / -1;
+}
+
 .artifact-category {
   margin: 0;
   border: 1px solid var(--border);

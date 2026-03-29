@@ -337,20 +337,6 @@
       : [];
   }
 
-  /**
-   * Find the `<select>` mode dropdown for a given artifact key.
-   *
-   * @param {string} artifactKey - The artifact key to look up.
-   * @returns {HTMLSelectElement|null}
-   */
-  function artifactModeSelectForKey(artifactKey) {
-    if (!el.artifactsForm) return null;
-    const key = String(artifactKey || "");
-    if (!key) return null;
-    const selects = Array.from(el.artifactsForm.querySelectorAll("select.artifact-mode-select[data-artifact-key]"));
-    return selects.find((select) => String(select.dataset.artifactKey || "") === key) || null;
-  }
-
   /** Normalise a mode string to MODE_PARSE_ONLY or MODE_PARSE_AND_AI. */
   function artifactModeValue(rawMode) {
     return String(rawMode || "").trim().toLowerCase() === A.MODE_PARSE_ONLY ? A.MODE_PARSE_ONLY : A.MODE_PARSE_AND_AI;
@@ -366,7 +352,8 @@
    */
   function syncArtifactModeControl(cb, modeSelect = null) {
     if (!(cb instanceof HTMLInputElement)) return;
-    const select = modeSelect || artifactModeSelectForKey(cb.dataset.artifactKey || "");
+    const li = cb.closest("li");
+    const select = modeSelect || (li ? li.querySelector("select.artifact-mode-select") : null);
     if (!select) return;
     select.disabled = cb.disabled || !cb.checked;
     if (!select.disabled) select.value = artifactModeValue(select.value);
@@ -387,7 +374,9 @@
     const li = cb.closest("li");
     if (!li) return null;
 
-    let select = artifactModeSelectForKey(key);
+    /* Search within the parent <li> to avoid collisions when duplicate
+       artifact keys exist across OS-specific fieldsets (e.g. "services"). */
+    let select = li.querySelector("select.artifact-mode-select");
     if (!select) {
       select = document.createElement("select");
       select.className = "artifact-mode-select";
@@ -517,7 +506,8 @@
       .filter((cb) => cb.checked && !cb.disabled && cb.dataset.artifactKey)
       .map((cb) => {
         const key = String(cb.dataset.artifactKey || "");
-        const select = artifactModeSelectForKey(key);
+        const li = cb.closest("li");
+        const select = li ? li.querySelector("select.artifact-mode-select") : null;
         return { artifact_key: key, mode: artifactModeValue(select ? select.value : A.MODE_PARSE_AND_AI) };
       });
   }
