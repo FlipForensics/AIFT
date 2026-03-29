@@ -169,24 +169,36 @@
       A.setMsg(el.evidenceMsg, `Intake in progress... (${A.fmtElapsed(startedAt)})`, "info");
     };
 
+    /**
+     * Tick the progress bar forward.
+     *
+     * Uses a time-based curve so the bar advances steadily over a long
+     * period instead of racing to the cap and stalling.  The position is
+     * interpolated as:  cap * (1 - 1/(1 + t/T))  where t is elapsed
+     * seconds and T is a half-life constant (seconds to reach ~50% of cap).
+     */
     const tickProgress = () => {
       const current = A.num(el.evidenceProg.value, 0);
       if (current >= cap) return;
-      const remaining = cap - current;
-      const step = Math.max(0.15, Math.min(3, remaining / 10));
-      el.evidenceProg.value = Math.min(cap, current + step);
+      const elapsed = (Date.now() - startedAt) / 1000;
+      /* Half-life: 30s means bar reaches ~50% of cap after 30s,
+         ~75% after 90s, ~90% after 270s — stays well below cap. */
+      const halfLife = 30;
+      const target = cap * (1 - 1 / (1 + elapsed / halfLife));
+      /* Only move forward, never backward, and cap at the limit. */
+      el.evidenceProg.value = Math.min(cap, Math.max(current, target));
     };
 
     el.evidenceProg.value = 2;
     updateMessage();
-    barTicker = window.setInterval(tickProgress, 350);
+    barTicker = window.setInterval(tickProgress, 500);
     msgTicker = window.setInterval(updateMessage, 1000);
 
     return {
       setPhase: (phase) => {
         if (phase === "case-created") {
-          cap = 94;
-          if (el.evidenceProg.value < 28) el.evidenceProg.value = 28;
+          cap = 90;
+          if (el.evidenceProg.value < 15) el.evidenceProg.value = 15;
         }
       },
       complete: () => { cap = 100; el.evidenceProg.value = 100; },
