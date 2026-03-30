@@ -34,7 +34,7 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(config_path.exists())
             self.assertEqual(config.get("ai", {}).get("provider"), "claude")
             self.assertEqual(config.get("server", {}).get("port"), 5000)
-            self.assertEqual(config.get("server", {}).get("max_upload_mb"), 2048)
+            self.assertEqual(config.get("server", {}).get("max_upload_mb"), 0)
             self.assertEqual(config.get("evidence", {}).get("large_file_threshold_mb"), 2048)
             self.assertEqual(config.get("evidence", {}).get("csv_output_dir"), "")
             self.assertEqual(
@@ -441,11 +441,12 @@ class ValidateConfigTests(unittest.TestCase):
         errors = validate_config(config)
         self.assertTrue(any("server.host" in e for e in errors))
 
-    def test_max_upload_mb_zero(self) -> None:
+    def test_max_upload_mb_zero_is_valid(self) -> None:
         config = self._valid_config()
         config["server"]["max_upload_mb"] = 0
         errors = validate_config(config)
-        self.assertTrue(any("server.max_upload_mb" in e for e in errors))
+        upload_errors = [e for e in errors if "server.max_upload_mb" in e]
+        self.assertEqual(upload_errors, [])
 
     def test_max_upload_mb_negative(self) -> None:
         config = self._valid_config()
@@ -727,7 +728,7 @@ class LoadConfigValidationEnforcementTests(unittest.TestCase):
             config_path = Path(temp_dir) / "config.yaml"
             config_path.write_text(
                 yaml.safe_dump({
-                    "server": {"port": -1, "host": "", "max_upload_mb": 0},
+                    "server": {"port": -1, "host": "", "max_upload_mb": -1},
                     "ai": {"provider": "bad"},
                 }),
                 encoding="utf-8",

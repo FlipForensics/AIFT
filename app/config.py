@@ -96,7 +96,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "server": {
         "port": 5000,
         "host": "127.0.0.1",
-        "max_upload_mb": 2048,
+        "max_upload_mb": 0,
     },
     "evidence": {
         "large_file_threshold_mb": 2048,
@@ -214,9 +214,9 @@ def validate_config(config: dict[str, Any]) -> list[str]:
             )
 
         max_upload = server.get("max_upload_mb")
-        if not isinstance(max_upload, (int, float)) or max_upload <= 0:
+        if not isinstance(max_upload, (int, float)) or max_upload < 0:
             errors.append(
-                f"server.max_upload_mb: must be a positive number, got {max_upload!r}"
+                f"server.max_upload_mb: must be a non-negative number (0 = unlimited), got {max_upload!r}"
             )
 
     # --- ai section ---

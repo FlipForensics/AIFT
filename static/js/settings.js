@@ -176,7 +176,6 @@
     if (el.setPort) el.setPort.value = String(A.num(A.obj(s.server).port, 5000));
     if (el.setSize) el.setSize.value = A.fmtNumber(A.num(A.obj(s.evidence).large_file_threshold_mb, 2048) / 1024, 3);
     if (el.setCsvOutputDir) el.setCsvOutputDir.value = String(A.obj(s.evidence).csv_output_dir || "");
-    setNumberInput(el.setIntakeTimeoutSeconds, A.num(A.obj(s.evidence).intake_timeout_seconds, 7200), 7200);
     updateCsvOutputHelp();
     applyAdvancedSettings(s);
     fillProviderFields();
@@ -196,6 +195,7 @@
     setNumberInput(el.setConnectionMaxTokens, A.num(analysis.connection_test_max_tokens, 256), 256);
     setNumberInput(el.setDateBufferDays, A.num(analysis.date_buffer_days, 7), 7);
     setNumberInput(el.setCitationSpotCheckLimit, A.num(analysis.citation_spot_check_limit, 20), 20);
+    setNumberInput(el.setIntakeTimeoutSeconds, A.num(A.obj(s.evidence).intake_timeout_seconds, 7200), 7200);
     setNumberInput(
       el.setLocalRequestTimeoutSeconds,
       A.num(A.obj(A.obj(s.ai).local).request_timeout_seconds, 3600),
