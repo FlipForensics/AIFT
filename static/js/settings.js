@@ -174,7 +174,10 @@
     const backend = A.normProvider(String(ai.provider || "claude"));
     if (el.setProvider) el.setProvider.value = A.toUiProvider(backend);
     if (el.setPort) el.setPort.value = String(A.num(A.obj(s.server).port, 5000));
-    if (el.setSize) el.setSize.value = A.fmtNumber(A.num(A.obj(s.evidence).large_file_threshold_mb, 2048) / 1024, 3);
+    if (el.setSize) {
+      var threshMb = A.num(A.obj(s.evidence).large_file_threshold_mb, 0);
+      el.setSize.value = threshMb === 0 ? "0" : A.fmtNumber(threshMb / 1024, 3);
+    }
     if (el.setCsvOutputDir) el.setCsvOutputDir.value = String(A.obj(s.evidence).csv_output_dir || "");
     updateCsvOutputHelp();
     applyAdvancedSettings(s);
@@ -289,7 +292,7 @@
     if (typeof port === "number" && Number.isFinite(port) && port > 0) base.server.port = port;
 
     const gb = A.num(A.val(el.setSize), null);
-    if (typeof gb === "number" && Number.isFinite(gb) && gb > 0) base.evidence.large_file_threshold_mb = Math.round(gb * 1024);
+    if (typeof gb === "number" && Number.isFinite(gb) && gb >= 0) base.evidence.large_file_threshold_mb = Math.round(gb * 1024);
     if (el.setCsvOutputDir) base.evidence.csv_output_dir = A.val(el.setCsvOutputDir);
     base.evidence.intake_timeout_seconds = readIntInput(el.setIntakeTimeoutSeconds, 7200, 60);
 

@@ -71,9 +71,9 @@ def create_app(config_path: str | None = None) -> Flask:
     # Generate a per-process CSRF token for protecting state-changing requests.
     app.config["CSRF_TOKEN"] = secrets.token_hex(32)
 
-    max_upload_mb = aift_config.get("server", {}).get("max_upload_mb")
-    if isinstance(max_upload_mb, (int, float)) and max_upload_mb > 0:
-        app.config["MAX_CONTENT_LENGTH"] = int(max_upload_mb) * 1024 * 1024
+    threshold_mb = aift_config.get("evidence", {}).get("large_file_threshold_mb")
+    if isinstance(threshold_mb, (int, float)) and threshold_mb > 0:
+        app.config["MAX_CONTENT_LENGTH"] = int(threshold_mb) * 1024 * 1024
 
     _register_error_handlers(app)
     _register_csrf_protection(app)
@@ -103,7 +103,8 @@ def _register_error_handlers(app: Flask) -> None:
         return jsonify({
             "error": (
                 f"File too large. The server limit is {max_mb} MB. "
-                "Increase server.max_upload_mb in config.yaml or set it to 0 for unlimited."
+                "Increase evidence.large_file_threshold_mb in config.yaml "
+                "(or set Evidence Size Threshold to 0 in Settings for unlimited)."
             ),
         }), 413
 

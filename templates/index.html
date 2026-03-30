@@ -627,10 +627,6 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
           <input id="setting-port" name="port" type="number" min="1" max="65535" value="5000">
         </div>
         <div class="form-row">
-          <label for="setting-size-threshold">Evidence Size Threshold (GB)</label>
-          <input id="setting-size-threshold" name="evidence_size_threshold" type="number" min="1" value="10">
-        </div>
-        <div class="form-row">
           <label for="setting-csv-output-dir">CSV Output Directory</label>
           <input
             id="setting-csv-output-dir"
@@ -687,6 +683,11 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
             <label for="setting-intake-timeout-seconds">Evidence Intake Timeout (seconds)</label>
             <input id="setting-intake-timeout-seconds" name="intake_timeout_seconds" type="number" min="60" value="7200">
             <p>How long to wait for evidence hashing and validation. Large images (100 GB+) may need 30+ minutes. Default: 7200 (2 hours).</p>
+          </div>
+          <div class="form-row">
+            <label for="setting-size-threshold">Evidence Size Threshold (GB, 0 = unlimited)</label>
+            <input id="setting-size-threshold" name="evidence_size_threshold" type="number" min="0" value="0">
+            <p>Maximum upload size. Set to 0 for no limit (recommended for large forensic images).</p>
           </div>
           <div class="form-row">
             <label for="setting-local-request-timeout-seconds">Local AI Request Timeout (seconds)</label>

@@ -96,10 +96,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "server": {
         "port": 5000,
         "host": "127.0.0.1",
-        "max_upload_mb": 0,
     },
     "evidence": {
-        "large_file_threshold_mb": 2048,
+        "large_file_threshold_mb": 0,
         "csv_output_dir": "",
         "intake_timeout_seconds": 7200,
     },
@@ -213,12 +212,6 @@ def validate_config(config: dict[str, Any]) -> list[str]:
                 f"server.host: must be a non-empty string, got {host!r}"
             )
 
-        max_upload = server.get("max_upload_mb")
-        if not isinstance(max_upload, (int, float)) or max_upload < 0:
-            errors.append(
-                f"server.max_upload_mb: must be a non-negative number (0 = unlimited), got {max_upload!r}"
-            )
-
     # --- ai section ---
     ai = config.get("ai", {})
     if not isinstance(ai, dict):
@@ -269,9 +262,9 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     evidence = config.get("evidence", {})
     if isinstance(evidence, dict):
         threshold = evidence.get("large_file_threshold_mb")
-        if not isinstance(threshold, (int, float)) or threshold <= 0:
+        if not isinstance(threshold, (int, float)) or threshold < 0:
             errors.append(
-                f"evidence.large_file_threshold_mb: must be a positive number, got {threshold!r}"
+                f"evidence.large_file_threshold_mb: must be a non-negative number (0 = unlimited), got {threshold!r}"
             )
 
     return errors
