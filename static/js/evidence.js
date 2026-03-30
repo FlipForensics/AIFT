@@ -125,15 +125,16 @@
       if (!caseId) throw new Error("Case ID missing from create response.");
       intakeProgress.setPhase("case-created");
 
+      const intakeTimeoutMs = A.num(A.obj(A.obj(A.obj(st.settings).evidence).intake_timeout_seconds), 7200) * 1000;
       let ev;
       if (uploadMode) {
         const fd = new FormData();
         files.forEach((file, index) => {
           fd.append("evidence_file", file, file.name || `evidence_${index + 1}.bin`);
         });
-        ev = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", body: fd, timeout: A.FETCH_TIMEOUT_UPLOAD_MS });
+        ev = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", body: fd, timeout: intakeTimeoutMs });
       } else {
-        ev = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", json: { path }, timeout: A.FETCH_TIMEOUT_UPLOAD_MS });
+        ev = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", json: { path }, timeout: intakeTimeoutMs });
       }
       intakeProgress.complete();
       A.setCaseId(caseId);

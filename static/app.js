@@ -130,6 +130,7 @@
     el.setConnectionMaxTokens = q("setting-connection-max-tokens");
     el.setDateBufferDays = q("setting-date-buffer-days");
     el.setCitationSpotCheckLimit = q("setting-citation-spot-check-limit");
+    el.setIntakeTimeoutSeconds = q("setting-intake-timeout-seconds");
     el.setLocalRequestTimeoutSeconds = q("setting-local-request-timeout-seconds");
     el.setMaxMergeRounds = q("setting-max-merge-rounds");
     el.setArtifactDeduplicationEnabled = q("setting-artifact-deduplication-enabled");

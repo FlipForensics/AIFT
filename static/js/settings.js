@@ -176,6 +176,7 @@
     if (el.setPort) el.setPort.value = String(A.num(A.obj(s.server).port, 5000));
     if (el.setSize) el.setSize.value = A.fmtNumber(A.num(A.obj(s.evidence).large_file_threshold_mb, 2048) / 1024, 3);
     if (el.setCsvOutputDir) el.setCsvOutputDir.value = String(A.obj(s.evidence).csv_output_dir || "");
+    setNumberInput(el.setIntakeTimeoutSeconds, A.num(A.obj(s.evidence).intake_timeout_seconds, 7200), 7200);
     updateCsvOutputHelp();
     applyAdvancedSettings(s);
     fillProviderFields();
@@ -290,6 +291,7 @@
     const gb = A.num(A.val(el.setSize), null);
     if (typeof gb === "number" && Number.isFinite(gb) && gb > 0) base.evidence.large_file_threshold_mb = Math.round(gb * 1024);
     if (el.setCsvOutputDir) base.evidence.csv_output_dir = A.val(el.setCsvOutputDir);
+    base.evidence.intake_timeout_seconds = readIntInput(el.setIntakeTimeoutSeconds, 7200, 60);
 
     base.analysis.ai_max_tokens = readIntInput(el.setAiMaxTokens, 128000, 1);
     base.analysis.shortened_prompt_cutoff_tokens = readIntInput(el.setShortenedPromptCutoffTokens, 64000, 1);

@@ -631,6 +631,11 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
           <input id="setting-size-threshold" name="evidence_size_threshold" type="number" min="1" value="10">
         </div>
         <div class="form-row">
+          <label for="setting-intake-timeout-seconds">Evidence Intake Timeout (seconds)</label>
+          <input id="setting-intake-timeout-seconds" name="intake_timeout_seconds" type="number" min="60" value="7200">
+          <p>How long to wait for evidence hashing and validation. Large images (100 GB+) may need 30+ minutes. Default: 7200 (2 hours).</p>
+        </div>
+        <div class="form-row">
           <label for="setting-csv-output-dir">CSV Output Directory</label>
           <input
             id="setting-csv-output-dir"
@@ -684,7 +689,7 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
             <input id="setting-citation-spot-check-limit" name="citation_spot_check_limit" type="number" min="1" value="20">
           </div>
           <div class="form-row">
-            <label for="setting-local-request-timeout-seconds">Local Request Timeout (seconds)</label>
+            <label for="setting-local-request-timeout-seconds">Local AI Request Timeout (seconds)</label>
             <input
               id="setting-local-request-timeout-seconds"
               name="local_request_timeout_seconds"

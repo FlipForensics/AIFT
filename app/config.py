@@ -101,6 +101,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "evidence": {
         "large_file_threshold_mb": 2048,
         "csv_output_dir": "",
+        "intake_timeout_seconds": 7200,
     },
     "analysis": {
         "ai_max_tokens": 128000,
