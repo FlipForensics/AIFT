@@ -27,7 +27,7 @@ from zipfile import BadZipFile, ZipFile, ZIP_DEFLATED
 
 import py7zr
 
-from flask import Blueprint, Response, request, send_file
+from flask import Blueprint, Response, current_app, request, send_file
 from werkzeug.utils import secure_filename
 
 from ..hasher import compute_hashes, verify_hash
@@ -300,6 +300,54 @@ def _collect_uploaded_files() -> list[Any]:
     return uploaded
 
 
+_SAVE_CHUNK_SIZE = 4 * 1024 * 1024  # 4 MiB
+
+
+def _save_with_limit(
+    file_storage: Any,
+    dest: Path,
+    max_bytes: int,
+    cumulative: int,
+) -> int:
+    """Stream-save an uploaded file, enforcing an optional size limit.
+
+    Args:
+        file_storage: Werkzeug ``FileStorage`` to save.
+        dest: Destination path on disk.
+        max_bytes: Maximum allowed total bytes across all files (0 = unlimited).
+        cumulative: Bytes already written by prior files in this upload batch.
+
+    Returns:
+        Updated cumulative byte count after this file.
+
+    Raises:
+        ValueError: If the cumulative size exceeds *max_bytes*.
+    """
+    if max_bytes <= 0:
+        file_storage.save(dest)
+        return cumulative + dest.stat().st_size
+
+    written = 0
+    stream = file_storage.stream
+    with open(dest, "wb") as out:
+        while True:
+            chunk = stream.read(_SAVE_CHUNK_SIZE)
+            if not chunk:
+                break
+            written += len(chunk)
+            if cumulative + written > max_bytes:
+                out.close()
+                dest.unlink(missing_ok=True)
+                limit_gb = max_bytes / (1024 * 1024 * 1024)
+                raise ValueError(
+                    f"Upload exceeds the Evidence Size Threshold "
+                    f"({limit_gb:.1f} GB). Use path mode instead, or "
+                    f"increase the threshold in Settings \u2192 Advanced."
+                )
+            out.write(chunk)
+    return cumulative + written
+
+
 def _unique_destination(path: Path) -> Path:
     """Generate a unique file path by appending a numeric suffix if needed.
 
@@ -483,11 +531,15 @@ def resolve_evidence_payload(case_dir: Path) -> dict[str, Any]:
     uploaded_files = _collect_uploaded_files()
     uploaded_paths: list[Path] = []
     if uploaded_files:
+        aift_config = current_app.config.get("AIFT_CONFIG", {})
+        threshold_mb = aift_config.get("evidence", {}).get("large_file_threshold_mb", 0)
+        max_bytes = int(threshold_mb) * 1024 * 1024 if threshold_mb and threshold_mb > 0 else 0
+        cumulative_bytes = 0
         timestamp = int(time.time())
         for index, uploaded_file in enumerate(uploaded_files, start=1):
             filename = secure_filename(uploaded_file.filename) or f"evidence_{timestamp}_{index}.bin"
             stored_path = _unique_destination(evidence_dir / filename)
-            uploaded_file.save(stored_path)
+            cumulative_bytes = _save_with_limit(uploaded_file, stored_path, max_bytes, cumulative_bytes)
             uploaded_paths.append(stored_path)
 
         source_path = _resolve_uploaded_dissect_path(uploaded_paths)

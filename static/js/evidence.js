@@ -116,6 +116,22 @@
     if (!uploadMode && !path) return A.setMsg(el.evidenceMsg, "Enter a local evidence path.", "error");
     if (!uploadMode && el.path && el.path.value !== path) el.path.value = path;
 
+    if (uploadMode) {
+      var threshMb = A.num(A.obj(A.obj(st.settings).evidence).large_file_threshold_mb, 0);
+      if (threshMb > 0) {
+        var totalBytes = files.reduce(function(sum, f) { return sum + (f.size || 0); }, 0);
+        var threshBytes = threshMb * 1024 * 1024;
+        if (totalBytes > threshBytes) {
+          var limitGb = (threshMb / 1024).toFixed(1);
+          var sizeGb = (totalBytes / (1024 * 1024 * 1024)).toFixed(1);
+          return A.setMsg(el.evidenceMsg,
+            "File size (" + sizeGb + " GB) exceeds the Evidence Size Threshold (" + limitGb + " GB). " +
+            "Use path mode instead, or increase the threshold in Settings \u2192 Advanced.",
+            "error");
+        }
+      }
+    }
+
     setEvidenceBusy(true);
     const intakeProgress = createIntakeProgressTracker();
     try {

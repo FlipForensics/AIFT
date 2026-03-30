@@ -71,42 +71,10 @@ def create_app(config_path: str | None = None) -> Flask:
     # Generate a per-process CSRF token for protecting state-changing requests.
     app.config["CSRF_TOKEN"] = secrets.token_hex(32)
 
-    threshold_mb = aift_config.get("evidence", {}).get("large_file_threshold_mb")
-    if isinstance(threshold_mb, (int, float)) and threshold_mb > 0:
-        app.config["MAX_CONTENT_LENGTH"] = int(threshold_mb) * 1024 * 1024
-
-    _register_error_handlers(app)
     _register_csrf_protection(app)
     register_routes(app)
 
     return app
-
-
-def _register_error_handlers(app: Flask) -> None:
-    """Register custom HTTP error handlers on the Flask application.
-
-    Args:
-        app: The Flask application instance.
-    """
-
-    @app.errorhandler(413)
-    def _request_entity_too_large(_error: Exception) -> tuple:
-        """Return a JSON error when the upload exceeds MAX_CONTENT_LENGTH.
-
-        Args:
-            _error: The Werkzeug ``RequestEntityTooLarge`` exception (unused).
-
-        Returns:
-            A JSON error response with a 413 status code.
-        """
-        max_mb = app.config.get("MAX_CONTENT_LENGTH", 0) // (1024 * 1024)
-        return jsonify({
-            "error": (
-                f"File too large. The server limit is {max_mb} MB. "
-                "Increase evidence.large_file_threshold_mb in config.yaml "
-                "(or set Evidence Size Threshold to 0 in Settings for unlimited)."
-            ),
-        }), 413
 
 
 def _register_csrf_protection(app: Flask) -> None:
