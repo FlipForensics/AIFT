@@ -762,6 +762,9 @@ tbody td:nth-child(3) {
   border: 1px solid var(--border);
   background: var(--bg-card);
   padding: var(--space-4);
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  min-width: 0;
 }
 
 #analysis-stream,
@@ -780,6 +783,13 @@ tbody td:nth-child(3) {
 
 .markdown-output > :last-child {
   margin-bottom: 0;
+}
+
+.markdown-output {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  word-break: break-word;
+  min-width: 0;
 }
 
 .markdown-output h1,
@@ -903,6 +913,9 @@ tbody td:nth-child(3) {
   border: 1px solid var(--border);
   background: var(--bg-secondary);
   padding: var(--space-3);
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  min-width: 0;
 }
 
 .summary-card dl {
@@ -1007,6 +1020,9 @@ tbody td:nth-child(3) {
   max-width: min(78ch, 85%);
   border: 1px solid var(--border);
   padding: 0.55rem 0.7rem;
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  min-width: 0;
 }
 
 .chat-bubble-user {
