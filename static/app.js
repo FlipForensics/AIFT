@@ -134,6 +134,7 @@
     el.setLocalRequestTimeoutSeconds = q("setting-local-request-timeout-seconds");
     el.setMaxMergeRounds = q("setting-max-merge-rounds");
     el.setArtifactDeduplicationEnabled = q("setting-artifact-deduplication-enabled");
+    el.setComputeHashes = q("setting-compute-hashes");
 
     el.setAttachClaude = q("setting-attach-claude");
     el.setAttachOpenAI = q("setting-attach-openai");

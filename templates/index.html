@@ -695,6 +695,18 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
             <input id="setting-size-threshold" name="evidence_size_threshold" type="number" min="0" value="0">
           </div>
           <div class="form-row">
+            <label for="setting-compute-hashes">
+              Compute Evidence Hashes
+              <span class="setting-help-icon" data-tooltip="Compute SHA-256 and MD5 hashes during evidence intake for integrity verification. Disabling this speeds up intake for large images but skips hash verification in the report.">?</span>
+            </label>
+            <input
+              id="setting-compute-hashes"
+              name="compute_hashes"
+              type="checkbox"
+              checked
+            >
+          </div>
+          <div class="form-row">
             <label for="setting-local-request-timeout-seconds">
               Local AI Request Timeout (seconds)
               <span class="setting-help-icon" data-tooltip="Maximum time in seconds to wait for a response from a local AI provider (Ollama, LM Studio, vLLM, etc.). Local models can be slow on large artifacts.">?</span>

@@ -208,6 +208,9 @@
     if (el.setArtifactDeduplicationEnabled) {
       el.setArtifactDeduplicationEnabled.checked = A.boolSetting(analysis.artifact_deduplication_enabled, true);
     }
+    if (el.setComputeHashes) {
+      el.setComputeHashes.checked = A.boolSetting(A.obj(s.evidence).compute_hashes, true);
+    }
 
     const ai = A.obj(s.ai);
     if (el.setAttachClaude) el.setAttachClaude.checked = A.boolSetting(A.obj(ai.claude).attach_csv_as_file, true);
@@ -294,6 +297,7 @@
     if (typeof gb === "number" && Number.isFinite(gb) && gb >= 0) base.evidence.large_file_threshold_mb = Math.round(gb * 1024);
     if (el.setCsvOutputDir) base.evidence.csv_output_dir = A.val(el.setCsvOutputDir);
     base.evidence.intake_timeout_seconds = readIntInput(el.setIntakeTimeoutSeconds, 7200, 60);
+    if (el.setComputeHashes) base.evidence.compute_hashes = !!el.setComputeHashes.checked;
 
     base.analysis.ai_max_tokens = readIntInput(el.setAiMaxTokens, 128000, 1);
     base.analysis.shortened_prompt_cutoff_tokens = readIntInput(el.setShortenedPromptCutoffTokens, 64000, 1);

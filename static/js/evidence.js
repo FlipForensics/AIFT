@@ -142,15 +142,17 @@
       intakeProgress.setPhase("case-created");
 
       const intakeTimeoutMs = A.num(A.obj(A.obj(A.obj(st.settings).evidence).intake_timeout_seconds), 7200) * 1000;
+      const skipHashing = !A.boolSetting(A.obj(A.obj(st.settings).evidence).compute_hashes, true);
       let ev;
       if (uploadMode) {
         const fd = new FormData();
         files.forEach((file, index) => {
           fd.append("evidence_file", file, file.name || `evidence_${index + 1}.bin`);
         });
+        if (skipHashing) fd.append("skip_hashing", "1");
         ev = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", body: fd, timeout: intakeTimeoutMs });
       } else {
-        ev = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", json: { path }, timeout: intakeTimeoutMs });
+        ev = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", json: { path, skip_hashing: skipHashing }, timeout: intakeTimeoutMs });
       }
       intakeProgress.complete();
       A.setCaseId(caseId);

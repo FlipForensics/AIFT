@@ -171,6 +171,12 @@
       border: 1px solid rgba(240, 68, 56, 0.45);
     }
 
+    .hash-status.skipped {
+      color: #f5f0e0;
+      background: linear-gradient(90deg, #d4a843, #b8942e);
+      border: 1px solid rgba(212, 168, 67, 0.45);
+    }
+
     .content-block {
       background: var(--panel-alt);
       border: 1px solid rgba(159, 177, 199, 0.2);
@@ -557,7 +563,7 @@
 
     <section class="panel">
       <h2>Hash Verification Result</h2>
-      <div class="hash-status {% if hash_verification.passed %}pass{% else %}fail{% endif %}">
+      <div class="hash-status {% if hash_verification.skipped | default(false) %}skipped{% elif hash_verification.passed %}pass{% else %}fail{% endif %}">
         {{ hash_verification.label }}
       </div>
       <div class="content-block">{{ hash_verification.detail }}</div>

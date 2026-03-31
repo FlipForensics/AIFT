@@ -854,8 +854,20 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
         source_path = Path(evidence_payload["source_path"])
         dissect_path = Path(evidence_payload["dissect_path"])
 
+        # Determine whether the user opted to skip hashing.
+        skip_hashing = False
+        if request.content_type and "multipart" in request.content_type:
+            skip_hashing = bool(request.form.get("skip_hashing"))
+        else:
+            payload = request.get_json(silent=True) or {}
+            if isinstance(payload, dict):
+                skip_hashing = bool(payload.get("skip_hashing"))
+
         files_to_hash = evidence_payload.get("evidence_files_to_hash", [])
-        if files_to_hash:
+        if skip_hashing:
+            hashes = {"sha256": "N/A (skipped)", "md5": "N/A (skipped)", "size_bytes": 0}
+            file_hashes = []
+        elif files_to_hash:
             file_hashes: list[dict[str, Any]] = []
             for fpath in files_to_hash:
                 h = dict(compute_hashes(fpath))
@@ -1039,10 +1051,16 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
     intake_sha256 = str(hashes.get("sha256", "")).strip()
     file_hash_entries = list(case_snapshot.get("evidence_file_hashes", []))
 
-    if intake_sha256.startswith("N/A"):
+    hashing_skipped = intake_sha256 == "N/A (skipped)"
+
+    if hashing_skipped:
         hash_ok = True
         computed_sha256 = intake_sha256
         verify_details: list[dict[str, object]] = []
+    elif intake_sha256.startswith("N/A"):
+        hash_ok = True
+        computed_sha256 = intake_sha256
+        verify_details = []
     elif file_hash_entries:
         # Verify every file that was hashed at intake.
         hash_ok = True
@@ -1091,13 +1109,14 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
             "expected_sha256": intake_sha256,
             "computed_sha256": computed_sha256,
             "match": hash_ok,
+            "skipped": hashing_skipped,
             "verified_files": verify_details,
         },
     )
 
     hashes["case_id"] = case_id
     hashes["expected_sha256"] = intake_sha256
-    hashes["hash_verified"] = hash_ok
+    hashes["hash_verified"] = "skipped" if hashing_skipped else hash_ok
 
     analysis_results = dict(case_snapshot.get("analysis_results", {}))
 

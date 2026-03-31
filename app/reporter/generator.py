@@ -337,6 +337,13 @@ class ReportGenerator:
         if explicit is None:
             explicit = hashes.get("verified")
 
+        if isinstance(explicit, str) and explicit.strip().lower() == "skipped":
+            return {
+                "passed": True,
+                "skipped": True,
+                "label": "SKIPPED",
+                "detail": "Hash computation was skipped at user request during evidence intake.",
+            }
         if isinstance(explicit, bool):
             passed = explicit
             detail = "Hash verification explicitly reported by workflow."
