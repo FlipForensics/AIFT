@@ -58,6 +58,7 @@ __all__ = [
     "collect_case_csv_paths",
     "build_csv_map",
     "read_audit_entries",
+    "generate_case_report",
 ]
 
 LOGGER = logging.getLogger(__name__)
@@ -1029,19 +1030,25 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
         )
 
 
-@evidence_bp.get("/api/cases/<case_id>/report")
-def download_report(case_id: str) -> Response | tuple[Response, int]:
-    """Generate and download the HTML forensic analysis report.
+def generate_case_report(case_id: str) -> dict[str, Any]:
+    """Generate the HTML forensic report for a case and save it to disk.
+
+    Performs hash verification, assembles analysis context, renders the
+    report via :class:`ReportGenerator`, and logs the result to the audit
+    trail.  This function can be called from both the download route and
+    from background tasks (e.g. auto-generation after analysis).
 
     Args:
         case_id: UUID of the case.
 
     Returns:
-        The HTML report as an attachment, or error.
+        A result dict with keys ``success`` (bool), and on success:
+        ``report_path`` (:class:`~pathlib.Path`), ``hash_ok`` (bool).
+        On failure: ``error`` (str).
     """
     case = get_case(case_id)
     if case is None:
-        return error_response(f"Case not found: {case_id}", 404)
+        return {"success": False, "error": f"Case not found: {case_id}"}
 
     with STATE_LOCK:
         case_snapshot = dict(case)
@@ -1090,9 +1097,9 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
         # Fallback for cases created before evidence_file_hashes existed.
         verification_path = resolve_hash_verification_path(case_snapshot)
         if verification_path is None or not intake_sha256:
-            return error_response("Evidence hash context is missing for this case.", 400)
+            return {"success": False, "error": "Evidence hash context is missing for this case."}
         if not verification_path.exists():
-            return error_response("Evidence file is no longer available for hash verification.", 404)
+            return {"success": False, "error": "Evidence file is no longer available for hash verification."}
         hash_ok, computed_sha256 = verify_hash(
             verification_path, intake_sha256, return_computed=True,
         )
@@ -1120,20 +1127,16 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
 
     analysis_results = dict(case_snapshot.get("analysis_results", {}))
 
-    # Require that a real analysis has been completed before generating a
-    # report.  Without this guard, an empty "successful" report could be
-    # produced and the case would be incorrectly transitioned to completed.
     has_per_artifact = bool(analysis_results.get("per_artifact") or analysis_results.get("per_artifact_findings"))
     has_summary = bool(
         str(analysis_results.get("summary", "")).strip()
         or str(analysis_results.get("executive_summary", "")).strip()
     )
     if not has_per_artifact and not has_summary:
-        return error_response(
-            "Analysis has not been completed for this case. "
-            "Run analysis before generating a report.",
-            400,
-        )
+        return {
+            "success": False,
+            "error": "Analysis has not been completed for this case.",
+        }
 
     analysis_results.setdefault("case_id", case_id)
     analysis_results.setdefault("case_name", str(case_snapshot.get("case_name", "")))
@@ -1161,6 +1164,46 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
     )
     mark_case_status(case_id, "completed")
 
+    return {"success": True, "report_path": report_path, "hash_ok": hash_ok}
+
+
+@evidence_bp.get("/api/cases/<case_id>/report")
+def download_report(case_id: str) -> Response | tuple[Response, int]:
+    """Generate and download the HTML forensic analysis report.
+
+    If a report was already auto-generated after analysis, serves the
+    existing file.  Otherwise generates a new one.
+
+    Args:
+        case_id: UUID of the case.
+
+    Returns:
+        The HTML report as an attachment, or error.
+    """
+    case = get_case(case_id)
+    if case is None:
+        return error_response(f"Case not found: {case_id}", 404)
+
+    # Check if a report was already auto-generated after analysis.
+    with STATE_LOCK:
+        case_dir = case["case_dir"]
+    reports_dir = Path(case_dir) / "reports"
+    if reports_dir.is_dir():
+        existing = sorted(reports_dir.glob("report_*.html"))
+        if existing:
+            report_path = existing[-1]
+            return send_file(
+                report_path,
+                as_attachment=True,
+                download_name=report_path.name,
+                mimetype="text/html",
+            )
+
+    result = generate_case_report(case_id)
+    if not result["success"]:
+        return error_response(str(result["error"]), 400)
+
+    report_path = result["report_path"]
     return send_file(
         report_path,
         as_attachment=True,

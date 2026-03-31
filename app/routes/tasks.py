@@ -54,6 +54,7 @@ from .artifacts import (
 from .evidence import (
     build_csv_map,
     collect_case_csv_paths,
+    generate_case_report,
     resolve_case_csv_output_dir,
 )
 
@@ -596,6 +597,25 @@ def run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> 
             "per_artifact": list(output.get("per_artifact", [])),
         })
         mark_case_status(case_id, "completed")
+
+        # Auto-generate the HTML report so it's ready for download.
+        try:
+            report_result = generate_case_report(case_id)
+            if report_result.get("success"):
+                LOGGER.info(
+                    "Auto-generated report for case %s: %s",
+                    case_id, report_result["report_path"].name,
+                )
+            else:
+                LOGGER.warning(
+                    "Auto-report generation failed for case %s: %s",
+                    case_id, report_result.get("error", "unknown error"),
+                )
+        except Exception:
+            LOGGER.warning(
+                "Auto-report generation raised an exception for case %s",
+                case_id, exc_info=True,
+            )
     except AnalysisCancelledError:
         LOGGER.info("Analysis cancelled for case %s", case_id)
     except Exception:
