@@ -1184,17 +1184,12 @@ details > :not(summary) {
   font-size: 0.72em;
   font-weight: 700;
   cursor: help;
-  position: relative;
   vertical-align: middle;
   flex-shrink: 0;
 }
 
-.setting-help-icon::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
+#setting-tooltip {
+  position: fixed;
   background: var(--bg-primary);
   color: var(--text-primary);
   border: 1px solid var(--border);
@@ -1205,13 +1200,13 @@ details > :not(summary) {
   white-space: normal;
   width: max-content;
   max-width: 260px;
-  z-index: 1010;
+  z-index: 1100;
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.15s ease;
 }
 
-.setting-help-icon:hover::after {
+#setting-tooltip.is-visible {
   opacity: 1;
 }
 

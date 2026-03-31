@@ -473,8 +473,58 @@
     };
   }
 
+  // ── Help-icon tooltips ─────────────────────────────────────────────────────
+
+  /** Wire up hover tooltips for all .setting-help-icon elements. */
+  function setupHelpTooltips() {
+    const tip = document.getElementById("setting-tooltip");
+    if (!tip) return;
+
+    document.addEventListener("mouseover", (e) => {
+      const icon = e.target.closest(".setting-help-icon");
+      if (!icon) return;
+      const text = icon.getAttribute("data-tooltip");
+      if (!text) return;
+
+      tip.textContent = text;
+      tip.classList.add("is-visible");
+
+      const r = icon.getBoundingClientRect();
+      const pad = 8;
+
+      /* Place below the icon by default */
+      let top = r.bottom + pad;
+      let left = r.left;
+
+      /* Measure after setting text so dimensions are correct */
+      const tw = tip.offsetWidth;
+      const th = tip.offsetHeight;
+
+      /* Keep within viewport horizontally */
+      if (left + tw > window.innerWidth - pad) {
+        left = window.innerWidth - tw - pad;
+      }
+      if (left < pad) left = pad;
+
+      /* If no room below, flip above */
+      if (top + th > window.innerHeight - pad) {
+        top = r.top - th - pad;
+      }
+
+      tip.style.top = top + "px";
+      tip.style.left = left + "px";
+    });
+
+    document.addEventListener("mouseout", (e) => {
+      const icon = e.target.closest(".setting-help-icon");
+      if (!icon) return;
+      tip.classList.remove("is-visible");
+    });
+  }
+
   // ── Public API ─────────────────────────────────────────────────────────────
   A.setupSettings = setupSettings;
+  A.setupHelpTooltips = setupHelpTooltips;
   A.openSettings = openSettings;
   A.loadSettings = loadSettings;
   A.updateCsvOutputHelp = updateCsvOutputHelp;

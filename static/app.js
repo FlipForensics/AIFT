@@ -28,6 +28,7 @@
     A.setupAnalysis();
     A.setupResults();
     A.setupSettings();
+    A.setupHelpTooltips();
     resetCaseUi();
     showStep(1);
     A.fetchCsrfToken().catch(() => {});
