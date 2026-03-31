@@ -650,14 +650,20 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
       >
         <div class="settings-grid">
           <div class="form-row">
-            <label for="setting-ai-max-tokens">Analysis Max Tokens</label>
+            <label for="setting-ai-max-tokens">
+              Analysis Max Tokens
+              <span class="setting-help-icon" data-tooltip="Maximum number of tokens the AI model can use for analysis. Higher values allow more detailed analysis but use more context. Values below 32000 may trigger shortened prompts or extra chunking.">?</span>
+            </label>
             <input id="setting-ai-max-tokens" name="ai_max_tokens" type="number" min="1" value="128000">
             <p id="setting-ai-max-tokens-warning" class="field-warning" hidden>
               Warning: values below 32000 reduce context and may trigger shortened prompts or extra chunking.
             </p>
           </div>
           <div class="form-row">
-            <label for="setting-shortened-prompt-cutoff-tokens">Shortened Prompt Cutoff (tokens)</label>
+            <label for="setting-shortened-prompt-cutoff-tokens">
+              Shortened Prompt Cutoff (tokens)
+              <span class="setting-help-icon" data-tooltip="If Analysis Max Tokens is below this value, AIFT uses a shortened artifact prompt template to fit within the smaller context window.">?</span>
+            </label>
             <input
               id="setting-shortened-prompt-cutoff-tokens"
               name="shortened_prompt_cutoff_tokens"
@@ -665,32 +671,47 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
               min="1"
               value="64000"
             >
-            <p class="field-help">If Analysis Max Tokens is below this value, AIFT uses the shortened artifact prompt template.</p>
           </div>
           <div class="form-row">
-            <label for="setting-connection-max-tokens">Connection Test Max Tokens</label>
+            <label for="setting-connection-max-tokens">
+              Connection Test Max Tokens
+              <span class="setting-help-icon" data-tooltip="Maximum tokens used when testing the AI provider connection. A small value keeps the test fast and inexpensive.">?</span>
+            </label>
             <input id="setting-connection-max-tokens" name="connection_test_max_tokens" type="number" min="1" value="256">
           </div>
           <div class="form-row">
-            <label for="setting-date-buffer-days">Date Buffer Days</label>
+            <label for="setting-date-buffer-days">
+              Date Buffer Days
+              <span class="setting-help-icon" data-tooltip="Number of days before and after the investigation date range to include when filtering artifact records for AI analysis.">?</span>
+            </label>
             <input id="setting-date-buffer-days" name="date_buffer_days" type="number" min="0" value="7">
           </div>
           <div class="form-row">
-            <label for="setting-citation-spot-check-limit">Citation Spot-Check Limit</label>
+            <label for="setting-citation-spot-check-limit">
+              Citation Spot-Check Limit
+              <span class="setting-help-icon" data-tooltip="Maximum number of AI-cited timestamps and values to verify against source CSVs for accuracy validation.">?</span>
+            </label>
             <input id="setting-citation-spot-check-limit" name="citation_spot_check_limit" type="number" min="1" value="20">
           </div>
           <div class="form-row">
-            <label for="setting-intake-timeout-seconds">Evidence Intake Timeout (seconds)</label>
+            <label for="setting-intake-timeout-seconds">
+              Evidence Intake Timeout (seconds)
+              <span class="setting-help-icon" data-tooltip="How long to wait for evidence hashing and validation. Large images (100 GB+) may need 30+ minutes. Default: 7200 (2 hours).">?</span>
+            </label>
             <input id="setting-intake-timeout-seconds" name="intake_timeout_seconds" type="number" min="60" value="7200">
-            <p>How long to wait for evidence hashing and validation. Large images (100 GB+) may need 30+ minutes. Default: 7200 (2 hours).</p>
           </div>
           <div class="form-row">
-            <label for="setting-size-threshold">Evidence Size Threshold (GB, 0 = unlimited)</label>
+            <label for="setting-size-threshold">
+              Evidence Size Threshold (GB)
+              <span class="setting-help-icon" data-tooltip="Maximum upload size in gigabytes. Set to 0 for no limit (recommended for large forensic images).">?</span>
+            </label>
             <input id="setting-size-threshold" name="evidence_size_threshold" type="number" min="0" value="0">
-            <p>Maximum upload size. Set to 0 for no limit (recommended for large forensic images).</p>
           </div>
           <div class="form-row">
-            <label for="setting-local-request-timeout-seconds">Local AI Request Timeout (seconds)</label>
+            <label for="setting-local-request-timeout-seconds">
+              Local AI Request Timeout (seconds)
+              <span class="setting-help-icon" data-tooltip="Maximum time in seconds to wait for a response from a local AI provider (Ollama, LM Studio, vLLM, etc.). Local models can be slow on large artifacts.">?</span>
+            </label>
             <input
               id="setting-local-request-timeout-seconds"
               name="local_request_timeout_seconds"
@@ -700,23 +721,30 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
             >
           </div>
           <div class="form-row">
-            <label for="setting-max-merge-rounds">Max Merge Rounds</label>
+            <label for="setting-max-merge-rounds">
+              Max Merge Rounds
+              <span class="setting-help-icon" data-tooltip="Maximum hierarchical merge rounds for chunked analysis before falling back to simple concatenation. More rounds produce better summaries but take longer.">?</span>
+            </label>
             <input id="setting-max-merge-rounds" name="max_merge_rounds" type="number" min="1" value="5">
-            <p>Maximum hierarchical merge rounds for chunked analysis before falling back to concatenation.</p>
           </div>
           <div class="form-row">
-            <label for="setting-artifact-deduplication-enabled">Compress Artifact Records For AI</label>
+            <label for="setting-artifact-deduplication-enabled">
+              Compress Artifact Records For AI
+              <span class="setting-help-icon" data-tooltip="Deduplicate rows with matching event fields but different timestamp/ID values. Compressed CSVs are written to a separate parsed_deduplicated folder and used for AI analysis.">?</span>
+            </label>
             <input
               id="setting-artifact-deduplication-enabled"
               name="artifact_deduplication_enabled"
               type="checkbox"
               checked
             >
-            <p>Deduplicate rows with matching event fields but different timestamp/ID values. Deduplicated CSVs are written to a separate `parsed_deduplicated` folder.</p>
           </div>
         </div>
         <fieldset class="settings-attachment-flags">
-          <legend>CSV Attachment Mode (If Supported)</legend>
+          <legend>
+            CSV Attachment Mode
+            <span class="setting-help-icon" data-tooltip="When enabled for a provider, artifact CSVs are sent as file attachments instead of inline text. This can improve analysis quality for providers that support it.">?</span>
+          </legend>
           <label for="setting-attach-claude">
             <input id="setting-attach-claude" name="attach_claude" type="checkbox" checked>
             Claude
