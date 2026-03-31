@@ -212,7 +212,7 @@ Features under active development:
 AIFT is built with forensic defensibility in mind:
 
 - **Evidence is read-only.** Disk images are never modified. Dissect opens everything in read-only mode.
-- **SHA-256 + MD5 hashing** on intake and before report generation. Hash match is verified and shown in the report.
+- **SHA-256 + MD5 hashing** on intake and before report generation (can be skipped in Settings → Advanced for faster intake of large images). Hash match is verified and shown in the report.
 - **Complete audit trail.** Every action (upload, parse, analyze, report) is logged with UTC timestamps to a per-case `audit.jsonl` file.
 - **AI guardrails.** The AI is instructed to cite specific records, state uncertainty explicitly, and never fabricate evidence. Findings include confidence ratings (HIGH / MEDIUM / LOW).
 - **Prompt audit trail.** Every prompt sent to the AI (system prompt + user prompt) is saved to the case's `prompts/` directory. This allows full review of exactly what the AI was asked, regardless of provider.
