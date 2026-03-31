@@ -299,7 +299,7 @@ def build_full_data_csv(
 
     full_csv = buffer.getvalue().strip()
     if not full_csv:
-        return "No rows available after date filtering."
+        return "No rows available for analysis."
     return full_csv
 
 

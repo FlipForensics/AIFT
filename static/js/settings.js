@@ -196,7 +196,6 @@
       64000
     );
     setNumberInput(el.setConnectionMaxTokens, A.num(analysis.connection_test_max_tokens, 256), 256);
-    setNumberInput(el.setDateBufferDays, A.num(analysis.date_buffer_days, 7), 7);
     setNumberInput(el.setCitationSpotCheckLimit, A.num(analysis.citation_spot_check_limit, 20), 20);
     setNumberInput(el.setIntakeTimeoutSeconds, A.num(A.obj(s.evidence).intake_timeout_seconds, 7200), 7200);
     setNumberInput(
@@ -299,7 +298,6 @@
     base.analysis.ai_max_tokens = readIntInput(el.setAiMaxTokens, 128000, 1);
     base.analysis.shortened_prompt_cutoff_tokens = readIntInput(el.setShortenedPromptCutoffTokens, 64000, 1);
     base.analysis.connection_test_max_tokens = readIntInput(el.setConnectionMaxTokens, 256, 1);
-    base.analysis.date_buffer_days = readIntInput(el.setDateBufferDays, 7, 0);
     base.analysis.citation_spot_check_limit = readIntInput(el.setCitationSpotCheckLimit, 20, 1);
     base.analysis.max_merge_rounds = readIntInput(el.setMaxMergeRounds, 5, 1);
     base.ai.local.request_timeout_seconds = readIntInput(el.setLocalRequestTimeoutSeconds, 3600, 1);

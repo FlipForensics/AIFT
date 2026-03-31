@@ -1,7 +1,7 @@
 """AI analysis orchestration module for forensic triage.
 
 Implements the ``ForensicAnalyzer`` class that orchestrates the full analysis
-pipeline: token budgeting, date filtering, column projection, deduplication,
+pipeline: token budgeting, column projection, deduplication,
 chunked analysis, citation validation, IOC extraction, and audit logging.
 
 Sub-module organisation:
@@ -10,7 +10,7 @@ Sub-module organisation:
 - ``analyzer_utils``: Pure utility functions (string, datetime, CSV).
 - ``analyzer_ioc``: IOC extraction and prompt-building helpers.
 - ``analyzer_citations``: Citation validation against source CSV.
-- ``analyzer_data_prep``: Date filtering, dedup, statistics, prompt assembly.
+- ``analyzer_data_prep``: Dedup, statistics, prompt assembly.
 - ``analyzer_chunking``: Chunked analysis and hierarchical merge.
 - ``analyzer_prompts``: Prompt template loading and construction.
 
@@ -78,7 +78,7 @@ class ForensicAnalyzer:
     """Orchestrates AI-powered forensic analysis of parsed artifact CSV data.
 
     Central analysis engine for AIFT: reads parsed artifact CSV files, applies
-    date filtering, column projection, and deduplication, builds token-budgeted
+    column projection, and deduplication, builds token-budgeted
     prompts, sends them to a configured AI provider, and validates citations.
 
     Attributes:

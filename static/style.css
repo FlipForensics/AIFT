@@ -539,18 +539,6 @@ input[type="radio"] {
   line-height: 1.4;
 }
 
-.date-format-hint {
-  margin: var(--space-2) 0 0;
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  line-height: 1.5;
-}
-
-.date-format-hint strong {
-  color: var(--accent);
-  font-weight: 600;
-}
-
 /* ==========================================================================
    Artifact Checklist
    ========================================================================== */

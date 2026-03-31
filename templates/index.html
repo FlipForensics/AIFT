@@ -465,13 +465,6 @@
 
       <form id="analysis-form">
         <label for="investigation-context">Investigation context</label>
-        <p class="date-format-hint">
-          Supported date formats: <strong>YYYY-MM-DD</strong> (e.g. 2026-01-15),
-          <strong>DD/MM/YYYY</strong> (e.g. 15/01/2026),
-          <strong>DD-MM-YYYY</strong> (e.g. 15-01-2026), or
-          <strong>natural language</strong> (e.g. January 15, 2026 · January 10-15, 2026).
-          A ±7 day buffer is applied automatically.
-        </p>
         <textarea
           id="investigation-context"
           name="investigation_context"
@@ -678,13 +671,6 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
               <span class="setting-help-icon" data-tooltip="Maximum tokens used when testing the AI provider connection. A small value keeps the test fast and inexpensive.">?</span>
             </label>
             <input id="setting-connection-max-tokens" name="connection_test_max_tokens" type="number" min="1" value="256">
-          </div>
-          <div class="form-row">
-            <label for="setting-date-buffer-days">
-              Date Buffer Days
-              <span class="setting-help-icon" data-tooltip="Number of days before and after the investigation date range to include when filtering artifact records for AI analysis.">?</span>
-            </label>
-            <input id="setting-date-buffer-days" name="date_buffer_days" type="number" min="0" value="7">
           </div>
           <div class="form-row">
             <label for="setting-citation-spot-check-limit">

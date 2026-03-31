@@ -128,7 +128,6 @@
     el.setAiMaxTokensWarning = q("setting-ai-max-tokens-warning");
     el.setShortenedPromptCutoffTokens = q("setting-shortened-prompt-cutoff-tokens");
     el.setConnectionMaxTokens = q("setting-connection-max-tokens");
-    el.setDateBufferDays = q("setting-date-buffer-days");
     el.setCitationSpotCheckLimit = q("setting-citation-spot-check-limit");
     el.setIntakeTimeoutSeconds = q("setting-intake-timeout-seconds");
     el.setLocalRequestTimeoutSeconds = q("setting-local-request-timeout-seconds");

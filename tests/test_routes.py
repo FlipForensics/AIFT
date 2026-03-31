@@ -928,7 +928,6 @@ class RoutesTests(unittest.TestCase):
                 "/api/settings",
                 json={
                     "analysis": {
-                        "date_buffer_days": 3,
                         "ai_max_tokens": 2048,
                         "shortened_prompt_cutoff_tokens": 64000,
                         "artifact_deduplication_enabled": False,
@@ -944,7 +943,6 @@ class RoutesTests(unittest.TestCase):
             )
             self.assertEqual(update_resp.status_code, 200)
             payload = update_resp.get_json()
-            self.assertEqual(payload["analysis"]["date_buffer_days"], 3)
             self.assertEqual(payload["analysis"]["ai_max_tokens"], 2048)
             self.assertEqual(payload["analysis"]["shortened_prompt_cutoff_tokens"], 64000)
             self.assertEqual(payload["analysis"]["artifact_deduplication_enabled"], False)
@@ -953,7 +951,6 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(payload["ai"]["local"]["request_timeout_seconds"], 5400)
 
         persisted = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
-        self.assertEqual(persisted.get("analysis", {}).get("date_buffer_days"), 3)
         self.assertEqual(persisted.get("analysis", {}).get("ai_max_tokens"), 2048)
         self.assertEqual(persisted.get("analysis", {}).get("shortened_prompt_cutoff_tokens"), 64000)
         self.assertEqual(persisted.get("analysis", {}).get("artifact_deduplication_enabled"), False)
