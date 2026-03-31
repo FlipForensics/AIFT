@@ -9,4 +9,4 @@ Attributes:
     TOOL_VERSION: Semantic version string for the current AIFT release.
 """
 
-TOOL_VERSION = "1.4"
+TOOL_VERSION = "1.4.1"

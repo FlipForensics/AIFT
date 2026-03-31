@@ -2,7 +2,7 @@
   <img src="images/AIFT Logo - White Text.png" alt="AIFT Logo" width="400">
 </p>
 
-# AIFT - AI Forensic Triage V1.4
+# AIFT - AI Forensic Triage V1.4.1
 
 **Automated Windows and Linux forensic triage, powered by AI.**
 
