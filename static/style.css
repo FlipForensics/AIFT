@@ -1154,6 +1154,13 @@ details > :not(summary) {
   align-self: start;
 }
 
+.settings-grid .form-row > label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25em;
+  min-height: 2.8em;
+}
+
 .settings-attachment-flags {
   border: 1px solid var(--border);
   background: var(--bg-primary);
