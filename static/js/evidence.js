@@ -784,6 +784,43 @@
     A.updateNav();
   }
 
+  // ── Version update check ───────────────────────────────────────────────────
+
+  /**
+   * Query the backend for the latest GitHub release and show an update banner
+   * in Step 1 when the running version differs, or a warning when offline.
+   */
+  async function checkForUpdate() {
+    const banner = q("update-banner");
+    const text = q("update-banner-text");
+    const closeBtn = q("update-banner-close");
+    if (!banner || !text) return;
+
+    if (closeBtn) {
+      closeBtn.addEventListener("click", () => { banner.hidden = true; });
+    }
+
+    try {
+      const r = await A.fetchWithTimeout("/api/version/check", { method: "GET" }, 8000);
+      if (r.ok) {
+        const data = await r.json();
+        if (data.update_available) {
+          text.textContent = `A new version of AIFT is available (v${data.latest}). You are running v${data.current}.`;
+          banner.dataset.kind = "update";
+          banner.hidden = false;
+        }
+      } else {
+        text.textContent = "Unable to check for updates. Please verify manually that you are running the latest version of AIFT.";
+        banner.dataset.kind = "warning";
+        banner.hidden = false;
+      }
+    } catch (_e) {
+      text.textContent = "Unable to check for updates. Please verify manually that you are running the latest version of AIFT.";
+      banner.dataset.kind = "warning";
+      banner.hidden = false;
+    }
+  }
+
   // ── Public API ─────────────────────────────────────────────────────────────
   A.setupEvidence = setupEvidence;
   A.setupArtifacts = setupArtifacts;
@@ -799,4 +836,5 @@
   A.syncArtifactModeControl = syncArtifactModeControl;
   A.clearDynamicArtifacts = clearDynamicArtifacts;
   A.syncMode = syncMode;
+  A.checkForUpdate = checkForUpdate;
 })();

@@ -27,6 +27,8 @@ from datetime import datetime
 import logging
 from pathlib import Path
 import threading  # noqa: F401 -- re-exported for test patching
+from urllib.request import urlopen, Request
+from urllib.error import URLError
 from uuid import uuid4
 
 from flask import (
@@ -136,6 +138,39 @@ def index() -> str:
         logo_filename=resolve_logo_filename(),
         tool_version=TOOL_VERSION,
     )
+
+
+@routes_bp.get("/api/version/check")
+def version_check() -> tuple[Response, int] | Response:
+    """Check whether a newer AIFT release is available on GitHub.
+
+    Fetches the latest release tag from the GitHub API and compares it
+    with the running ``TOOL_VERSION``.  The comparison is purely
+    string-based (not semver) so any difference is reported.
+
+    Returns:
+        JSON with ``current``, ``latest``, and ``update_available`` fields,
+        or an error payload when the network is unreachable.
+    """
+    import json as _json
+
+    github_url = (
+        "https://api.github.com/repos/FlipForensics/AIFT/releases/latest"
+    )
+    req = Request(github_url, headers={"Accept": "application/vnd.github+json"})
+    try:
+        with urlopen(req, timeout=5) as resp:
+            data = _json.loads(resp.read().decode())
+        tag: str = data.get("tag_name", "")
+        latest = tag.lstrip("vV")
+        return success_response({
+            "current": TOOL_VERSION,
+            "latest": latest,
+            "update_available": latest != TOOL_VERSION,
+        })
+    except (URLError, OSError, ValueError) as exc:
+        LOGGER.debug("Version check failed: %s", exc)
+        return error_response("offline", 503)
 
 
 @routes_bp.get("/favicon.ico")

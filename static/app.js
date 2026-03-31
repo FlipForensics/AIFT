@@ -34,6 +34,7 @@
     A.fetchCsrfToken().catch(() => {});
     A.loadSettings().catch((e) => A.setMsg(el.settingsMsg, `Unable to load settings: ${e.message}`, "error"));
     A.loadArtifactProfiles().catch((e) => A.setMsg(el.artifactsMsg, `Unable to load profiles: ${e.message}`, "error"));
+    A.checkForUpdate().catch(() => {});
   }
 
   // ── DOM cache ──────────────────────────────────────────────────────────────

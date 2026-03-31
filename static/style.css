@@ -205,6 +205,47 @@ main#wizard {
   color: var(--accent);
 }
 
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.update-banner[data-kind="update"] {
+  border: 1px solid var(--accent);
+  background: rgba(74, 158, 255, 0.08);
+  color: var(--accent);
+}
+
+.update-banner[data-kind="warning"] {
+  border: 1px solid var(--warning);
+  background: rgba(255, 152, 0, 0.08);
+  color: var(--warning);
+}
+
+.update-banner p {
+  margin: 0;
+}
+
+.update-banner button {
+  all: unset;
+  cursor: pointer;
+  font-size: 1.2rem;
+  line-height: 1;
+  opacity: 0.7;
+  padding: 0 0.25rem;
+}
+
+.update-banner button:hover {
+  opacity: 1;
+}
+
 /* ==========================================================================
    Step Wizard Indicator
    ========================================================================== */
