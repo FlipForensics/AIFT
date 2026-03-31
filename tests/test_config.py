@@ -43,7 +43,6 @@ class ConfigTests(unittest.TestCase):
             )
             self.assertEqual(config.get("analysis", {}).get("ai_max_tokens"), 128000)
             self.assertEqual(config.get("analysis", {}).get("shortened_prompt_cutoff_tokens"), 64000)
-            self.assertEqual(config.get("analysis", {}).get("date_buffer_days"), 7)
             self.assertEqual(config.get("analysis", {}).get("artifact_deduplication_enabled"), True)
             self.assertEqual(
                 config.get("analysis", {}).get("artifact_ai_columns_config_path"),
@@ -244,14 +243,12 @@ class ConfigRoundtripTests(unittest.TestCase):
             config = load_config(config_path)
             config["ai"]["provider"] = "openai"
             config["server"]["port"] = 8080
-            config["analysis"]["date_buffer_days"] = 14
             save_config(config, config_path)
 
             reloaded = load_config(config_path, use_env_overrides=False)
 
         self.assertEqual(reloaded["ai"]["provider"], "openai")
         self.assertEqual(reloaded["server"]["port"], 8080)
-        self.assertEqual(reloaded["analysis"]["date_buffer_days"], 14)
 
     def test_save_creates_parent_directories(self) -> None:
         with TemporaryDirectory(prefix="aift-config-roundtrip-") as temp_dir:

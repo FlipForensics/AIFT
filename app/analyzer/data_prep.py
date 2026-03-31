@@ -1,7 +1,7 @@
 """Data preparation pipeline for forensic artifact analysis.
 
-Handles date extraction from investigation context, CSV reading with date
-filtering, column projection, deduplication, statistics computation, and
+Handles date extraction from investigation context, CSV reading,
+column projection, deduplication, statistics computation, and
 final prompt assembly for AI analysis.
 """
 
@@ -11,21 +11,15 @@ import csv
 import io
 import logging
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
 from .constants import (
-    CONTEXT_DMY_DASH_RE,
-    CONTEXT_DMY_SLASH_RE,
-    CONTEXT_ISO_DATE_RE,
-    CONTEXT_TEXTUAL_DATE_RE,
-    CONTEXT_TEXTUAL_RANGE_RE,
     DEDUP_COMMENT_COLUMN,
     DEDUPLICATED_PARSED_DIRNAME,
     LOW_SIGNAL_VALUES,
     METADATA_COLUMNS,
-    MONTH_LOOKUP,
 )
 from .ioc import (
     build_artifact_final_context_reminder,
@@ -33,14 +27,11 @@ from .ioc import (
     format_ioc_targets,
 )
 from .utils import (
-    build_datetime,
-    extract_row_datetime,
     format_datetime,
     is_dedup_safe_identifier_column,
     looks_like_timestamp_column,
     normalize_artifact_key,
     normalize_csv_row,
-    normalize_datetime,
     normalize_table_cell,
     sanitize_filename,
     stringify_value,
@@ -50,7 +41,6 @@ from .utils import (
 LOGGER = logging.getLogger(__name__)
 
 __all__ = [
-    "extract_dates_from_context",
     "prepare_artifact_data",
     "write_analysis_input_csv",
     "resolve_analysis_input_output_dir",
@@ -62,76 +52,6 @@ __all__ = [
     "deduplicate_rows_for_analysis",
     "build_full_data_csv",
 ]
-
-
-# ---------------------------------------------------------------------------
-# Date extraction
-# ---------------------------------------------------------------------------
-
-def extract_dates_from_context(text: str) -> list[datetime]:
-    """Extract date references from free-text investigation context.
-
-    Recognizes ISO dates (``YYYY-MM-DD``), DMY with dashes or slashes,
-    textual dates (``January 15, 2025``), and textual ranges
-    (``January 10-15, 2025``).
-
-    Args:
-        text: Free-text investigation context string.
-
-    Returns:
-        A sorted list of unique ``datetime`` objects (midnight).
-    """
-    if not text:
-        return []
-
-    dates: list[datetime] = []
-    seen_keys: set[tuple[int, int, int]] = set()
-
-    def _append_unique(parsed: datetime | None) -> None:
-        """Add a date if it has not been seen before."""
-        if parsed is None:
-            return
-        key = (parsed.year, parsed.month, parsed.day)
-        if key in seen_keys:
-            return
-        seen_keys.add(key)
-        dates.append(parsed)
-
-    for match in CONTEXT_TEXTUAL_RANGE_RE.finditer(text):
-        month_name = match.group("month_name").lower()
-        month = MONTH_LOOKUP.get(month_name)
-        if month is None:
-            continue
-        year = match.group("year")
-        _append_unique(build_datetime(year=year, month=str(month), day=match.group("day_start")))
-        _append_unique(build_datetime(year=year, month=str(month), day=match.group("day_end")))
-
-    for match in CONTEXT_ISO_DATE_RE.finditer(text):
-        _append_unique(build_datetime(
-            year=match.group("year"), month=match.group("month"), day=match.group("day"),
-        ))
-
-    for match in CONTEXT_DMY_DASH_RE.finditer(text):
-        _append_unique(build_datetime(
-            year=match.group("year"), month=match.group("month"), day=match.group("day"),
-        ))
-
-    for match in CONTEXT_DMY_SLASH_RE.finditer(text):
-        _append_unique(build_datetime(
-            year=match.group("year"), month=match.group("month"), day=match.group("day"),
-        ))
-
-    for match in CONTEXT_TEXTUAL_DATE_RE.finditer(text):
-        month_name = match.group("month_name").lower()
-        month = MONTH_LOOKUP.get(month_name)
-        if month is None:
-            continue
-        _append_unique(build_datetime(
-            year=match.group("year"), month=str(month), day=match.group("day"),
-        ))
-
-    dates.sort()
-    return dates
 
 
 # ---------------------------------------------------------------------------
@@ -478,15 +398,12 @@ def prepare_artifact_data(
     artifact_deduplication_enabled: bool,
     ai_max_tokens: int,
     shortened_prompt_cutoff_tokens: int,
-    date_buffer_days: int,
-    explicit_analysis_date_range: tuple[datetime, datetime] | None,
-    explicit_analysis_date_range_label: tuple[str, str] | None,
     case_dir: Path | None,
     audit_log_fn: Any = None,
 ) -> tuple[str, Path, list[str]]:
     """Prepare one artifact CSV as a bounded, analysis-ready prompt.
 
-    Reads the artifact CSV, applies date filtering, column projection,
+    Reads the full artifact CSV (all rows), applies column projection,
     deduplication, and statistics computation.  Fills the appropriate
     prompt template with all gathered data.
 
@@ -502,9 +419,6 @@ def prepare_artifact_data(
         artifact_deduplication_enabled: Whether to deduplicate rows.
         ai_max_tokens: Configured AI context window size.
         shortened_prompt_cutoff_tokens: Token threshold for small template.
-        date_buffer_days: Days to pad around context-extracted dates.
-        explicit_analysis_date_range: Optional explicit date range.
-        explicit_analysis_date_range_label: Optional label for the range.
         case_dir: Optional case directory path.
         audit_log_fn: Optional callable ``(action, details)`` for audit.
 
@@ -514,28 +428,8 @@ def prepare_artifact_data(
     include_statistics = ai_max_tokens >= shortened_prompt_cutoff_tokens
     template = artifact_prompt_template if include_statistics else artifact_prompt_template_small_context
 
-    context_dates = extract_dates_from_context(investigation_context)
-    filter_start: datetime | None = None
-    filter_end: datetime | None = None
-    filter_source = ""
-
-    normalized_key = normalize_artifact_key(artifact_key)
-    uses_explicit = normalized_key in {"mft", "evtx"}
-
-    if explicit_analysis_date_range and uses_explicit:
-        filter_start, filter_end = explicit_analysis_date_range
-        filter_source = "step_2_selection"
-    elif context_dates:
-        filter_start = min(context_dates) - timedelta(days=date_buffer_days)
-        filter_end = max(context_dates) + timedelta(days=date_buffer_days)
-        filter_source = "investigation_context"
-    if filter_start is not None and filter_end is not None:
-        filter_start = normalize_datetime(filter_start)
-        filter_end = normalize_datetime(filter_end)
-
     rows: list[dict[str, str]] = []
     source_row_count = 0
-    rows_without_timestamp = 0
     columns: list[str] = []
 
     with csv_path.open("r", newline="", encoding="utf-8-sig", errors="replace") as handle:
@@ -545,17 +439,6 @@ def prepare_artifact_data(
         for source_row_count, raw_row in enumerate(reader, start=1):
             row = normalize_csv_row(raw_row, columns=columns)
             row["_row_ref"] = str(source_row_count)
-
-            if filter_start is not None and filter_end is not None:
-                row_timestamp = extract_row_datetime(row, columns=columns)
-                if row_timestamp is None:
-                    rows_without_timestamp += 1
-                    rows.append(row)
-                    continue
-                normalized_row_timestamp = normalize_datetime(row_timestamp)
-                if not (filter_start <= normalized_row_timestamp <= filter_end):
-                    continue
-
             rows.append(row)
 
     analysis_columns, projection_applied = select_ai_columns(
@@ -606,23 +489,6 @@ def prepare_artifact_data(
     if include_statistics:
         statistics, min_time, max_time = compute_statistics(rows=analysis_rows, columns=analysis_columns)
         stats_prefix: list[str] = []
-        if filter_start and filter_end:
-            if filter_source == "step_2_selection" and explicit_analysis_date_range_label:
-                start_date, end_date = explicit_analysis_date_range_label
-                filter_details = (
-                    f"Date filter applied from Step 2 selection: {start_date} to {end_date} (inclusive).\n"
-                    f"Rows kept after filter: {len(analysis_rows)} of {source_row_count}.\n"
-                    f"Rows without parseable timestamp (included unfiltered): {rows_without_timestamp}.\n"
-                )
-            else:
-                filter_details = (
-                    f"Date filter applied from investigation context: "
-                    f"{format_datetime(filter_start)} to {format_datetime(filter_end)} "
-                    f"(+/- {date_buffer_days} days).\n"
-                    f"Rows kept after filter: {len(analysis_rows)} of {source_row_count}.\n"
-                    f"Rows without parseable timestamp (included unfiltered): {rows_without_timestamp}.\n"
-                )
-            stats_prefix.append(filter_details.rstrip())
 
         if artifact_deduplication_enabled:
             dedup_details = [

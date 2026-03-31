@@ -30,7 +30,7 @@ from .chunking import analyze_artifact_chunked, split_csv_and_suffix, split_csv_
 from .citations import match_column_name, timestamp_found_in_csv, timestamp_lookup_keys, validate_citations
 from .constants import (
     AI_MAX_TOKENS, AI_RETRY_ATTEMPTS, AI_RETRY_BASE_DELAY,
-    ARTIFACT_DEDUPLICATION_ENABLED, CITATION_SPOT_CHECK_LIMIT, DATE_BUFFER_DAYS,
+    ARTIFACT_DEDUPLICATION_ENABLED, CITATION_SPOT_CHECK_LIMIT,
     DEFAULT_ARTIFACT_AI_COLUMNS_CONFIG_PATH, DEFAULT_ARTIFACT_PROMPT_TEMPLATE,
     DEFAULT_ARTIFACT_PROMPT_TEMPLATE_SMALL_CONTEXT, DEFAULT_CHUNK_MERGE_PROMPT_TEMPLATE,
     DEFAULT_SHORTENED_PROMPT_CUTOFF_TOKENS, DEFAULT_SUMMARY_PROMPT_TEMPLATE,
@@ -39,7 +39,7 @@ from .constants import (
 )
 from .data_prep import (
     build_artifact_csv_attachment, build_full_data_csv, compute_statistics,
-    deduplicate_rows_for_analysis, extract_dates_from_context, prepare_artifact_data,
+    deduplicate_rows_for_analysis, prepare_artifact_data,
 )
 from .ioc import build_priority_directives, extract_ioc_targets, format_ioc_targets
 from .prompts import (
@@ -171,8 +171,6 @@ class ForensicAnalyzer:
         )
         self.ai_provider = self._create_ai_provider()
         self.model_info = self._read_model_info()
-        self._explicit_analysis_date_range: tuple = None  # type: ignore[assignment]
-        self._explicit_analysis_date_range_label: tuple | None = None
 
     # ------------------------------------------------------------------
     # Configuration loading
@@ -193,7 +191,6 @@ class ForensicAnalyzer:
             analysis_config, "shortened_prompt_cutoff_tokens", legacy_shortened, minimum=1,
         )
         self.chunk_csv_budget = int(self.ai_max_tokens * TOKEN_CHAR_RATIO * 0.6)
-        self.date_buffer_days = read_int_setting(analysis_config, "date_buffer_days", DATE_BUFFER_DAYS, minimum=0)
         self.citation_spot_check_limit = read_int_setting(
             analysis_config, "citation_spot_check_limit", CITATION_SPOT_CHECK_LIMIT, minimum=1,
         )
@@ -388,7 +385,6 @@ class ForensicAnalyzer:
 
     # These are also exposed as staticmethods on the class (see above)
     # but tests may call them on instances, so they work either way.
-    _extract_dates_from_context = staticmethod(extract_dates_from_context)
     _extract_ioc_targets = staticmethod(extract_ioc_targets)
     _format_ioc_targets = staticmethod(format_ioc_targets)
     _build_priority_directives = staticmethod(build_priority_directives)
@@ -711,45 +707,6 @@ class ForensicAnalyzer:
         if isinstance(value, (str, Path)):
             self.artifact_csv_paths[str(artifact_key)] = Path(str(value))
 
-    def _configure_explicit_analysis_date_range(self, metadata: Mapping[str, Any] | None) -> None:
-        """Set explicit analysis date range from metadata if present.
-
-        Args:
-            metadata: Optional metadata mapping.
-        """
-        from datetime import datetime, timedelta
-        self._explicit_analysis_date_range = None
-        self._explicit_analysis_date_range_label = None
-        if not isinstance(metadata, Mapping):
-            return
-
-        raw_range = metadata.get("analysis_date_range")
-        if not isinstance(raw_range, Mapping):
-            return
-
-        start_text = stringify_value(raw_range.get("start_date"))
-        end_text = stringify_value(raw_range.get("end_date"))
-        if not start_text or not end_text:
-            return
-
-        try:
-            start_date = datetime.strptime(start_text, "%Y-%m-%d")
-            end_date = datetime.strptime(end_text, "%Y-%m-%d")
-        except ValueError:
-            return
-
-        if start_date > end_date:
-            return
-
-        self._explicit_analysis_date_range = (
-            start_date,
-            end_date + timedelta(days=1) - timedelta(microseconds=1),
-        )
-        self._explicit_analysis_date_range_label = (
-            start_date.date().isoformat(),
-            end_date.date().isoformat(),
-        )
-
     # ------------------------------------------------------------------
     # Core analysis pipeline
     # ------------------------------------------------------------------
@@ -785,9 +742,6 @@ class ForensicAnalyzer:
             artifact_deduplication_enabled=self.artifact_deduplication_enabled,
             ai_max_tokens=self.ai_max_tokens,
             shortened_prompt_cutoff_tokens=self.shortened_prompt_cutoff_tokens,
-            date_buffer_days=self.date_buffer_days,
-            explicit_analysis_date_range=self._explicit_analysis_date_range,
-            explicit_analysis_date_range_label=self._explicit_analysis_date_range_label,
             case_dir=self.case_dir,
             audit_log_fn=self._audit_log,
         )
@@ -1042,7 +996,6 @@ class ForensicAnalyzer:
             raise AIProviderError(self.ai_provider._error_message)
 
         self._register_artifact_paths_from_metadata(metadata)
-        self._configure_explicit_analysis_date_range(metadata)
         per_artifact_results: list[dict[str, Any]] = []
         for artifact_key in artifact_keys:
             if cancel_check is not None and cancel_check():

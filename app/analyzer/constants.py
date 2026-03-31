@@ -6,7 +6,6 @@ circular dependencies.
 
 Attributes:
     TOKEN_CHAR_RATIO (int): Approximate characters per token for ASCII text.
-    DATE_BUFFER_DAYS (int): Default days to pad around context-extracted dates.
     AI_MAX_TOKENS (int): Default AI context window size in tokens.
     DEFAULT_SHORTENED_PROMPT_CUTOFF_TOKENS (int): Token threshold for
         switching to the small-context prompt template.
@@ -31,7 +30,6 @@ from ..ai_providers import AIProviderError
 
 __all__ = [
     "TOKEN_CHAR_RATIO",
-    "DATE_BUFFER_DAYS",
     "AI_MAX_TOKENS",
     "DEFAULT_SHORTENED_PROMPT_CUTOFF_TOKENS",
     "AI_RETRY_ATTEMPTS",
@@ -51,7 +49,6 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 TOKEN_CHAR_RATIO = 4
-DATE_BUFFER_DAYS = 7
 AI_MAX_TOKENS = 128000
 DEFAULT_SHORTENED_PROMPT_CUTOFF_TOKENS = 64000
 AI_RETRY_ATTEMPTS = 3
@@ -63,29 +60,6 @@ DEDUP_COMMENT_COLUMN = "_dedup_comment"
 CITATION_SPOT_CHECK_LIMIT = 20
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ARTIFACT_AI_COLUMNS_CONFIG_PATH = PROJECT_ROOT / "config" / "artifact_ai_columns.yaml"
-
-# ---------------------------------------------------------------------------
-# Date-extraction regex patterns
-# ---------------------------------------------------------------------------
-
-CONTEXT_ISO_DATE_RE = re.compile(r"\b(?P<year>\d{4})-(?P<month>\d{1,2})-(?P<day>\d{1,2})\b")
-CONTEXT_DMY_DASH_RE = re.compile(r"\b(?P<day>\d{1,2})-(?P<month>\d{1,2})-(?P<year>\d{4})\b")
-CONTEXT_DMY_SLASH_RE = re.compile(r"\b(?P<day>\d{1,2})/(?P<month>\d{1,2})/(?P<year>\d{4})\b")
-CONTEXT_TEXTUAL_RANGE_RE = re.compile(
-    r"\b(?P<month_name>"
-    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
-    r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-    r"\s+(?P<day_start>\d{1,2})(?:st|nd|rd|th)?\s*(?:-|\u2013|\u2014|to)\s*"
-    r"(?P<day_end>\d{1,2})(?:st|nd|rd|th)?(?:,\s*|\s+)(?P<year>\d{4})\b",
-    flags=re.IGNORECASE,
-)
-CONTEXT_TEXTUAL_DATE_RE = re.compile(
-    r"\b(?P<month_name>"
-    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
-    r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-    r"\s+(?P<day>\d{1,2})(?:st|nd|rd|th)?(?:,\s*|\s+)(?P<year>\d{4})\b",
-    flags=re.IGNORECASE,
-)
 
 # ---------------------------------------------------------------------------
 # IOC-extraction regex patterns
@@ -153,21 +127,6 @@ INTEGER_RE = re.compile(r"-?\d+")
 # ---------------------------------------------------------------------------
 # Lookup tables
 # ---------------------------------------------------------------------------
-
-MONTH_LOOKUP = {
-    "jan": 1, "january": 1,
-    "feb": 2, "february": 2,
-    "mar": 3, "march": 3,
-    "apr": 4, "april": 4,
-    "may": 5,
-    "jun": 6, "june": 6,
-    "jul": 7, "july": 7,
-    "aug": 8, "august": 8,
-    "sep": 9, "sept": 9, "september": 9,
-    "oct": 10, "october": 10,
-    "nov": 11, "november": 11,
-    "dec": 12, "december": 12,
-}
 
 TIMESTAMP_COLUMN_HINTS = (
     "ts", "timestamp", "time", "date", "created",

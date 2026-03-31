@@ -117,21 +117,6 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("Artifact={{artifact_name}}", prompt)
         self.assertIn("Data:", prompt)
 
-    def test_extract_dates_from_context_supports_required_formats(self) -> None:
-        analyzer = ForensicAnalyzer()
-        context = (
-            "Investigation window includes 2026-01-15, 16-01-2026, 17/01/2026, "
-            "and January 18, 2026."
-        )
-
-        dates = analyzer._extract_dates_from_context(context)
-        date_strings = [value.date().isoformat() for value in dates]
-
-        self.assertEqual(
-            date_strings,
-            ["2026-01-15", "2026-01-16", "2026-01-17", "2026-01-18"],
-        )
-
     def test_extract_ioc_targets_from_context(self) -> None:
         analyzer = ForensicAnalyzer()
         context = (
@@ -166,21 +151,6 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("abc.exe", [value.lower() for value in iocs["FileNames"]])
         self.assertNotIn("Domains", iocs)
 
-    def test_extract_dates_from_context_supports_textual_day_ranges(self) -> None:
-        analyzer = ForensicAnalyzer()
-        context = (
-            "We suspect unauthorized access between January 1-15, 2026 and "
-            "January 20 to 22, 2026."
-        )
-
-        dates = analyzer._extract_dates_from_context(context)
-        date_strings = [value.date().isoformat() for value in dates]
-
-        self.assertEqual(
-            date_strings,
-            ["2026-01-01", "2026-01-15", "2026-01-20", "2026-01-22"],
-        )
-
     def test_compute_statistics_reports_counts_time_range_and_top_values(self) -> None:
         analyzer = ForensicAnalyzer()
         rows = [
@@ -200,7 +170,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIsNotNone(min_time)
         self.assertIsNotNone(max_time)
 
-    def test_prepare_artifact_data_builds_filled_prompt_with_filtered_rows(self) -> None:
+    def test_prepare_artifact_data_builds_filled_prompt_with_all_rows(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
             temp_path = Path(temp_dir)
             prompts_dir = temp_path / "prompts"
@@ -239,11 +209,10 @@ class AnalyzerTests(unittest.TestCase):
 
         self.assertIn("Artifact=Run/RunOnce Keys", filled_prompt)
         self.assertIn("Key=runkeys", filled_prompt)
-        self.assertIn("Total=1", filled_prompt)
-        self.assertIn("Rows kept after filter: 1 of 2.", filled_prompt)
+        self.assertIn("Total=2", filled_prompt)
         self.assertIn("row_ref,ts,name,command", filled_prompt)
         self.assertIn("MünchenEntry", filled_prompt)
-        self.assertNotIn("OldEntry", filled_prompt)
+        self.assertIn("OldEntry", filled_prompt)
         self.assertNotIn("{{artifact_name}}", filled_prompt)
         self.assertNotIn("{{data_csv}}", filled_prompt)
 
@@ -473,7 +442,7 @@ class AnalyzerTests(unittest.TestCase):
 
         self.assertIn("Instructions=EVTX-SPECIFIC-INSTRUCTIONS", filled_prompt)
 
-    def test_prepare_artifact_data_keeps_rows_without_timestamp_when_context_dates_exist(self) -> None:
+    def test_prepare_artifact_data_includes_all_rows_regardless_of_timestamps(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
             temp_path = Path(temp_dir)
             prompts_dir = temp_path / "prompts"
@@ -518,15 +487,13 @@ class AnalyzerTests(unittest.TestCase):
                 investigation_context="Focus on activity around January 15, 2026.",
             )
 
-        # Rows without timestamps are kept (not dropped) — they may contain
-        # forensically relevant evidence that simply lacks a write timestamp.
-        self.assertIn("Rows kept after filter: 2 of 3.", filled_prompt)
-        self.assertIn("Rows without parseable timestamp (included unfiltered): 1.", filled_prompt)
+        # All rows must be included — no date filtering is applied.
         self.assertIn("InRange", filled_prompt)
         self.assertIn("NoTimestamp", filled_prompt)
-        self.assertNotIn("OldEntry", filled_prompt)
+        self.assertIn("OldEntry", filled_prompt)
+        self.assertIn("Total=3", filled_prompt)
 
-    def test_prepare_artifact_data_normalizes_aware_timestamps_before_date_filtering(self) -> None:
+    def test_prepare_artifact_data_includes_rows_with_aware_timestamps(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
             temp_path = Path(temp_dir)
             prompts_dir = temp_path / "prompts"
@@ -550,17 +517,16 @@ class AnalyzerTests(unittest.TestCase):
                 prompts_dir=prompts_dir,
                 random_seed=7,
             )
-            aware_timestamp = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
-            with patch("app.analyzer.data_prep.extract_row_datetime", return_value=aware_timestamp):
-                filled_prompt = analyzer._prepare_artifact_data(
-                    artifact_key="runkeys",
-                    investigation_context="Focus on activity around January 15, 2026.",
-                )
+            filled_prompt = analyzer._prepare_artifact_data(
+                artifact_key="runkeys",
+                investigation_context="Focus on activity around January 15, 2026.",
+            )
 
-        self.assertIn("Rows kept after filter: 1 of 1.", filled_prompt)
+        # All rows must be included — no date filtering is applied.
         self.assertIn("AwareEntry", filled_prompt)
+        self.assertIn("Total=1", filled_prompt)
 
-    def test_explicit_step2_date_range_filters_mft_prompt_rows(self) -> None:
+    def test_explicit_step2_date_range_does_not_filter_mft_prompt_rows(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
             temp_path = Path(temp_dir)
             prompts_dir = temp_path / "prompts"
@@ -604,13 +570,10 @@ class AnalyzerTests(unittest.TestCase):
                 )
 
         mft_prompt = fake_provider.calls[0]["user_prompt"]
-        self.assertIn(
-            "Date filter applied from Step 2 selection: 2026-01-01 to 2026-01-31 (inclusive).",
-            mft_prompt,
-        )
-        self.assertIn("Rows kept after filter: 1 of 2.", mft_prompt)
+        # All rows must be included — no date filtering is applied.
         self.assertIn(r"C:\Users\Public\in-range.txt", mft_prompt)
-        self.assertNotIn(r"C:\Users\Public\old.txt", mft_prompt)
+        self.assertIn(r"C:\Users\Public\old.txt", mft_prompt)
+        self.assertIn("Total=2", mft_prompt)
 
     def test_explicit_step2_date_range_does_not_filter_non_target_artifacts(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
@@ -845,11 +808,11 @@ class AnalyzerTests(unittest.TestCase):
                 investigation_context="Focus on January 15, 2026.",
             )
 
-        # The two January 2026 rows should survive date filtering; the June
-        # 2025 row should be dropped.
+        # All rows must be included — no date filtering is applied.
         self.assertIn("curl", filled_prompt)
         self.assertIn("whoami", filled_prompt)
-        self.assertNotIn("admin", filled_prompt)
+        self.assertIn("admin", filled_prompt)
+        self.assertIn("Total=3", filled_prompt)
         self.assertIn("Artifact=Bash History", filled_prompt)
 
     def test_analyze_artifact_passes_csv_attachment_when_provider_supports_it(self) -> None:
@@ -1327,7 +1290,6 @@ class AnalyzerTests(unittest.TestCase):
                     config={
                         "ai": {"provider": "local"},
                         "analysis": {
-                            "date_buffer_days": 2,
                             "ai_max_tokens": 1234,
                         },
                     },
@@ -1345,10 +1307,9 @@ class AnalyzerTests(unittest.TestCase):
         expected_response_tokens = str(max(1, int(1234 * 0.2)))
         self.assertEqual(fake_provider.calls[0]["max_tokens"], expected_response_tokens)
         user_prompt = fake_provider.calls[0]["user_prompt"]
-        # With date_buffer_days=2, only the Jan-15 row survives the filter;
-        # the Jan-01 row is outside the ±2 day window.
+        # All rows must be included — no date filtering is applied.
         self.assertIn("EntryA", user_prompt)
-        self.assertNotIn("OldEntry", user_prompt)
+        self.assertIn("OldEntry", user_prompt)
 
     def test_run_full_analysis_continues_after_artifact_failure(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
@@ -3560,45 +3521,6 @@ class TestBuildSummaryPrompt(unittest.TestCase):
 ###############################################################################
 
 
-class TestExtractDatesFromContext(unittest.TestCase):
-    """Tests for data_prep.extract_dates_from_context."""
-
-    def test_empty_text(self) -> None:
-        from app.analyzer.data_prep import extract_dates_from_context
-        self.assertEqual(extract_dates_from_context(""), [])
-
-    def test_iso_date(self) -> None:
-        from app.analyzer.data_prep import extract_dates_from_context
-        result = extract_dates_from_context("Incident on 2026-03-15.")
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0].date().isoformat(), "2026-03-15")
-
-    def test_dmy_dash(self) -> None:
-        from app.analyzer.data_prep import extract_dates_from_context
-        result = extract_dates_from_context("Date: 15-03-2026")
-        self.assertEqual(len(result), 1)
-
-    def test_dmy_slash(self) -> None:
-        from app.analyzer.data_prep import extract_dates_from_context
-        result = extract_dates_from_context("Date: 15/03/2026")
-        self.assertEqual(len(result), 1)
-
-    def test_textual_date(self) -> None:
-        from app.analyzer.data_prep import extract_dates_from_context
-        result = extract_dates_from_context("Event on March 15, 2026")
-        self.assertEqual(len(result), 1)
-
-    def test_textual_range(self) -> None:
-        from app.analyzer.data_prep import extract_dates_from_context
-        result = extract_dates_from_context("Window is March 10-15, 2026")
-        self.assertEqual(len(result), 2)
-
-    def test_deduplicates(self) -> None:
-        from app.analyzer.data_prep import extract_dates_from_context
-        result = extract_dates_from_context("2026-01-15 and 2026-01-15")
-        self.assertEqual(len(result), 1)
-
-
 class TestCounterNormalize(unittest.TestCase):
     """Tests for data_prep.counter_normalize."""
 
@@ -4239,52 +4161,6 @@ class TestSplitArtifactCsvHandling(unittest.TestCase):
             self.assertIn("2025-02-01", prompt_sent)
 
 
-class TestConfigureExplicitAnalysisDateRange(unittest.TestCase):
-    """Tests for ForensicAnalyzer._configure_explicit_analysis_date_range."""
-
-    def test_valid_range(self) -> None:
-        fake_provider = FakeProvider()
-        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
-            analyzer = ForensicAnalyzer()
-        analyzer._configure_explicit_analysis_date_range({
-            "analysis_date_range": {"start_date": "2026-01-01", "end_date": "2026-01-31"},
-        })
-        self.assertIsNotNone(analyzer._explicit_analysis_date_range)
-        self.assertEqual(analyzer._explicit_analysis_date_range[0], datetime(2026, 1, 1))
-
-    def test_invalid_dates(self) -> None:
-        fake_provider = FakeProvider()
-        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
-            analyzer = ForensicAnalyzer()
-        analyzer._configure_explicit_analysis_date_range({
-            "analysis_date_range": {"start_date": "invalid", "end_date": "2026-01-31"},
-        })
-        self.assertIsNone(analyzer._explicit_analysis_date_range)
-
-    def test_reversed_dates(self) -> None:
-        fake_provider = FakeProvider()
-        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
-            analyzer = ForensicAnalyzer()
-        analyzer._configure_explicit_analysis_date_range({
-            "analysis_date_range": {"start_date": "2026-12-31", "end_date": "2026-01-01"},
-        })
-        self.assertIsNone(analyzer._explicit_analysis_date_range)
-
-    def test_none_metadata(self) -> None:
-        fake_provider = FakeProvider()
-        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
-            analyzer = ForensicAnalyzer()
-        analyzer._configure_explicit_analysis_date_range(None)
-        self.assertIsNone(analyzer._explicit_analysis_date_range)
-
-    def test_missing_date_range_key(self) -> None:
-        fake_provider = FakeProvider()
-        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
-            analyzer = ForensicAnalyzer()
-        analyzer._configure_explicit_analysis_date_range({"some_key": "value"})
-        self.assertIsNone(analyzer._explicit_analysis_date_range)
-
-
 class TestResolveArtifactMetadata(unittest.TestCase):
     """Tests for ForensicAnalyzer._resolve_artifact_metadata."""
 
@@ -4429,7 +4305,6 @@ class TestLoadAnalysisSettings(unittest.TestCase):
         with patch("app.analyzer.core.create_provider", return_value=fake_provider):
             analyzer = ForensicAnalyzer()
         self.assertEqual(analyzer.ai_max_tokens, 128000)
-        self.assertEqual(analyzer.date_buffer_days, 7)
         self.assertTrue(analyzer.artifact_deduplication_enabled)
 
     def test_custom_settings(self) -> None:
@@ -4438,12 +4313,10 @@ class TestLoadAnalysisSettings(unittest.TestCase):
             analyzer = ForensicAnalyzer(config={
                 "analysis": {
                     "ai_max_tokens": 50000,
-                    "date_buffer_days": 3,
                     "artifact_deduplication_enabled": False,
                 }
             })
         self.assertEqual(analyzer.ai_max_tokens, 50000)
-        self.assertEqual(analyzer.date_buffer_days, 3)
         self.assertFalse(analyzer.artifact_deduplication_enabled)
 
     def test_non_mapping_analysis_config(self) -> None:
@@ -4501,6 +4374,92 @@ class TestUnavailableProviderFailsAnalysis(unittest.TestCase):
             )
         self.assertIn("per_artifact", result)
         self.assertIn("summary", result)
+
+
+class DeduplicationDoesNotShrinkNonDuplicateRowsTest(unittest.TestCase):
+    """Verify that deduplication only removes actual duplicates, not unique rows."""
+
+    def test_dedup_preserves_all_unique_rows(self) -> None:
+        """Deduplication must not reduce row count when all rows are unique."""
+        from app.analyzer.data_prep import deduplicate_rows_for_analysis
+
+        columns = ["ts", "name", "command", "key"]
+        rows = [
+            {"ts": "2026-01-15T08:00:00", "name": "EntryA", "command": "cmd_a.exe", "key": "HKCU\\Run"},
+            {"ts": "2026-01-16T09:00:00", "name": "EntryB", "command": "cmd_b.exe", "key": "HKCU\\Run"},
+            {"ts": "2026-01-17T10:00:00", "name": "EntryC", "command": "cmd_c.exe", "key": "HKLM\\Run"},
+            {"ts": "2026-01-18T11:00:00", "name": "EntryD", "command": "cmd_d.exe", "key": "HKLM\\Run"},
+            {"ts": "2026-01-19T12:00:00", "name": "EntryE", "command": "cmd_e.exe", "key": "HKCU\\Run"},
+        ]
+
+        kept_rows, _, removed_count, _, _ = deduplicate_rows_for_analysis(
+            rows=rows, columns=columns,
+        )
+        self.assertEqual(len(kept_rows), len(rows))
+        self.assertEqual(removed_count, 0)
+
+    def test_dedup_only_removes_actual_duplicates(self) -> None:
+        """Deduplication must only remove rows that are true duplicates (differ only in timestamp/ID)."""
+        from app.analyzer.data_prep import deduplicate_rows_for_analysis
+
+        columns = ["ts", "name", "command", "key"]
+        rows = [
+            {"ts": "2026-01-15T08:00:00", "name": "EntryA", "command": "cmd_a.exe", "key": "HKCU\\Run"},
+            {"ts": "2026-01-16T09:00:00", "name": "EntryA", "command": "cmd_a.exe", "key": "HKCU\\Run"},
+            {"ts": "2026-01-17T10:00:00", "name": "EntryB", "command": "cmd_b.exe", "key": "HKLM\\Run"},
+            {"ts": "2026-01-18T11:00:00", "name": "EntryC", "command": "cmd_c.exe", "key": "HKLM\\Run"},
+        ]
+
+        kept_rows, _, removed_count, _, _ = deduplicate_rows_for_analysis(
+            rows=rows, columns=columns,
+        )
+        # Only the duplicate of EntryA should be removed.
+        self.assertEqual(len(kept_rows), 3)
+        self.assertEqual(removed_count, 1)
+        kept_names = [r["name"] for r in kept_rows]
+        self.assertIn("EntryA", kept_names)
+        self.assertIn("EntryB", kept_names)
+        self.assertIn("EntryC", kept_names)
+
+    def test_dedup_with_no_timestamp_columns_returns_all_rows(self) -> None:
+        """When there are no timestamp/ID variant columns, all rows must be preserved."""
+        from app.analyzer.data_prep import deduplicate_rows_for_analysis
+
+        columns = ["name", "command", "key"]
+        rows = [
+            {"name": "EntryA", "command": "cmd_a.exe", "key": "HKCU\\Run"},
+            {"name": "EntryB", "command": "cmd_b.exe", "key": "HKLM\\Run"},
+            {"name": "EntryC", "command": "cmd_c.exe", "key": "HKCU\\Run"},
+        ]
+
+        kept_rows, _, removed_count, _, _ = deduplicate_rows_for_analysis(
+            rows=rows, columns=columns,
+        )
+        self.assertEqual(len(kept_rows), len(rows))
+        self.assertEqual(removed_count, 0)
+
+    def test_dedup_with_large_dataset_preserves_unique_row_count(self) -> None:
+        """Deduplication on a larger dataset must preserve the unique row count exactly."""
+        from app.analyzer.data_prep import deduplicate_rows_for_analysis
+
+        columns = ["ts", "source", "event_id", "message"]
+        unique_rows = [
+            {"ts": f"2026-01-{d:02d}T{h:02d}:00:00", "source": f"Src{i}", "event_id": str(1000 + i), "message": f"Event message {i}"}
+            for i, (d, h) in enumerate(((day, hour) for day in range(1, 11) for hour in range(0, 24, 6)), start=1)
+        ]
+        # Add duplicates that differ only in timestamp.
+        duplicates = [
+            {"ts": "2026-02-01T00:00:00", "source": row["source"], "event_id": row["event_id"], "message": row["message"]}
+            for row in unique_rows[:10]
+        ]
+        all_rows = unique_rows + duplicates
+        original_unique_count = len(unique_rows)
+
+        kept_rows, _, removed_count, _, _ = deduplicate_rows_for_analysis(
+            rows=all_rows, columns=columns,
+        )
+        self.assertEqual(removed_count, len(duplicates))
+        self.assertEqual(len(kept_rows), original_unique_count)
 
 
 if __name__ == "__main__":

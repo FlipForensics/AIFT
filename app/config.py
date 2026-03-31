@@ -106,7 +106,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ai_max_tokens": 128000,
         "shortened_prompt_cutoff_tokens": 64000,
         "connection_test_max_tokens": 256,
-        "date_buffer_days": 7,
         "citation_spot_check_limit": 20,
         "artifact_deduplication_enabled": True,
         "artifact_ai_columns_config_path": "config/artifact_ai_columns.yaml",
