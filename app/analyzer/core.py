@@ -41,6 +41,7 @@ from .data_prep import (
     build_artifact_csv_attachment, build_full_data_csv, compute_statistics,
     deduplicate_rows_for_analysis, prepare_artifact_data,
 )
+from .multi_image import run_multi_image_analysis
 from .ioc import build_priority_directives, extract_ioc_targets, format_ioc_targets
 from .prompts import (
     build_summary_prompt, load_artifact_ai_column_projections,
@@ -1019,3 +1020,51 @@ class ForensicAnalyzer:
             "summary": summary,
             "model_info": dict(self.model_info),
         }
+
+    def run_multi_image_analysis(
+        self,
+        images: list[dict[str, Any]],
+        investigation_context: str,
+        progress_callback: Any | None = None,
+        cancel_check: Any | None = None,
+    ) -> dict[str, Any]:
+        """Run the multi-image analysis pipeline across one or more images.
+
+        Delegates to :func:`multi_image.run_multi_image_analysis` which
+        executes three phases: per-artifact analysis, per-image summary,
+        and cross-image correlation (when more than one image is present).
+
+        For single-image cases, ``cross_image_summary`` is ``None`` and
+        behaviour is equivalent to :meth:`run_full_analysis`.
+
+        Args:
+            images: List of image descriptor dicts.  Each dict contains:
+
+                - ``image_id`` (str): Unique image identifier.
+                - ``label`` (str): Human-readable label.
+                - ``metadata`` (dict): Host metadata mapping.
+                - ``artifact_keys`` (list[str]): Artifacts to analyze.
+                - ``parsed_dir`` (str): Path to parsed CSV directory.
+
+            investigation_context: Free-text investigation context.
+            progress_callback: Optional callable for SSE progress.
+            cancel_check: Optional callable returning ``True`` to abort.
+
+        Returns:
+            A dict with ``images``, ``cross_image_summary``, and
+            ``model_info`` keys.
+
+        Raises:
+            AnalysisCancelledError: If *cancel_check* returns ``True``.
+            AIProviderError: If the AI provider is unavailable.
+        """
+        if isinstance(self.ai_provider, UnavailableProvider):
+            raise AIProviderError(self.ai_provider._error_message)
+
+        return run_multi_image_analysis(
+            analyzer=self,
+            images=images,
+            investigation_context=investigation_context,
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )

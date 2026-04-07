@@ -20,16 +20,20 @@ from __future__ import annotations
 
 from .constants import PROJECT_ROOT
 from .core import ForensicAnalyzer
+from .multi_image import build_cross_image_prompt, run_multi_image_analysis
 
 __all__ = [
     "ForensicAnalyzer",
     "PROJECT_ROOT",
+    "build_cross_image_prompt",
     "chunking",
     "citations",
     "constants",
     "core",
     "data_prep",
     "ioc",
+    "multi_image",
     "prompts",
+    "run_multi_image_analysis",
     "utils",
 ]
