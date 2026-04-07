@@ -60,6 +60,8 @@ ACTION_TYPES = frozenset(
         "report_generated",
         "hash_verification",
         "config_changed",
+        "image_added",
+        "legacy_case_migrated",
     }
 )
 DEFAULT_TOOL_VERSION = TOOL_VERSION
