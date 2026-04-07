@@ -134,6 +134,7 @@ from .handlers import (  # noqa: F401
 # Sub-blueprints (evidence_bp and artifact_bp already imported above):
 from .analysis import analysis_bp  # noqa: F401
 from .chat import chat_bp  # noqa: F401
+from .images import images_bp  # noqa: F401
 
 __all__ = [
     "register_routes",

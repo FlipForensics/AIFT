@@ -631,6 +631,10 @@ def _purge_stale_downstream_case_files(case_dir: Path) -> None:
 def start_parse(case_id: str) -> tuple[Response, int]:
     """Start background parsing of selected forensic artifacts.
 
+    For backward compatibility, if multi-image state exists for this case,
+    delegates to the first image's parse endpoint.  Otherwise falls through
+    to the original case-level parsing logic.
+
     Args:
         case_id: UUID of the case.
 
@@ -640,6 +644,15 @@ def start_parse(case_id: str) -> tuple[Response, int]:
     case = get_case(case_id)
     if case is None:
         return error_response(f"Case not found: {case_id}", 404)
+
+    # Delegate to image-specific parse if images exist.
+    from .images import _get_or_create_default_image, start_image_parse
+    with STATE_LOCK:
+        image_states = case.get("image_states", {})
+    if image_states:
+        first_image_id = next(iter(image_states))
+        return start_image_parse(case_id, first_image_id)
+
     with STATE_LOCK:
         has_evidence = bool(str(case.get("evidence_path", "")).strip())
     if not has_evidence:

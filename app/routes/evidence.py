@@ -836,6 +836,10 @@ evidence_bp = Blueprint("evidence", __name__)
 def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
     """Ingest evidence for an existing case.
 
+    For backward compatibility, this endpoint auto-creates a default image
+    if the case has none, then delegates to the image-specific evidence
+    intake logic.  The response format is unchanged.
+
     Args:
         case_id: UUID of the case.
 
@@ -845,6 +849,14 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
     case = get_case(case_id)
     if case is None:
         return error_response(f"Case not found: {case_id}", 404)
+
+    # Auto-create a default image for backward compatibility.
+    from .images import _get_or_create_default_image, intake_image_evidence
+    image_id = _get_or_create_default_image(case_id)
+    if image_id:
+        # Delegate to the image-specific handler; it reads from the
+        # same Flask request context so uploads/JSON body are available.
+        return intake_image_evidence(case_id, image_id)
 
     with STATE_LOCK:
         case_dir = case["case_dir"]

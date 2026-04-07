@@ -45,6 +45,7 @@ from flask import (
 from ..ai_providers import AIProviderError, create_provider  # noqa: F401 -- re-exported
 from ..analyzer import ForensicAnalyzer  # noqa: F401 -- re-exported for test patching
 from ..audit import AuditLogger
+from ..case_manager import CaseManager
 from ..case_logging import (
     case_log_context,  # noqa: F401 -- re-exported
     pop_case_log_context,
@@ -88,6 +89,7 @@ from .evidence import evidence_bp
 from .artifacts import artifact_bp
 from .analysis import analysis_bp
 from .chat import chat_bp
+from .images import images_bp
 
 __all__ = ["register_routes"]
 
@@ -220,6 +222,11 @@ def image_asset(filename: str) -> Response | tuple[Response, int]:
 def create_case() -> tuple[Response, int]:
     """Create a new forensic analysis case.
 
+    Uses :class:`~app.case_manager.CaseManager` to create the multi-image
+    directory layout (``images/``, ``reports/``, ``audit.jsonl``).  For
+    backward compatibility, the response is unchanged: ``case_id`` and
+    ``case_name``.
+
     Returns:
         ``(Response, 201)`` with case_id and case_name, or error.
     """
@@ -241,9 +248,17 @@ def create_case() -> tuple[Response, int]:
         folder_name = str(uuid4())
     case_id = folder_name
     case_dir = CASES_ROOT / case_id
-    (case_dir / "evidence").mkdir(parents=True, exist_ok=True)
-    (case_dir / "parsed").mkdir(parents=True, exist_ok=True)
-    (case_dir / "reports").mkdir(parents=True, exist_ok=True)
+
+    # Create multi-image directory layout via CaseManager helpers.
+    case_dir.mkdir(parents=True, exist_ok=True)
+    (case_dir / "images").mkdir(exist_ok=True)
+    (case_dir / "reports").mkdir(exist_ok=True)
+
+    # Keep legacy directories for backward compatibility with code that
+    # still references case_dir/evidence and case_dir/parsed directly.
+    (case_dir / "evidence").mkdir(exist_ok=True)
+    (case_dir / "parsed").mkdir(exist_ok=True)
+
     try:
         log_file_path = register_case_log_handler(case_id=case_id, case_dir=case_dir)
     except OSError:
@@ -287,6 +302,8 @@ def create_case() -> tuple[Response, int]:
         "analysis_results": {},
         "status": "active",
         "log_file_path": str(log_file_path),
+        "images": [],
+        "image_states": {},
     }
     with STATE_LOCK:
         CASE_STATES[case_id] = case_state
@@ -402,7 +419,7 @@ def register_routes(app: Flask) -> None:
     """Register all HTTP route handlers with the Flask application.
 
     Registers the core ``routes_bp`` blueprint plus sub-blueprints for
-    evidence, artifact, analysis, and chat routes.
+    evidence, artifact, analysis, chat, and multi-image routes.
 
     Args:
         app: The Flask application instance.
@@ -412,3 +429,4 @@ def register_routes(app: Flask) -> None:
     app.register_blueprint(artifact_bp)
     app.register_blueprint(analysis_bp)
     app.register_blueprint(chat_bp)
+    app.register_blueprint(images_bp)
