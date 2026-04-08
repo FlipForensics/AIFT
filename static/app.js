@@ -347,13 +347,13 @@
     st.selected = [];
     st.selectedAi = [];
     st.pendingFiles = [];
+    st.images = [];
 
     A.resetParseState();
     A.resetAnalysisState();
     A.resetChatState();
 
     if (el.evidenceForm) el.evidenceForm.reset();
-    if (el.modePath) el.modePath.checked = true;
     A.syncMode();
     A.setPendingFiles([]);
     if (el.analysisDateStart) el.analysisDateStart.value = "";
@@ -367,6 +367,36 @@
     if (el.sumDomain) el.sumDomain.textContent = "-";
     if (el.sumIps) el.sumIps.textContent = "-";
     if (el.sumSha) el.sumSha.textContent = "-";
+
+    /* Reset multi-image forms: remove all but the first image card. */
+    const imageContainer = q("image-forms-container");
+    if (imageContainer) {
+      const cards = Array.from(imageContainer.querySelectorAll(".image-form-card"));
+      cards.forEach((card, i) => { if (i > 0) card.remove(); });
+      const firstCard = imageContainer.querySelector(".image-form-card");
+      if (firstCard) {
+        const labelInput = firstCard.querySelector(".image-label-input");
+        if (labelInput) labelInput.value = "";
+        const pathInput = firstCard.querySelector(".image-path-input");
+        if (pathInput) pathInput.value = "";
+        const fileInput = firstCard.querySelector(".image-file-input");
+        if (fileInput) fileInput.value = "";
+        const modePath = firstCard.querySelector(".image-mode-path");
+        if (modePath) modePath.checked = true;
+        const metaCard = firstCard.querySelector(".image-metadata-card");
+        if (metaCard) metaCard.hidden = true;
+        const statusMsg = firstCard.querySelector(".image-status-msg");
+        if (statusMsg) { statusMsg.hidden = true; statusMsg.textContent = ""; }
+        const removeBtn = firstCard.querySelector(".image-remove-btn");
+        if (removeBtn) removeBtn.hidden = true;
+        const title = firstCard.querySelector(".image-form-title");
+        if (title) title.textContent = "Image 1";
+      }
+    }
+    const summariesContainer = q("evidence-summaries-container");
+    if (summariesContainer) summariesContainer.hidden = true;
+    const summariesList = q("evidence-summaries-list");
+    if (summariesList) summariesList.innerHTML = "";
 
     A.artifactBoxes().forEach((cb) => {
       cb.checked = false;

@@ -76,45 +76,78 @@
           <input id="case-name" name="case_name" type="text" placeholder="Case reference">
         </div>
 
-        <fieldset class="mode-toggle">
-          <legend>Evidence source</legend>
-          <label>
-            <input id="mode-upload" name="evidence_mode" type="radio" value="upload">
-            Upload File
-          </label>
-          <label>
-            <input id="mode-path" name="evidence_mode" type="radio" value="path" checked>
-            Local Path
-          </label>
-        </fieldset>
+        <div id="image-forms-container">
+          <div class="image-form-card" data-image-index="0">
+            <div class="image-form-header">
+              <h3 class="image-form-title">Image 1</h3>
+              <button type="button" class="image-remove-btn" data-image-index="0" hidden>Remove</button>
+            </div>
+            <div class="form-row">
+              <label>Label (optional)</label>
+              <input class="image-label-input" type="text" placeholder="e.g. Workstation-PC01" autocomplete="off" spellcheck="false">
+            </div>
 
-        <section id="upload-mode-panel" data-mode="upload" aria-labelledby="upload-mode-title" hidden>
-          <h3 id="upload-mode-title">Upload File</h3>
-          <label id="dropzone" for="evidence-file">
-            <span id="dropzone-help">Drag and drop evidence here (.E01, .dd, .raw, .vmdk, .vhd, .vhdx, .vdi, .qcow2, .zip, .7z, .tar, ...)</span>
-            <input id="evidence-file" name="evidence_file" type="file" multiple accept=".e01,.e02,.e03,.e04,.e05,.e06,.e07,.e08,.e09,.ex01,.s01,.l01,.dd,.img,.raw,.bin,.iso,.000,.001,.vmdk,.vhd,.vhdx,.vdi,.qcow2,.hdd,.hds,.vmx,.vmwarevm,.vbox,.vmcx,.ovf,.ova,.pvm,.pvs,.utm,.xva,.vma,.vbk,.asdf,.asif,.ad1,.tar,.gz,.tgz,.zip,.7z">
-          </label>
-        </section>
+            <fieldset class="mode-toggle">
+              <legend>Evidence source</legend>
+              <label>
+                <input class="image-mode-upload" name="evidence_mode_0" type="radio" value="upload">
+                Upload File
+              </label>
+              <label>
+                <input class="image-mode-path" name="evidence_mode_0" type="radio" value="path" checked>
+                Local Path
+              </label>
+            </fieldset>
 
-        <section id="path-mode-panel" data-mode="path" aria-labelledby="path-mode-title">
-          <h3 id="path-mode-title">Local Path</h3>
-          <label for="evidence-path">Filesystem path</label>
-          <input
-            id="evidence-path"
-            name="evidence_path"
-            type="text"
-            placeholder="C:\Evidence\disk-image.E01 (or .dd, .vmdk, .vhd, .qcow2, folder, ...)"
-            autocomplete="off"
-            spellcheck="false"
-          >
-          <p class="path-mode-hint">Evidence files (E01, VMDK, VHD, DD, etc.) are read in-place (read-only) &mdash; nothing is copied. Archives (ZIP, 7z, tar) are copied and extracted into the case folder first.</p>
-        </section>
+            <section class="image-upload-panel" data-mode="upload" hidden>
+              <h4>Upload File</h4>
+              <label class="image-dropzone">
+                <span class="image-dropzone-help">Drag and drop evidence here (.E01, .dd, .raw, .vmdk, .vhd, .vhdx, .vdi, .qcow2, .zip, .7z, .tar, ...)</span>
+                <input class="image-file-input" type="file" multiple accept=".e01,.e02,.e03,.e04,.e05,.e06,.e07,.e08,.e09,.ex01,.s01,.l01,.dd,.img,.raw,.bin,.iso,.000,.001,.vmdk,.vhd,.vhdx,.vdi,.qcow2,.hdd,.hds,.vmx,.vmwarevm,.vbox,.vmcx,.ovf,.ova,.pvm,.pvs,.utm,.xva,.vma,.vbk,.asdf,.asif,.ad1,.tar,.gz,.tgz,.zip,.7z">
+              </label>
+            </section>
+
+            <section class="image-path-panel" data-mode="path">
+              <h4>Local Path</h4>
+              <label>Filesystem path</label>
+              <input
+                class="image-path-input"
+                type="text"
+                placeholder="C:\Evidence\disk-image.E01 (or .dd, .vmdk, .vhd, .qcow2, folder, ...)"
+                autocomplete="off"
+                spellcheck="false"
+              >
+              <p class="path-mode-hint">Evidence files (E01, VMDK, VHD, DD, etc.) are read in-place (read-only) &mdash; nothing is copied. Archives (ZIP, 7z, tar) are copied and extracted into the case folder first.</p>
+            </section>
+
+            <article class="image-metadata-card summary-card" hidden>
+              <h4>Evidence Summary</h4>
+              <dl>
+                <dt>Hostname</dt>
+                <dd class="image-sum-hostname">-</dd>
+                <dt>OS</dt>
+                <dd class="image-sum-os">-</dd>
+                <dt>Domain</dt>
+                <dd class="image-sum-domain">-</dd>
+                <dt>IPs</dt>
+                <dd class="image-sum-ips">-</dd>
+                <dt>SHA-256</dt>
+                <dd class="image-sum-sha256">-</dd>
+              </dl>
+            </article>
+
+            <p class="image-status-msg" role="alert" hidden></p>
+          </div>
+        </div>
+
+        <button id="add-image-btn" type="button">+ Add Image</button>
 
         <button id="submit-evidence" type="submit">Submit</button>
 
         <div id="evidence-intake-progress" hidden>
           <label for="evidence-progress">Intake progress</label>
           <progress id="evidence-progress" max="100" value="0">0%</progress>
+          <p id="evidence-intake-status" hidden></p>
         </div>
       </form>
 
@@ -132,6 +165,11 @@
           Uploading only a single segment may prevent Dissect from reading the image.
         </p>
         <p>Please go back to <strong>Step 1</strong> and provide a valid evidence file.</p>
+      </div>
+
+      <div id="evidence-summaries-container" hidden>
+        <h3>Evidence Intake Summary</h3>
+        <div id="evidence-summaries-list"></div>
       </div>
 
       <article id="evidence-summary-card" class="summary-card" aria-live="polite" hidden>

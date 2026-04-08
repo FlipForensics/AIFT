@@ -12,87 +12,142 @@
   const A = window.AIFT;
   const { st, el, q } = A;
 
+  // ── Multi-image state ──────────────────────────────────────────────────────
+
+  /** Array of image intake entries. Each entry: {index, image_id, label, metadata, available_artifacts, pendingFiles} */
+  st.images = [];
+
+  /** Counter for generating unique image form indices. */
+  let imageFormCounter = 0;
+
   // ── Evidence intake ────────────────────────────────────────────────────────
 
   /** Wire up the evidence form: mode toggle, file input, dropzone, and submit handler. */
   function setupEvidence() {
     if (!el.evidenceForm) return;
-    if (el.modeUpload) el.modeUpload.addEventListener("change", syncMode);
-    if (el.modePath) el.modePath.addEventListener("change", syncMode);
-    if (el.file) {
-      el.file.addEventListener("change", () => {
-        const files = el.file.files ? Array.from(el.file.files) : [];
-        setPendingFiles(files);
-      });
-    }
-    initDropzone();
+    /* Legacy single-image elements are no longer used directly.
+       Mode toggling and dropzone init are handled per image card. */
+    initImageForm(getImageForms()[0]);
     el.evidenceForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       await submitEvidence();
     });
-    syncMode();
+    const addBtn = q("add-image-btn");
+    if (addBtn) addBtn.addEventListener("click", addImageForm);
   }
 
-  /** Show/hide upload vs. path panels based on the selected intake mode radio. */
+  /** Show/hide upload vs. path panels for legacy (kept for compatibility). */
   function syncMode() {
-    const pathMode = !!(el.modePath && el.modePath.checked);
-    if (el.uploadPanel) el.uploadPanel.hidden = pathMode;
-    if (el.pathPanel) el.pathPanel.hidden = !pathMode;
+    /* Sync each image form's panels. */
+    getImageForms().forEach(syncImageFormMode);
   }
 
-  /** Initialise drag-and-drop event listeners on the dropzone element. */
-  function initDropzone() {
-    if (!el.drop) return;
+  /**
+   * Sync upload/path panels for a single image form card.
+   *
+   * @param {HTMLElement} card - The .image-form-card element.
+   */
+  function syncImageFormMode(card) {
+    if (!card) return;
+    const pathRadio = card.querySelector(".image-mode-path");
+    const pathMode = !!(pathRadio && pathRadio.checked);
+    const uploadPanel = card.querySelector(".image-upload-panel");
+    const pathPanel = card.querySelector(".image-path-panel");
+    if (uploadPanel) uploadPanel.hidden = pathMode;
+    if (pathPanel) pathPanel.hidden = !pathMode;
+  }
+
+  /**
+   * Initialise event listeners for a single image form card.
+   *
+   * @param {HTMLElement|null} card - The .image-form-card element.
+   */
+  function initImageForm(card) {
+    if (!card) return;
+    const modeUpload = card.querySelector(".image-mode-upload");
+    const modePath = card.querySelector(".image-mode-path");
+    if (modeUpload) modeUpload.addEventListener("change", () => syncImageFormMode(card));
+    if (modePath) modePath.addEventListener("change", () => syncImageFormMode(card));
+
+    const fileInput = card.querySelector(".image-file-input");
+    const dropzoneHelp = card.querySelector(".image-dropzone-help");
+    if (fileInput) {
+      fileInput.addEventListener("change", () => {
+        updateDropzoneHelp(fileInput, dropzoneHelp);
+      });
+    }
+    initImageDropzone(card);
+    syncImageFormMode(card);
+
+    const removeBtn = card.querySelector(".image-remove-btn");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", () => removeImageForm(card));
+    }
+  }
+
+  /**
+   * Initialise drag-and-drop for an image form card's dropzone.
+   *
+   * @param {HTMLElement} card - The .image-form-card element.
+   */
+  function initImageDropzone(card) {
+    const drop = card.querySelector(".image-dropzone");
+    if (!drop) return;
     const prevent = (e) => { e.preventDefault(); e.stopPropagation(); };
-    ["dragenter", "dragover"].forEach((t) => el.drop.addEventListener(t, (e) => {
+    ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => {
       prevent(e);
-      el.drop.classList.add("is-dragover");
-      el.drop.dataset.dragover = "true";
+      drop.classList.add("is-dragover");
     }));
-    ["dragleave", "dragend", "drop"].forEach((t) => el.drop.addEventListener(t, (e) => {
+    ["dragleave", "dragend", "drop"].forEach((t) => drop.addEventListener(t, (e) => {
       prevent(e);
-      el.drop.classList.remove("is-dragover");
-      el.drop.dataset.dragover = "false";
+      drop.classList.remove("is-dragover");
     }));
-    el.drop.addEventListener("drop", (e) => {
+    drop.addEventListener("drop", (e) => {
       const files = e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files : null;
       if (!files || !files.length) return;
       const dropped = Array.from(files);
-      setPendingFiles(dropped);
-      if (!el.file) return;
-      try {
-        const dt = new DataTransfer();
-        dropped.forEach((file) => dt.items.add(file));
-        el.file.files = dt.files;
-      } catch (_err) { /* fallback: use st.pendingFiles */ }
+      const fileInput = card.querySelector(".image-file-input");
+      if (fileInput) {
+        try {
+          const dt = new DataTransfer();
+          dropped.forEach((file) => dt.items.add(file));
+          fileInput.files = dt.files;
+        } catch (_err) { /* fallback */ }
+      }
+      const helpEl = card.querySelector(".image-dropzone-help");
+      updateDropzoneHelp(fileInput, helpEl);
     });
   }
 
   /**
-   * Store pending evidence files and update the dropzone help text.
+   * Update a dropzone help text element based on selected files.
+   *
+   * @param {HTMLInputElement|null} fileInput - The file input element.
+   * @param {HTMLElement|null} helpEl - The dropzone help text element.
+   */
+  function updateDropzoneHelp(fileInput, helpEl) {
+    if (!helpEl) return;
+    const files = fileInput && fileInput.files ? Array.from(fileInput.files) : [];
+    if (!files.length) {
+      helpEl.textContent = A.DROP_HELP;
+      return;
+    }
+    if (files.length === 1) {
+      const file = files[0];
+      helpEl.textContent = `${file.name}${Number.isFinite(file.size) ? ` (${A.fmtBytes(file.size)})` : ""}`;
+      return;
+    }
+    const totalSize = files.reduce((sum, file) => sum + (Number.isFinite(file.size) ? file.size : 0), 0);
+    helpEl.textContent = `${files.length} files selected (${A.fmtBytes(totalSize)})`;
+  }
+
+  /**
+   * Store pending evidence files and update the dropzone help text (legacy).
    *
    * @param {File[]} files - Array of File objects selected by the user.
    */
   function setPendingFiles(files) {
     st.pendingFiles = Array.isArray(files) ? files.filter(Boolean) : [];
-    if (!el.dropHelp) return;
-    if (!st.pendingFiles.length) {
-      el.dropHelp.textContent = A.DROP_HELP;
-      return;
-    }
-    if (st.pendingFiles.length === 1) {
-      const file = st.pendingFiles[0];
-      el.dropHelp.textContent = `${file.name}${Number.isFinite(file.size) ? ` (${A.fmtBytes(file.size)})` : ""}`;
-      return;
-    }
-    const totalSize = st.pendingFiles.reduce((sum, file) => sum + (Number.isFinite(file.size) ? file.size : 0), 0);
-    el.dropHelp.textContent = `${st.pendingFiles.length} files selected (${A.fmtBytes(totalSize)})`;
-  }
-
-  /** Return the files to upload from either the file input or pending state. */
-  function selectedFiles() {
-    if (el.file && el.file.files && el.file.files.length) return Array.from(el.file.files);
-    return Array.from(st.pendingFiles || []);
   }
 
   /** Strip curly/smart quotes and whitespace from a user-supplied evidence path. */
@@ -100,30 +155,200 @@
     return String(raw || "").replace(/["\u201c\u201d]/g, "").trim();
   }
 
+  // ── Image form management ─────────────────────────────────────────────────
+
+  /** Return all image form card elements from the DOM. */
+  function getImageForms() {
+    const container = q("image-forms-container");
+    return container ? Array.from(container.querySelectorAll(".image-form-card")) : [];
+  }
+
+  /** Add a new image intake form to the container. */
+  function addImageForm() {
+    const container = q("image-forms-container");
+    if (!container) return;
+    imageFormCounter += 1;
+    const idx = imageFormCounter;
+    const card = document.createElement("div");
+    card.className = "image-form-card";
+    card.dataset.imageIndex = String(idx);
+    card.innerHTML = `
+      <div class="image-form-header">
+        <h3 class="image-form-title">Image ${getImageForms().length + 1}</h3>
+        <button type="button" class="image-remove-btn" data-image-index="${idx}">Remove</button>
+      </div>
+      <div class="form-row">
+        <label>Label (optional)</label>
+        <input class="image-label-input" type="text" placeholder="e.g. Workstation-PC01" autocomplete="off" spellcheck="false">
+      </div>
+      <fieldset class="mode-toggle">
+        <legend>Evidence source</legend>
+        <label>
+          <input class="image-mode-upload" name="evidence_mode_${idx}" type="radio" value="upload">
+          Upload File
+        </label>
+        <label>
+          <input class="image-mode-path" name="evidence_mode_${idx}" type="radio" value="path" checked>
+          Local Path
+        </label>
+      </fieldset>
+      <section class="image-upload-panel" data-mode="upload" hidden>
+        <h4>Upload File</h4>
+        <label class="image-dropzone">
+          <span class="image-dropzone-help">${A.DROP_HELP}</span>
+          <input class="image-file-input" type="file" multiple accept=".e01,.e02,.e03,.e04,.e05,.e06,.e07,.e08,.e09,.ex01,.s01,.l01,.dd,.img,.raw,.bin,.iso,.000,.001,.vmdk,.vhd,.vhdx,.vdi,.qcow2,.hdd,.hds,.vmx,.vmwarevm,.vbox,.vmcx,.ovf,.ova,.pvm,.pvs,.utm,.xva,.vma,.vbk,.asdf,.asif,.ad1,.tar,.gz,.tgz,.zip,.7z">
+        </label>
+      </section>
+      <section class="image-path-panel" data-mode="path">
+        <h4>Local Path</h4>
+        <label>Filesystem path</label>
+        <input
+          class="image-path-input"
+          type="text"
+          placeholder="C:\\Evidence\\disk-image.E01 (or .dd, .vmdk, .vhd, .qcow2, folder, ...)"
+          autocomplete="off"
+          spellcheck="false"
+        >
+        <p class="path-mode-hint">Evidence files (E01, VMDK, VHD, DD, etc.) are read in-place (read-only) &mdash; nothing is copied. Archives (ZIP, 7z, tar) are copied and extracted into the case folder first.</p>
+      </section>
+      <article class="image-metadata-card summary-card" hidden>
+        <h4>Evidence Summary</h4>
+        <dl>
+          <dt>Hostname</dt>
+          <dd class="image-sum-hostname">-</dd>
+          <dt>OS</dt>
+          <dd class="image-sum-os">-</dd>
+          <dt>Domain</dt>
+          <dd class="image-sum-domain">-</dd>
+          <dt>IPs</dt>
+          <dd class="image-sum-ips">-</dd>
+          <dt>SHA-256</dt>
+          <dd class="image-sum-sha256">-</dd>
+        </dl>
+      </article>
+      <p class="image-status-msg" role="alert" hidden></p>
+    `;
+    container.appendChild(card);
+    initImageForm(card);
+    renumberImageForms();
+  }
+
   /**
-   * Submit evidence to the backend: create a case, upload/link evidence,
-   * populate artifacts, and advance to Step 2.
+   * Remove an image form card from the container.
+   *
+   * @param {HTMLElement} card - The .image-form-card element to remove.
+   */
+  function removeImageForm(card) {
+    if (!card) return;
+    const forms = getImageForms();
+    /* Don't allow removing the last remaining image form. */
+    if (forms.length <= 1) return;
+    card.remove();
+    renumberImageForms();
+  }
+
+  /** Re-number image form titles after add/remove. */
+  function renumberImageForms() {
+    getImageForms().forEach((card, i) => {
+      const title = card.querySelector(".image-form-title");
+      if (title) title.textContent = `Image ${i + 1}`;
+      /* Show remove button on all except the first if there are multiple. */
+      const removeBtn = card.querySelector(".image-remove-btn");
+      if (removeBtn) removeBtn.hidden = (i === 0 && getImageForms().length === 1);
+    });
+    /* Update first card's remove button visibility. */
+    const forms = getImageForms();
+    if (forms.length > 0) {
+      const firstRemoveBtn = forms[0].querySelector(".image-remove-btn");
+      if (firstRemoveBtn) firstRemoveBtn.hidden = forms.length <= 1;
+    }
+  }
+
+  /**
+   * Gather the evidence data from a single image form card.
+   *
+   * @param {HTMLElement} card - The .image-form-card element.
+   * @returns {{uploadMode: boolean, files: File[], path: string, label: string}|null}
+   *     Null if validation fails (sets error message on card).
+   */
+  function gatherImageFormData(card) {
+    const modeUpload = card.querySelector(".image-mode-upload");
+    const uploadMode = !!(modeUpload && modeUpload.checked);
+    const labelInput = card.querySelector(".image-label-input");
+    const label = labelInput ? String(labelInput.value || "").trim() : "";
+    const statusMsg = card.querySelector(".image-status-msg");
+
+    if (uploadMode) {
+      const fileInput = card.querySelector(".image-file-input");
+      const files = fileInput && fileInput.files ? Array.from(fileInput.files) : [];
+      if (files.length === 0) {
+        setImageStatusMsg(statusMsg, "Choose one or more evidence files first.", "error");
+        return null;
+      }
+      return { uploadMode: true, files, path: "", label };
+    }
+
+    const pathInput = card.querySelector(".image-path-input");
+    const path = sanitizeEvidencePath(pathInput ? pathInput.value : "");
+    if (!path) {
+      setImageStatusMsg(statusMsg, "Enter a local evidence path.", "error");
+      return null;
+    }
+    return { uploadMode: false, files: [], path, label };
+  }
+
+  /**
+   * Set the status message on an image card.
+   *
+   * @param {HTMLElement|null} node - The .image-status-msg element.
+   * @param {string} text - Message text.
+   * @param {string} [kind="info"] - "info", "error", or "success".
+   */
+  function setImageStatusMsg(node, text, kind) {
+    if (!node) return;
+    if (!text) {
+      node.hidden = true;
+      node.textContent = "";
+      delete node.dataset.status;
+      return;
+    }
+    node.hidden = false;
+    node.textContent = text;
+    node.dataset.status = kind === "error" ? "failed" : kind === "success" ? "success" : "in-progress";
+  }
+
+  /**
+   * Submit evidence to the backend: create a case, then for each image form
+   * call the multi-image endpoints sequentially.
    */
   async function submitEvidence() {
     A.clearMsg(el.evidenceMsg);
     A.clearMsg(el.artifactsMsg);
     A.clearMsg(el.parseErr);
 
-    const uploadMode = !!(el.modeUpload && el.modeUpload.checked);
-    const files = selectedFiles();
-    const path = sanitizeEvidencePath(A.val(el.path));
-    if (uploadMode && files.length === 0) return A.setMsg(el.evidenceMsg, "Choose one or more evidence files first.", "error");
-    if (!uploadMode && !path) return A.setMsg(el.evidenceMsg, "Enter a local evidence path.", "error");
-    if (!uploadMode && el.path && el.path.value !== path) el.path.value = path;
+    const imageForms = getImageForms();
+    if (!imageForms.length) return A.setMsg(el.evidenceMsg, "No image forms found.", "error");
 
-    if (uploadMode) {
-      var threshMb = A.num(A.obj(A.obj(st.settings).evidence).large_file_threshold_mb, 0);
-      if (threshMb > 0) {
-        var totalBytes = files.reduce(function(sum, f) { return sum + (f.size || 0); }, 0);
-        var threshBytes = threshMb * 1024 * 1024;
+    /* Gather and validate all image form data upfront. */
+    const imageDataList = [];
+    for (const card of imageForms) {
+      const statusMsg = card.querySelector(".image-status-msg");
+      setImageStatusMsg(statusMsg, "", "info");
+      const data = gatherImageFormData(card);
+      if (!data) return; /* Validation error already shown on the card. */
+      imageDataList.push({ card, data });
+    }
+
+    /* Check upload size thresholds. */
+    const threshMb = A.num(A.obj(A.obj(st.settings).evidence).large_file_threshold_mb, 0);
+    if (threshMb > 0) {
+      for (const { data } of imageDataList) {
+        if (!data.uploadMode) continue;
+        const totalBytes = data.files.reduce(function(sum, f) { return sum + (f.size || 0); }, 0);
+        const threshBytes = threshMb * 1024 * 1024;
         if (totalBytes > threshBytes) {
-          var limitGb = (threshMb / 1024).toFixed(1);
-          var sizeGb = (totalBytes / (1024 * 1024 * 1024)).toFixed(1);
+          const limitGb = (threshMb / 1024).toFixed(1);
+          const sizeGb = (totalBytes / (1024 * 1024 * 1024)).toFixed(1);
           return A.setMsg(el.evidenceMsg,
             "File size (" + sizeGb + " GB) exceeds the Evidence Size Threshold (" + limitGb + " GB). " +
             "Use path mode instead, or increase the threshold in Settings \u2192 Advanced.",
@@ -134,7 +359,10 @@
 
     setEvidenceBusy(true);
     const intakeProgress = createIntakeProgressTracker();
+    const intakeStatusEl = q("evidence-intake-status");
+
     try {
+      /* Step 1: Create the case. */
       const c = await A.apiJson("/api/cases", { method: "POST", json: { case_name: A.val(el.caseName) } });
       const caseId = String(c.case_id || "").trim();
       st.caseName = String(c.case_name || "");
@@ -143,30 +371,204 @@
 
       const intakeTimeoutMs = A.num(A.obj(A.obj(A.obj(st.settings).evidence).intake_timeout_seconds), 7200) * 1000;
       const skipHashing = !A.boolSetting(A.obj(A.obj(st.settings).evidence).compute_hashes, true);
-      let ev;
-      if (uploadMode) {
-        const fd = new FormData();
-        files.forEach((file, index) => {
-          fd.append("evidence_file", file, file.name || `evidence_${index + 1}.bin`);
-        });
-        if (skipHashing) fd.append("skip_hashing", "1");
-        ev = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", body: fd, timeout: intakeTimeoutMs });
-      } else {
-        ev = await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", json: { path, skip_hashing: skipHashing }, timeout: intakeTimeoutMs });
+
+      /* Step 2: Process each image sequentially. */
+      st.images = [];
+      const allArtifacts = [];
+      let firstOsType = "";
+      const totalImages = imageDataList.length;
+
+      for (let i = 0; i < totalImages; i++) {
+        const { card, data } = imageDataList[i];
+        const statusMsg = card.querySelector(".image-status-msg");
+
+        if (intakeStatusEl) {
+          intakeStatusEl.hidden = false;
+          intakeStatusEl.textContent = `Processing image ${i + 1} of ${totalImages}...`;
+        }
+        setImageStatusMsg(statusMsg, "Processing...", "info");
+
+        /* Create image slot. */
+        const imgResp = await A.apiJson(
+          `/api/cases/${encodeURIComponent(caseId)}/images`,
+          { method: "POST", json: { label: data.label || `Image ${i + 1}` } },
+        );
+        const imageId = String(imgResp.image_id || "").trim();
+        if (!imageId) throw new Error(`Image ID missing from response for image ${i + 1}.`);
+
+        /* Upload/link evidence for this image. */
+        let ev;
+        if (data.uploadMode) {
+          const fd = new FormData();
+          data.files.forEach((file, index) => {
+            fd.append("evidence_file", file, file.name || `evidence_${index + 1}.bin`);
+          });
+          if (skipHashing) fd.append("skip_hashing", "1");
+          ev = await A.apiJson(
+            `/api/cases/${encodeURIComponent(caseId)}/images/${encodeURIComponent(imageId)}/evidence`,
+            { method: "POST", body: fd, timeout: intakeTimeoutMs },
+          );
+        } else {
+          ev = await A.apiJson(
+            `/api/cases/${encodeURIComponent(caseId)}/images/${encodeURIComponent(imageId)}/evidence`,
+            { method: "POST", json: { path: data.path, skip_hashing: skipHashing }, timeout: intakeTimeoutMs },
+          );
+        }
+
+        /* Show metadata on this card. */
+        renderImageMetadataCard(card, ev.metadata || {}, ev.hashes || {}, ev.os_type || "");
+        setImageStatusMsg(statusMsg, "Evidence loaded.", "success");
+
+        /* Track this image. */
+        const imageEntry = {
+          image_id: imageId,
+          label: data.label || imgResp.label || `Image ${i + 1}`,
+          metadata: ev.metadata || {},
+          hashes: ev.hashes || {},
+          os_type: ev.os_type || "",
+          available_artifacts: Array.isArray(ev.available_artifacts) ? ev.available_artifacts : [],
+        };
+        st.images.push(imageEntry);
+
+        /* Merge available artifacts. */
+        if (Array.isArray(ev.available_artifacts)) {
+          ev.available_artifacts.forEach((a) => {
+            if (!a || !a.key) return;
+            const existing = allArtifacts.find((x) => x.key === a.key);
+            if (!existing) allArtifacts.push(Object.assign({}, a));
+            else if (a.available && !existing.available) existing.available = true;
+          });
+        }
+
+        if (i === 0) firstOsType = ev.os_type || "";
       }
+
       intakeProgress.complete();
+      if (intakeStatusEl) intakeStatusEl.hidden = true;
+
       A.setCaseId(caseId);
       A.updateCsvOutputHelp();
-      applyEvidence(ev);
-      A.setMsg(el.evidenceMsg, "Evidence intake complete.", "success");
+
+      /* Build a combined evidence response for applyEvidence. */
+      const combinedEv = {
+        available_artifacts: allArtifacts,
+        os_type: firstOsType,
+        metadata: st.images.length === 1 ? st.images[0].metadata : buildCombinedMetadata(st.images),
+        hashes: st.images.length === 1 ? st.images[0].hashes : {},
+      };
+      applyEvidence(combinedEv);
+
+      /* Build per-image summaries in Step 2. */
+      renderImageSummaries(st.images);
+
+      const imageCountLabel = totalImages === 1 ? "1 image" : `${totalImages} images`;
+      A.setMsg(el.evidenceMsg, `Evidence intake complete (${imageCountLabel}).`, "success");
       A.showStep(2);
     } catch (e) {
       A.setMsg(el.evidenceMsg, `Evidence intake failed: ${e.message}`, "error");
+      if (intakeStatusEl) intakeStatusEl.hidden = true;
     } finally {
       intakeProgress.stop();
       setEvidenceBusy(false);
       A.updateNav();
     }
+  }
+
+  /**
+   * Build combined metadata from multiple images for display.
+   *
+   * @param {Object[]} images - Array of image entry objects.
+   * @returns {Object} Combined metadata.
+   */
+  function buildCombinedMetadata(images) {
+    if (!images.length) return { hostname: "-", os_version: "-", domain: "-" };
+    if (images.length === 1) return images[0].metadata;
+    const hostnames = images.map((img) => String((img.metadata || {}).hostname || "Unknown")).join(", ");
+    return {
+      hostname: hostnames,
+      os_version: String((images[0].metadata || {}).os_version || "-"),
+      domain: String((images[0].metadata || {}).domain || "-"),
+    };
+  }
+
+  /**
+   * Render per-image metadata on a card in Step 1.
+   *
+   * @param {HTMLElement} card - The .image-form-card element.
+   * @param {Object} metadata - Evidence metadata.
+   * @param {Object} hashes - Hash information.
+   * @param {string} osType - Detected OS type.
+   */
+  function renderImageMetadataCard(card, metadata, hashes, osType) {
+    const metaCard = card.querySelector(".image-metadata-card");
+    if (!metaCard) return;
+    const setText = (cls, val) => {
+      const el = metaCard.querySelector(`.${cls}`);
+      if (el) el.textContent = val;
+    };
+    setText("image-sum-hostname", String(metadata.hostname || "-"));
+    let osVersion = String(metadata.os_version || "-");
+    const osLabel = String(osType || "").trim().toLowerCase();
+    if (osLabel && osLabel !== "unknown" && osVersion !== "-") {
+      const versionLower = osVersion.toLowerCase();
+      if (versionLower.indexOf(osLabel) === -1) {
+        const capitalized = osLabel.charAt(0).toUpperCase() + osLabel.slice(1);
+        osVersion = capitalized + " \u2014 " + osVersion;
+      }
+    }
+    setText("image-sum-os", osVersion);
+    setText("image-sum-domain", String(metadata.domain || "-"));
+    setText("image-sum-ips", String(metadata.ips || "-"));
+    setText("image-sum-sha256", String(hashes.sha256 || "-"));
+    metaCard.hidden = false;
+  }
+
+  /**
+   * Render per-image summaries in the Step 2 evidence summaries container.
+   *
+   * @param {Object[]} images - Array of image entry objects.
+   */
+  function renderImageSummaries(images) {
+    const container = q("evidence-summaries-container");
+    const list = q("evidence-summaries-list");
+    if (!container || !list) return;
+
+    /* For single image, use the legacy summary card instead. */
+    if (images.length <= 1) {
+      container.hidden = true;
+      list.innerHTML = "";
+      return;
+    }
+
+    /* Hide the legacy single summary card. */
+    if (el.summaryCard) el.summaryCard.hidden = true;
+
+    list.innerHTML = "";
+    images.forEach((img) => {
+      const article = document.createElement("article");
+      article.className = "summary-card";
+      const m = img.metadata || {};
+      const h = img.hashes || {};
+      let osVersion = String(m.os_version || "-");
+      const osLabel = String(img.os_type || "").trim().toLowerCase();
+      if (osLabel && osLabel !== "unknown" && osVersion !== "-") {
+        if (osVersion.toLowerCase().indexOf(osLabel) === -1) {
+          osVersion = osLabel.charAt(0).toUpperCase() + osLabel.slice(1) + " \u2014 " + osVersion;
+        }
+      }
+      article.innerHTML = `
+        <h4>${A.escapeHtml(img.label || "Image")}</h4>
+        <dl>
+          <dt>Hostname</dt><dd>${A.escapeHtml(m.hostname || "-")}</dd>
+          <dt>OS</dt><dd>${A.escapeHtml(osVersion)}</dd>
+          <dt>Domain</dt><dd>${A.escapeHtml(m.domain || "-")}</dd>
+          <dt>IPs</dt><dd>${A.escapeHtml(m.ips || "-")}</dd>
+          <dt>SHA-256</dt><dd>${A.escapeHtml(h.sha256 || "-")}</dd>
+        </dl>
+      `;
+      list.appendChild(article);
+    });
+    container.hidden = false;
   }
 
   /**
@@ -274,7 +676,9 @@
     if (isUnsupported && errorBox) {
       errorBox.hidden = false;
       if (hintEl) {
-        const wasUpload = !!(el.modeUpload && el.modeUpload.checked);
+        const firstCard = getImageForms()[0];
+        const firstUploadRadio = firstCard ? firstCard.querySelector(".image-mode-upload") : null;
+        const wasUpload = !!(firstUploadRadio && firstUploadRadio.checked);
         hintEl.hidden = !wasUpload;
       }
       if (artifactContent) artifactContent.hidden = true;
@@ -837,4 +1241,8 @@
   A.clearDynamicArtifacts = clearDynamicArtifacts;
   A.syncMode = syncMode;
   A.checkForUpdate = checkForUpdate;
+  A.getImageForms = getImageForms;
+  A.addImageForm = addImageForm;
+  A.removeImageForm = removeImageForm;
+  A.renderImageSummaries = renderImageSummaries;
 })();

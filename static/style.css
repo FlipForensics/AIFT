@@ -581,6 +581,160 @@ input[type="radio"] {
 }
 
 /* ==========================================================================
+   Multi-Image Evidence Intake
+   ========================================================================== */
+#image-forms-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.image-form-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  padding: var(--space-4);
+}
+
+.image-form-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+.image-form-title {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--accent);
+}
+
+.image-remove-btn {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  font-size: 0.8rem;
+  border-radius: 4px;
+}
+
+.image-remove-btn:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.image-form-card .mode-toggle {
+  margin-top: var(--space-2);
+}
+
+.image-dropzone {
+  display: block;
+  border: 2px dashed var(--border);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  padding: var(--space-4);
+  text-align: center;
+  cursor: pointer;
+}
+
+.image-dropzone:hover,
+.image-dropzone.is-dragover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.image-dropzone-help {
+  display: block;
+  margin-bottom: var(--space-2);
+  font-size: 0.85rem;
+}
+
+.image-dropzone input[type="file"] {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.image-metadata-card {
+  margin-top: var(--space-3);
+}
+
+.image-metadata-card h4 {
+  margin: 0 0 var(--space-2);
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
+.image-status-msg {
+  margin-top: var(--space-2);
+  font-size: 0.85rem;
+}
+
+.image-status-msg[data-status="failed"] {
+  color: var(--danger);
+}
+
+.image-status-msg[data-status="success"] {
+  color: var(--success);
+}
+
+.image-status-msg[data-status="in-progress"] {
+  color: var(--accent);
+}
+
+#add-image-btn {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-secondary);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+  width: 100%;
+  margin-bottom: var(--space-4);
+  font-size: 0.9rem;
+  border-radius: 4px;
+}
+
+#add-image-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#evidence-intake-status {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-top: var(--space-2);
+}
+
+#evidence-summaries-container {
+  margin-bottom: var(--space-4);
+}
+
+#evidence-summaries-container h3 {
+  margin-bottom: var(--space-3);
+}
+
+#evidence-summaries-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+#evidence-summaries-list .summary-card {
+  margin: 0;
+}
+
+#evidence-summaries-list .summary-card h4 {
+  margin: 0 0 var(--space-2);
+  font-size: 0.9rem;
+  color: var(--accent);
+}
+
+/* ==========================================================================
    Artifact Checklist
    ========================================================================== */
 #artifacts-form {
