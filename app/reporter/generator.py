@@ -100,8 +100,8 @@ class ReportGenerator:
     def generate(
         self,
         analysis_results: dict[str, Any],
-        image_metadata: dict[str, Any],
-        evidence_hashes: dict[str, Any],
+        image_metadata: dict[str, Any] | list[dict[str, Any]],
+        evidence_hashes: dict[str, Any] | list[dict[str, Any]],
         investigation_context: str,
         audit_log_entries: list[dict[str, Any]],
     ) -> Path:
@@ -111,13 +111,36 @@ class ReportGenerator:
         the audit trail into a Jinja2 template context, renders the HTML,
         and writes the output to ``cases/<case_id>/reports/``.
 
+        Supports both the V1 single-image format and the multi-image
+        format produced by :func:`run_multi_image_analysis`.  When
+        ``analysis_results`` contains an ``"images"`` key, it is treated
+        as multi-image; otherwise, it is automatically wrapped into a
+        single-image structure for backward compatibility.
+
         Args:
             analysis_results: Dictionary containing per-artifact findings,
-                executive summary, model info, and case identifiers.
+                executive summary, model info, and case identifiers.  For
+                multi-image cases, the structure is::
+
+                    {
+                        "images": {
+                            "<image_id>": {
+                                "label": str,
+                                "per_artifact": [...],
+                                "summary": str,
+                            },
+                            ...
+                        },
+                        "cross_image_summary": str | None,
+                        "model_info": dict,
+                    }
+
             image_metadata: System metadata from the disk image (hostname,
-                OS version, domain, IPs, etc.).
+                OS version, domain, IPs, etc.), or a list of such dicts
+                for multi-image cases.
             evidence_hashes: Hash digests and verification status from
-                evidence intake.
+                evidence intake, or a list of such dicts for multi-image
+                cases.
             investigation_context: Free-text description of the
                 investigation scope and timeline.
             audit_log_entries: List of audit trail JSONL records.
@@ -129,36 +152,90 @@ class ReportGenerator:
             ValueError: If a case identifier cannot be determined.
         """
         analysis = dict(analysis_results or {})
-        metadata = dict(image_metadata or {})
-        hashes = dict(evidence_hashes or {})
         audit_entries = self._normalize_audit_entries(audit_log_entries)
 
-        case_id = self._resolve_case_id(analysis, metadata, hashes)
+        # Detect multi-image vs V1 format
+        is_multi_image = "images" in analysis and isinstance(analysis["images"], Mapping)
+
+        if is_multi_image:
+            multi_analysis = analysis
+        else:
+            multi_analysis = self._convert_v1_to_multi_image(analysis)
+
+        # Normalize metadata and hashes to lists
+        metadata_list = self._normalize_to_list(image_metadata)
+        hashes_list = self._normalize_to_list(evidence_hashes)
+
+        # Resolve case-level fields from the first metadata/hashes entry
+        first_metadata = dict(metadata_list[0]) if metadata_list else {}
+        first_hashes = dict(hashes_list[0]) if hashes_list else {}
+
+        case_id = self._resolve_case_id(analysis, first_metadata, first_hashes)
         case_name = self._resolve_case_name(analysis)
         generated_at = datetime.now(timezone.utc)
         generated_iso = generated_at.isoformat(timespec="seconds").replace("+00:00", "Z")
         report_timestamp = generated_at.strftime("%Y%m%d_%H%M%S")
 
-        summary_text = self._stringify(analysis.get("summary"))
-        executive_summary = self._stringify(analysis.get("executive_summary") or summary_text)
+        # Build per-image data for the template
+        images_data = multi_analysis.get("images", {})
+        image_count = len(images_data)
+        is_multi = image_count > 1
 
-        per_artifact = self._normalize_per_artifact_findings(analysis)
-        evidence_summary = self._build_evidence_summary(metadata, hashes)
-        hash_verification = self._resolve_hash_verification(hashes)
+        # Build evidence rows (one per image)
+        evidence_rows = self._build_evidence_rows(metadata_list, hashes_list, images_data)
+
+        # Build hash verification rows (one per image)
+        hash_rows = self._build_hash_verification_rows(hashes_list, images_data)
+
+        # Build per-image sections for the template
+        image_sections = self._build_image_sections(images_data)
+
+        # Cross-image summary (only for multi-image)
+        cross_image_summary = self._stringify(
+            multi_analysis.get("cross_image_summary"), default=""
+        )
+
+        # For single-image backward compatibility, also set V1 template vars
+        if not is_multi:
+            first_image_data = next(iter(images_data.values()), {})
+            summary_text = self._stringify(
+                analysis.get("summary") or analysis.get("executive_summary")
+                or first_image_data.get("summary")
+            )
+            executive_summary = self._stringify(
+                analysis.get("executive_summary") or summary_text
+            )
+            per_artifact = self._normalize_per_artifact_findings(
+                {"per_artifact": first_image_data.get("per_artifact", [])}
+            )
+            evidence_summary = self._build_evidence_summary(first_metadata, first_hashes)
+            hash_verification = self._resolve_hash_verification(first_hashes)
+        else:
+            executive_summary = ""
+            per_artifact = []
+            evidence_summary = self._build_evidence_summary(first_metadata, first_hashes)
+            hash_verification = self._resolve_hash_verification(first_hashes)
 
         render_context = {
             "case_name": case_name,
             "case_id": case_id,
             "generated_at": generated_iso,
             "tool_version": self._resolve_tool_version(analysis, audit_entries),
-            "ai_provider": self._resolve_ai_provider(analysis),
+            "ai_provider": self._resolve_ai_provider(multi_analysis),
             "logo_data_uri": self._resolve_logo_data_uri(),
+            # V1 single-image variables (backward compat)
             "evidence": evidence_summary,
             "hash_verification": hash_verification,
             "investigation_context": self._stringify(investigation_context, default="No investigation context provided."),
             "executive_summary": executive_summary,
             "per_artifact_findings": per_artifact,
             "audit_entries": audit_entries,
+            # Multi-image variables
+            "is_multi_image": is_multi,
+            "evidence_rows": evidence_rows,
+            "hash_rows": hash_rows,
+            "image_sections": image_sections,
+            "cross_image_summary": cross_image_summary,
         }
 
         rendered = self.template.render(**render_context)
@@ -168,6 +245,179 @@ class ReportGenerator:
         report_path = report_dir / f"report_{report_timestamp}.html"
         report_path.write_text(rendered, encoding="utf-8")
         return report_path
+
+    def _convert_v1_to_multi_image(self, analysis: dict[str, Any]) -> dict[str, Any]:
+        """Convert a V1 single-image analysis result to multi-image format.
+
+        Wraps the V1 per-artifact findings and summary into a single-image
+        entry under the ``"images"`` key.
+
+        Args:
+            analysis: V1-format analysis results dict.
+
+        Returns:
+            A dict in multi-image format with a single image entry.
+        """
+        per_artifact = analysis.get("per_artifact") or analysis.get("per_artifact_findings") or []
+        summary = self._stringify(
+            analysis.get("summary") or analysis.get("executive_summary")
+        )
+        case_name = self._resolve_case_name(analysis)
+
+        return {
+            **analysis,
+            "images": {
+                "default": {
+                    "label": case_name,
+                    "per_artifact": per_artifact,
+                    "summary": summary,
+                }
+            },
+            "cross_image_summary": None,
+            "model_info": analysis.get("model_info", {}),
+        }
+
+    @staticmethod
+    def _normalize_to_list(value: Any) -> list[dict[str, Any]]:
+        """Normalize a single dict or list of dicts to a list of dicts.
+
+        Args:
+            value: A dict or list of dicts.
+
+        Returns:
+            A list of dicts.  Returns an empty list if *value* is None.
+        """
+        if value is None:
+            return [{}]
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return [dict(item) if isinstance(item, Mapping) else {} for item in value]
+        if isinstance(value, Mapping):
+            return [dict(value)]
+        return [{}]
+
+    def _build_evidence_rows(
+        self,
+        metadata_list: list[dict[str, Any]],
+        hashes_list: list[dict[str, Any]],
+        images_data: Mapping[str, Any],
+    ) -> list[dict[str, str]]:
+        """Build a list of evidence summary rows for the multi-image template.
+
+        Each row represents one image with its label, hostname, OS, SHA-256,
+        and MD5.
+
+        Args:
+            metadata_list: List of per-image metadata dicts.
+            hashes_list: List of per-image hash dicts.
+            images_data: The ``images`` dict from analysis results.
+
+        Returns:
+            List of dicts with ``label``, ``hostname``, ``os_version``,
+            ``sha256``, ``md5``, and ``filename`` keys.
+        """
+        image_entries = list(images_data.values())
+        row_count = max(len(metadata_list), len(hashes_list), len(image_entries))
+        rows: list[dict[str, str]] = []
+
+        for i in range(row_count):
+            meta = metadata_list[i] if i < len(metadata_list) else {}
+            hashes = hashes_list[i] if i < len(hashes_list) else {}
+            img = image_entries[i] if i < len(image_entries) else {}
+
+            label = self._stringify(
+                img.get("label") or meta.get("label") or meta.get("hostname"),
+                default=f"Image {i + 1}",
+            )
+            hostname = self._stringify(meta.get("hostname"), default="Unknown")
+            os_version = self._stringify(
+                meta.get("os_version") or meta.get("os") or meta.get("os_type"),
+                default="Unknown",
+            )
+            sha256 = self._stringify(hashes.get("sha256"), default="N/A")
+            md5 = self._stringify(hashes.get("md5"), default="N/A")
+            filename = self._stringify(
+                hashes.get("filename") or hashes.get("file_name") or meta.get("filename"),
+                default="Unknown",
+            )
+
+            rows.append({
+                "label": label,
+                "hostname": hostname,
+                "os_version": os_version,
+                "sha256": sha256,
+                "md5": md5,
+                "filename": filename,
+            })
+
+        return rows
+
+    def _build_hash_verification_rows(
+        self,
+        hashes_list: list[dict[str, Any]],
+        images_data: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Build hash verification results for each image.
+
+        Args:
+            hashes_list: List of per-image hash dicts.
+            images_data: The ``images`` dict from analysis results.
+
+        Returns:
+            List of dicts with ``label``, ``passed``, ``label_text``,
+            ``detail``, and optional ``skipped`` keys.
+        """
+        image_entries = list(images_data.values())
+        row_count = max(len(hashes_list), len(image_entries))
+        rows: list[dict[str, Any]] = []
+
+        for i in range(row_count):
+            hashes = hashes_list[i] if i < len(hashes_list) else {}
+            img = image_entries[i] if i < len(image_entries) else {}
+
+            label = self._stringify(
+                img.get("label"), default=f"Image {i + 1}"
+            )
+            verification = self._resolve_hash_verification(hashes)
+            verification["image_label"] = label
+            rows.append(verification)
+
+        return rows
+
+    def _build_image_sections(
+        self,
+        images_data: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Build per-image sections for the multi-image report template.
+
+        Each section contains the image label, summary, and normalized
+        per-artifact findings.
+
+        Args:
+            images_data: The ``images`` dict from analysis results.
+
+        Returns:
+            List of dicts with ``image_id``, ``label``, ``summary``,
+            and ``per_artifact_findings`` keys.
+        """
+        sections: list[dict[str, Any]] = []
+        for image_id, img_data in images_data.items():
+            if not isinstance(img_data, Mapping):
+                continue
+
+            label = self._stringify(img_data.get("label"), default=image_id)
+            summary = self._stringify(img_data.get("summary"), default="")
+            per_artifact = self._normalize_per_artifact_findings(
+                {"per_artifact": img_data.get("per_artifact", [])}
+            )
+
+            sections.append({
+                "image_id": image_id,
+                "label": label,
+                "summary": summary,
+                "per_artifact_findings": per_artifact,
+            })
+
+        return sections
 
     def _resolve_logo_data_uri(self) -> str:
         """Locate the project logo and return it as a base64 ``data:`` URI.

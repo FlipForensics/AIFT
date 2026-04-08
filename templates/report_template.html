@@ -295,6 +295,80 @@
       display: none;
     }
 
+    details.image-section {
+      border: 1px solid var(--accent);
+      border-radius: 12px;
+      background: var(--panel);
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+
+    details.image-section > summary {
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      font-weight: 700;
+      font-size: 1.1rem;
+      background: rgba(87, 179, 255, 0.08);
+      border-bottom: 1px solid var(--accent);
+      color: var(--accent);
+    }
+
+    details.image-section > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .image-section-content {
+      padding: 16px;
+    }
+
+    .image-section-content .panel {
+      box-shadow: none;
+      border-radius: 8px;
+    }
+
+    .cross-system-panel {
+      border-left: 4px solid var(--accent);
+    }
+
+    .evidence-multi-table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 8px;
+    }
+
+    .evidence-multi-table th,
+    .evidence-multi-table td {
+      border: 1px solid rgba(159, 177, 199, 0.2);
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .evidence-multi-table th {
+      color: var(--muted);
+      font-weight: 600;
+      background: rgba(159, 177, 199, 0.06);
+    }
+
+    .hash-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .hash-row-label {
+      font-weight: 600;
+      color: var(--muted);
+      min-width: 120px;
+    }
+
     .artifact-content,
     .audit-content {
       padding: 12px 14px 14px;
@@ -521,6 +595,35 @@
       </div>
     </header>
 
+    {% if is_multi_image %}
+    <section class="panel">
+      <h2>Evidence Summary</h2>
+      <table class="evidence-multi-table">
+        <thead>
+          <tr>
+            <th>Label</th>
+            <th>Filename</th>
+            <th>Hostname</th>
+            <th>OS</th>
+            <th>SHA-256</th>
+            <th>MD5</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in evidence_rows %}
+          <tr>
+            <td>{{ row.label }}</td>
+            <td class="mono">{{ row.filename }}</td>
+            <td class="mono">{{ row.hostname }}</td>
+            <td class="mono">{{ row.os_version }}</td>
+            <td class="mono">{{ row.sha256 }}</td>
+            <td class="mono">{{ row.md5 }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% else %}
     <section class="panel">
       <h2>Evidence Summary</h2>
       <table class="kv-table">
@@ -560,13 +663,28 @@
         </tbody>
       </table>
     </section>
+    {% endif %}
 
     <section class="panel">
       <h2>Hash Verification Result</h2>
+      {% if is_multi_image %}
+        {% for row in hash_rows %}
+        <div class="hash-row">
+          <span class="hash-row-label">{{ row.image_label }}:</span>
+          <div class="hash-status {% if row.skipped | default(false) %}skipped{% elif row.passed %}pass{% else %}fail{% endif %}">
+            {{ row.label }}
+          </div>
+        </div>
+        {% endfor %}
+        {% if hash_rows %}
+        <div class="content-block">{{ hash_rows[0].detail }}</div>
+        {% endif %}
+      {% else %}
       <div class="hash-status {% if hash_verification.skipped | default(false) %}skipped{% elif hash_verification.passed %}pass{% else %}fail{% endif %}">
         {{ hash_verification.label }}
       </div>
       <div class="content-block">{{ hash_verification.detail }}</div>
+      {% endif %}
     </section>
 
     <section class="panel">
@@ -574,6 +692,85 @@
       <div class="content-block markdown-output">{{ investigation_context | format_markdown_block }}</div>
     </section>
 
+    {% if is_multi_image and cross_image_summary %}
+    <section class="panel cross-system-panel">
+      <h2>Cross-System Analysis</h2>
+      <div class="content-block markdown-output">{{ cross_image_summary | format_markdown_block }}</div>
+    </section>
+    {% endif %}
+
+    {% if is_multi_image %}
+      {% for section in image_sections %}
+      <details class="image-section" {% if loop.first %}open{% endif %}>
+        <summary>
+          <span>{{ section.label }}</span>
+        </summary>
+        <div class="image-section-content">
+          {% if section.summary %}
+          <div class="panel">
+            <h2>Image Summary</h2>
+            <div class="content-block markdown-output">{{ section.summary | format_markdown_block }}</div>
+          </div>
+          {% endif %}
+
+          <div class="panel">
+            <h2>Per-Artifact Findings</h2>
+            {% if section.per_artifact_findings %}
+              <div class="artifact-list">
+                {% for finding in section.per_artifact_findings %}
+                  <details class="artifact-card" {% if loop.first %}open{% endif %}>
+                    <summary>
+                      <span>{{ finding.artifact_name }}{% if finding.artifact_key %} ({{ finding.artifact_key }}){% endif %}</span>
+                      <span class="pill {{ finding.confidence_class }}">{{ finding.confidence_label }}</span>
+                    </summary>
+                    <div class="artifact-content">
+                      <div class="artifact-meta">
+                        <div class="meta-item">
+                          <strong>Record Count</strong>
+                          <span class="mono">{{ finding.record_count }}</span>
+                        </div>
+                        <div class="meta-item">
+                          <strong>Time Range Start</strong>
+                          <span class="mono">{{ finding.time_range_start }}</span>
+                        </div>
+                        <div class="meta-item">
+                          <strong>Time Range End</strong>
+                          <span class="mono">{{ finding.time_range_end }}</span>
+                        </div>
+                      </div>
+
+                      {% if finding.key_data_points %}
+                        <table class="key-point-table">
+                          <thead>
+                            <tr>
+                              <th>Timestamp</th>
+                              <th>Value</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {% for data_point in finding.key_data_points %}
+                              <tr>
+                                <td class="mono">{{ data_point.timestamp or "N/A" }}</td>
+                                <td class="mono">{{ data_point.value }}</td>
+                              </tr>
+                            {% endfor %}
+                          </tbody>
+                        </table>
+                      {% endif %}
+
+                      <div class="content-block markdown-output">{{ finding.analysis | format_markdown_block }}</div>
+                    </div>
+                  </details>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="content-block"><span class="empty-value">No per-artifact findings were provided.</span></div>
+            {% endif %}
+          </div>
+        </div>
+      </details>
+      {% endfor %}
+    {% else %}
     <section class="panel">
       <h2>Executive Summary</h2>
       <div class="content-block markdown-output">{{ executive_summary | format_markdown_block }}</div>
@@ -633,6 +830,7 @@
         <div class="content-block"><span class="empty-value">No per-artifact findings were provided.</span></div>
       {% endif %}
     </section>
+    {% endif %}
 
     <section class="panel">
       <h2>Audit Trail</h2>
