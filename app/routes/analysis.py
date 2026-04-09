@@ -27,7 +27,7 @@ from .state import (
     stream_sse,
 )
 from .artifacts import sanitize_prompt
-from .tasks import run_task_with_case_log_context, run_analysis
+from .tasks import run_task_with_case_log_context, run_analysis, run_multi_image_analysis_task
 
 __all__ = ["analysis_bp"]
 
@@ -74,6 +74,23 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
         return error_response("Request body must be a JSON object.", 400)
     prompt = str(payload.get("prompt", "")).strip()
 
+    # Multi-image: payload may contain an ``images`` list with per-image
+    # artifact selections.  When present, the multi-image analysis flow
+    # is used instead of the legacy single-image path.
+    images_payload: list[dict[str, Any]] | None = None
+    raw_images = payload.get("images")
+    if isinstance(raw_images, list) and raw_images:
+        images_payload = [
+            {
+                "image_id": str(img.get("image_id", "")),
+                "artifacts": [str(a) for a in img.get("artifacts", []) if a],
+            }
+            for img in raw_images
+            if isinstance(img, dict) and img.get("image_id")
+        ]
+        if not images_payload:
+            images_payload = None
+
     prompt_path = Path(case_dir) / "prompt.txt"
     prompt_details: dict[str, Any] = {"prompt": sanitize_prompt(prompt)}
     if isinstance(analysis_date_range, dict):
@@ -84,6 +101,10 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
                 "start_date": start_date,
                 "end_date": end_date,
             }
+    if images_payload:
+        prompt_details["multi_image"] = True
+        prompt_details["image_count"] = len(images_payload)
+
     with STATE_LOCK:
         analysis_state = ANALYSIS_PROGRESS.setdefault(case_id, new_progress())
         if analysis_state.get("status") == "running":
@@ -105,26 +126,43 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
 
     audit_logger.log("prompt_submitted", prompt_details)
 
+    # Determine total artifact count for the SSE started event.
+    if images_payload:
+        total_artifact_count = sum(len(img.get("artifacts", [])) for img in images_payload)
+    else:
+        total_artifact_count = len(analysis_artifacts_snapshot)
+
     emit_progress(
         ANALYSIS_PROGRESS, case_id,
         {
             "type": "analysis_started",
             "prompt_provided": bool(prompt),
-            "analysis_artifact_count": len(analysis_artifacts_snapshot),
+            "analysis_artifact_count": total_artifact_count,
+            "multi_image": images_payload is not None,
         },
     )
     config_snapshot = copy.deepcopy(current_app.config.get("AIFT_CONFIG", {}))
-    threading.Thread(
-        target=run_task_with_case_log_context,
-        args=(case_id, run_analysis, case_id, prompt, config_snapshot),
-        daemon=True,
-    ).start()
+
+    if images_payload:
+        threading.Thread(
+            target=run_task_with_case_log_context,
+            args=(case_id, run_multi_image_analysis_task, case_id, prompt,
+                  images_payload, config_snapshot),
+            daemon=True,
+        ).start()
+    else:
+        threading.Thread(
+            target=run_task_with_case_log_context,
+            args=(case_id, run_analysis, case_id, prompt, config_snapshot),
+            daemon=True,
+        ).start()
 
     return success_response(
         {
             "status": "started",
             "case_id": case_id,
             "analysis_artifacts": analysis_artifacts_snapshot,
+            "multi_image": images_payload is not None,
         },
         202,
     )

@@ -3,6 +3,7 @@
  *
  * Manages the analysis lifecycle: submit, track via SSE, render
  * per-artifact results, executive summary, and collapsible findings.
+ * Supports both single-image (V1) and multi-image analysis flows.
  *
  * Depends on: AIFT (utils.js, markdown.js)
  */
@@ -35,6 +36,7 @@
    *
    * Validates preconditions (case exists, parse complete, AI artifacts selected),
    * posts to the analyze endpoint, and opens the SSE progress stream.
+   * For multi-image cases, sends per-image artifact selections.
    */
   async function submitAnalysis() {
     A.clearMsg(el.analysisMsg);
@@ -67,9 +69,28 @@
     if (el.runBtn) el.runBtn.disabled = true;
     if (el.cancelAnalysis) el.cancelAnalysis.hidden = false;
 
+    // Build the request body.
+    var body = { prompt: A.val(el.prompt) };
+    var isMulti = A.isMultiImage && A.isMultiImage();
+    if (isMulti) {
+      var selections = A.allImageArtifactSelections();
+      if (selections && selections.length) {
+        body.images = selections.map(function(sel) {
+          return {
+            image_id: sel.image_id,
+            artifacts: sel.artifact_options
+              .filter(function(opt) { return opt.mode !== A.MODE_PARSE_ONLY; })
+              .map(function(opt) { return opt.artifact_key; }),
+          };
+        }).filter(function(img) { return img.artifacts.length > 0; });
+        st.analysis.multiImage = true;
+        st.analysis.imageResults = {};
+      }
+    }
+
     try {
       A.startTimer("analysis");
-      await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/analyze`, { method: "POST", json: { prompt: A.val(el.prompt) }, signal: abortCtrl.signal });
+      await A.apiJson(`/api/cases/${encodeURIComponent(caseId)}/analyze`, { method: "POST", json: body, signal: abortCtrl.signal });
       startAnalysisSse();
       A.showStep(4);
     } catch (e) {
@@ -109,6 +130,7 @@
     if (t === "analysis_started") {
       A.clearMsg(el.analysisMsg);
       st.analysis.totalArtifacts = Number(p.analysis_artifact_count) || 0;
+      if (p.multi_image) st.analysis.multiImage = true;
       setAnalysisStatus("Preparing analysis\u2026");
       renderAnalysis();
       renderFindings();
@@ -120,7 +142,9 @@
       const name = String(r.artifact_name || A.artifactName(String(r.artifact_key || "")));
       const idx = st.analysis.order.length;
       const total = st.analysis.totalArtifacts || idx;
-      setAnalysisStatus(`Analysing (${idx}/${total}): ${name}`);
+      const imageLabel = String(r.image_label || "");
+      const statusPrefix = imageLabel ? `[${imageLabel}] ` : "";
+      setAnalysisStatus(`${statusPrefix}Analysing (${idx}/${total}): ${name}`);
       renderAnalysis();
       renderFindings();
       return;
@@ -140,6 +164,12 @@
     if (t === "analysis_summary") {
       st.analysis.summary = String(p.summary || "");
       st.analysis.model = A.isObj(p.model_info) ? p.model_info : {};
+      // Store multi-image data if present.
+      if (p.multi_image && A.isObj(p.images)) {
+        st.analysis.multiImage = true;
+        st.analysis.imageResults = p.images;
+        st.analysis.crossImageSummary = String(p.cross_image_summary || "");
+      }
       renderExecSummary();
       if (st.analysis.model.provider || st.analysis.model.model) {
         const display = st.analysis.model.model
@@ -150,6 +180,12 @@
       return;
     }
     if (t === "analysis_completed") {
+      // Handle multi-image completed payload.
+      if (p.multi_image && A.isObj(p.images)) {
+        st.analysis.multiImage = true;
+        st.analysis.imageResults = p.images;
+        st.analysis.crossImageSummary = String(p.cross_image_summary || "");
+      }
       const finalArtifacts = Array.isArray(p.per_artifact) ? p.per_artifact : [];
       finalArtifacts.forEach((entry) => {
         if (A.isObj(entry)) upsertAnalysis(entry);
@@ -192,30 +228,35 @@
    * and ensure the key is tracked in st.analysis.order.
    *
    * @param {Object} r - Raw event payload.
-   * @returns {{key: string, name: string, model: string, current: Object}}
+   * @returns {{key: string, name: string, model: string, current: Object, imageId: string, imageLabel: string}}
    */
   function extractAnalysisIdentifiers(r) {
     const key = String(r.artifact_key || r.key || `artifact_${st.analysis.order.length + 1}`);
     const name = String(r.artifact_name || A.artifactName(key));
     const model = String(r.model || "");
+    const imageId = String(r.image_id || "");
+    const imageLabel = String(r.image_label || "");
     if (!st.analysis.byKey[key]) st.analysis.order.push(key);
     const current = st.analysis.byKey[key] || {};
-    return { key, name, model, current };
+    return { key, name, model, current, imageId, imageLabel };
   }
 
   /** Record a completed artifact analysis result. */
   function upsertAnalysis(r) {
-    const { key, name, model } = extractAnalysisIdentifiers(r);
+    const { key, name, model, imageId, imageLabel } = extractAnalysisIdentifiers(r);
     const rawText = String(r.analysis || r.result || "");
     const text = A.stripLeadingReasoningBlocks(rawText) || rawText;
-    st.analysis.byKey[key] = { key, name, text, model, thinkingText: "", partialText: "", isThinking: false };
+    st.analysis.byKey[key] = {
+      key, name, text, model, imageId, imageLabel,
+      thinkingText: "", partialText: "", isThinking: false,
+    };
   }
 
   /** Record that artifact analysis has started (sets thinking state). */
   function upsertAnalysisStarted(r) {
-    const { key, name, model, current } = extractAnalysisIdentifiers(r);
+    const { key, name, model, current, imageId, imageLabel } = extractAnalysisIdentifiers(r);
     st.analysis.byKey[key] = {
-      key, name,
+      key, name, imageId, imageLabel,
       text: String(current.text || ""),
       model: model || String(current.model || ""),
       thinkingText: String(current.thinkingText || "Model is thinking..."),
@@ -226,9 +267,9 @@
 
   /** Update thinking/partial text for an in-progress artifact analysis. */
   function upsertAnalysisThinking(r) {
-    const { key, name, model, current } = extractAnalysisIdentifiers(r);
+    const { key, name, model, current, imageId, imageLabel } = extractAnalysisIdentifiers(r);
     st.analysis.byKey[key] = {
-      key, name,
+      key, name, imageId, imageLabel,
       text: String(current.text || ""),
       model: model || String(current.model || ""),
       thinkingText: String(r.thinking_text || current.thinkingText || ""),
@@ -284,32 +325,151 @@
       el.analysisList.appendChild(p);
       return;
     }
+
+    // In multi-image mode, group artifacts by image.
+    if (st.analysis.multiImage) {
+      renderMultiImageAnalysis();
+      return;
+    }
+
     st.analysis.order.forEach((k) => {
       const r = st.analysis.byKey[k];
       if (!r) return;
-      const a = document.createElement("article");
-      a.className = "analysis-card";
-      const h = document.createElement("h4");
-      h.textContent = r.name;
-      const m = document.createElement("p");
-      m.className = "mono";
-      m.textContent = r.model ? `${r.key} | model: ${r.model}` : r.key;
-      const b = document.createElement("div");
-      b.className = "markdown-output";
-      const displayText = resolveAnalysisText(r);
-      const emptyLabel = r.isThinking ? "Model is thinking..." : "(No analysis text returned.)";
-      A.renderMarkdownInto(b, displayText, emptyLabel);
-      a.appendChild(h);
-      a.appendChild(m);
-      a.appendChild(b);
-      el.analysisList.appendChild(a);
+      el.analysisList.appendChild(buildAnalysisCard(r));
     });
+  }
+
+  /**
+   * Render multi-image analysis cards grouped by image.
+   * Each image gets a collapsible section with its artifacts inside.
+   */
+  function renderMultiImageAnalysis() {
+    if (!el.analysisList) return;
+    // Group artifacts by imageId.
+    var groups = {};
+    var groupOrder = [];
+    st.analysis.order.forEach(function(k) {
+      var r = st.analysis.byKey[k];
+      if (!r) return;
+      var imgId = r.imageId || "__single__";
+      if (!groups[imgId]) {
+        groups[imgId] = [];
+        groupOrder.push(imgId);
+      }
+      groups[imgId].push(r);
+    });
+
+    groupOrder.forEach(function(imgId) {
+      var items = groups[imgId];
+      if (!items || !items.length) return;
+      var label = items[0].imageLabel || imgId;
+
+      var section = document.createElement("div");
+      section.className = "analysis-image-group";
+
+      var header = document.createElement("h4");
+      header.className = "analysis-image-group-header";
+      header.textContent = label;
+      section.appendChild(header);
+
+      items.forEach(function(r) {
+        section.appendChild(buildAnalysisCard(r));
+      });
+      el.analysisList.appendChild(section);
+    });
+  }
+
+  /**
+   * Build a single analysis card DOM element.
+   *
+   * @param {Object} r - Analysis entry from st.analysis.byKey.
+   * @returns {HTMLElement} The article element.
+   */
+  function buildAnalysisCard(r) {
+    const a = document.createElement("article");
+    a.className = "analysis-card";
+    const h = document.createElement("h4");
+    h.textContent = r.name;
+    const m = document.createElement("p");
+    m.className = "mono";
+    var metaParts = [r.key];
+    if (r.model) metaParts.push("model: " + r.model);
+    if (r.imageLabel) metaParts.push("image: " + r.imageLabel);
+    m.textContent = metaParts.join(" | ");
+    const b = document.createElement("div");
+    b.className = "markdown-output";
+    const displayText = resolveAnalysisText(r);
+    const emptyLabel = r.isThinking ? "Model is thinking..." : "(No analysis text returned.)";
+    A.renderMarkdownInto(b, displayText, emptyLabel);
+    a.appendChild(h);
+    a.appendChild(m);
+    a.appendChild(b);
+    return a;
   }
 
   /** Render the executive summary markdown into the results page. */
   function renderExecSummary() {
     if (!el.summaryOut) return;
+
+    // Multi-image: show cross-image summary and per-image summaries.
+    if (st.analysis.multiImage && st.analysis.crossImageSummary) {
+      renderMultiImageExecSummary();
+      return;
+    }
+
     A.renderMarkdownInto(el.summaryOut, st.analysis.summary, "Summary is generated after analysis completes.");
+  }
+
+  /**
+   * Render multi-image executive summary: cross-image summary at top,
+   * then per-image summaries in collapsible sections.
+   */
+  function renderMultiImageExecSummary() {
+    if (!el.summaryOut) return;
+    el.summaryOut.innerHTML = "";
+
+    // Cross-image summary section.
+    var crossSection = document.getElementById("cross-system-analysis");
+    if (crossSection) {
+      var crossContent = crossSection.querySelector(".cross-system-content");
+      if (crossContent) {
+        A.renderMarkdownInto(crossContent, st.analysis.crossImageSummary, "No cross-system analysis available.");
+      }
+      crossSection.hidden = false;
+    }
+
+    // Overall summary.
+    A.renderMarkdownInto(el.summaryOut, st.analysis.summary, "Summary is generated after analysis completes.");
+
+    // Per-image summaries below the main summary.
+    var imageResults = st.analysis.imageResults || {};
+    var imageIds = Object.keys(imageResults);
+    if (imageIds.length > 0) {
+      var perImageContainer = document.createElement("div");
+      perImageContainer.className = "per-image-summaries";
+
+      imageIds.forEach(function(imgId) {
+        var imgData = imageResults[imgId];
+        if (!imgData) return;
+        var label = String(imgData.label || imgId);
+        var summary = String(imgData.summary || "");
+
+        var details = document.createElement("details");
+        details.className = "per-image-summary-section";
+        details.open = true;
+        var summaryEl = document.createElement("summary");
+        summaryEl.className = "per-image-summary-header";
+        summaryEl.textContent = label;
+        var bodyDiv = document.createElement("div");
+        bodyDiv.className = "markdown-output per-image-summary-body";
+        A.renderMarkdownInto(bodyDiv, summary, "(No summary for this image.)");
+        details.appendChild(summaryEl);
+        details.appendChild(bodyDiv);
+        perImageContainer.appendChild(details);
+      });
+
+      el.summaryOut.parentNode.appendChild(perImageContainer);
+    }
   }
 
   /** Render collapsible per-artifact findings `<details>` elements. */
@@ -324,22 +484,81 @@
       el.findings.appendChild(p);
       return;
     }
+
+    // Multi-image: group findings by image.
+    if (st.analysis.multiImage) {
+      renderMultiImageFindings();
+      return;
+    }
+
     st.analysis.order.forEach((k, i) => {
       const r = st.analysis.byKey[k];
       if (!r) return;
-      const d = document.createElement("details");
-      d.open = i === 0;
-      const s = document.createElement("summary");
-      s.textContent = r.name;
-      const p = document.createElement("div");
-      p.className = "markdown-output";
-      const displayText = resolveAnalysisText(r);
-      const emptyLabel = r.isThinking ? "Model is thinking..." : "(No analysis text returned.)";
-      A.renderMarkdownInto(p, displayText, emptyLabel);
-      d.appendChild(s);
-      d.appendChild(p);
-      el.findings.appendChild(d);
+      el.findings.appendChild(buildFindingsDetails(r, i === 0));
     });
+  }
+
+  /**
+   * Render multi-image findings grouped by image in collapsible sections.
+   */
+  function renderMultiImageFindings() {
+    if (!el.findings) return;
+
+    // Group by image.
+    var groups = {};
+    var groupOrder = [];
+    st.analysis.order.forEach(function(k) {
+      var r = st.analysis.byKey[k];
+      if (!r) return;
+      var imgId = r.imageId || "__single__";
+      if (!groups[imgId]) {
+        groups[imgId] = [];
+        groupOrder.push(imgId);
+      }
+      groups[imgId].push(r);
+    });
+
+    groupOrder.forEach(function(imgId, gi) {
+      var items = groups[imgId];
+      if (!items || !items.length) return;
+      var label = items[0].imageLabel || imgId;
+
+      var imageSection = document.createElement("details");
+      imageSection.className = "findings-image-group";
+      imageSection.open = gi === 0;
+      var imageSummary = document.createElement("summary");
+      imageSummary.className = "findings-image-group-header";
+      imageSummary.textContent = label;
+      imageSection.appendChild(imageSummary);
+
+      items.forEach(function(r, i) {
+        imageSection.appendChild(buildFindingsDetails(r, gi === 0 && i === 0));
+      });
+
+      el.findings.appendChild(imageSection);
+    });
+  }
+
+  /**
+   * Build a collapsible findings details element.
+   *
+   * @param {Object} r - Analysis entry.
+   * @param {boolean} isOpen - Whether to start open.
+   * @returns {HTMLDetailsElement}
+   */
+  function buildFindingsDetails(r, isOpen) {
+    const d = document.createElement("details");
+    d.open = isOpen;
+    const s = document.createElement("summary");
+    s.textContent = r.name;
+    const p = document.createElement("div");
+    p.className = "markdown-output";
+    const displayText = resolveAnalysisText(r);
+    const emptyLabel = r.isThinking ? "Model is thinking..." : "(No analysis text returned.)";
+    A.renderMarkdownInto(p, displayText, emptyLabel);
+    d.appendChild(s);
+    d.appendChild(p);
+    return d;
   }
 
   /** Update the provider name display in the analysis step header. */
@@ -418,10 +637,22 @@
     st.analysis.totalArtifacts = 0;
     st.analysis.summary = "";
     st.analysis.model = {};
+    st.analysis.multiImage = false;
+    st.analysis.imageResults = {};
+    st.analysis.crossImageSummary = "";
     A.clearMsg(el.analysisMsg);
     setAnalysisStatus(null);
     if (el.runBtn) el.runBtn.disabled = false;
     if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
+
+    // Hide cross-system analysis section.
+    var crossSection = document.getElementById("cross-system-analysis");
+    if (crossSection) crossSection.hidden = true;
+
+    // Remove any per-image summary sections from previous runs.
+    var oldPerImage = document.querySelector(".per-image-summaries");
+    if (oldPerImage) oldPerImage.remove();
+
     renderAnalysis();
     renderExecSummary();
     renderFindings();

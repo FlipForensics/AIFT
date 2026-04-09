@@ -40,6 +40,7 @@ from .state import (
     CHAT_PROGRESS,
     PARSE_PROGRESS,
     PROJECT_ROOT,
+    SAFE_NAME_RE,
     STATE_LOCK,
     error_response,
     get_case,
@@ -1242,7 +1243,37 @@ def download_csv_bundle(case_id: str) -> Response | tuple[Response, int]:
         case_snapshot = dict(case)
 
     csv_paths = collect_case_csv_paths(case_snapshot)
-    if not csv_paths:
+
+    # Check for multi-image layout: gather per-image CSV paths organized
+    # into subdirectories named by image label.
+    image_states = case_snapshot.get("image_states", {})
+    images_list = case_snapshot.get("images", [])
+    multi_image_csvs: list[tuple[str, Path]] = []
+
+    if isinstance(image_states, dict) and len(image_states) > 1:
+        # Build a label lookup from the images list.
+        label_map: dict[str, str] = {}
+        for img in images_list:
+            if isinstance(img, dict):
+                label_map[str(img.get("image_id", ""))] = str(img.get("label", ""))
+
+        for image_id, img_state in image_states.items():
+            if not isinstance(img_state, dict):
+                continue
+            label = label_map.get(image_id, "").strip() or image_id
+            # Sanitize label for use as a directory name.
+            safe_label = SAFE_NAME_RE.sub("_", label).strip("_") or image_id
+
+            # Collect CSVs from the image's parsed directory.
+            csv_dir_str = str(img_state.get("csv_output_dir", "")).strip()
+            if csv_dir_str:
+                csv_dir = Path(csv_dir_str)
+                if csv_dir.is_dir():
+                    for csv_file in sorted(csv_dir.glob("*.csv")):
+                        if csv_file.is_file():
+                            multi_image_csvs.append((safe_label, csv_file))
+
+    if not csv_paths and not multi_image_csvs:
         return error_response("No parsed CSV files available for this case.", 404)
 
     reports_dir = Path(case_snapshot["case_dir"]) / "reports"
@@ -1250,18 +1281,33 @@ def download_csv_bundle(case_id: str) -> Response | tuple[Response, int]:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     zip_path = reports_dir / f"parsed_csvs_{timestamp}.zip"
     used_names: set[str] = set()
+
     with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as archive:
-        for csv_path in csv_paths:
-            base_name = csv_path.name
-            arcname = base_name
-            counter = 1
-            while arcname in used_names:
-                stem = Path(base_name).stem
-                suffix = Path(base_name).suffix
-                arcname = f"{stem}_{counter}{suffix}"
-                counter += 1
-            used_names.add(arcname)
-            archive.write(csv_path, arcname=arcname)
+        if multi_image_csvs:
+            # Multi-image: organize into subdirectories by image label.
+            for subdir_name, csv_file in multi_image_csvs:
+                arcname = f"{subdir_name}/{csv_file.name}"
+                counter = 1
+                while arcname in used_names:
+                    stem = csv_file.stem
+                    suffix = csv_file.suffix
+                    arcname = f"{subdir_name}/{stem}_{counter}{suffix}"
+                    counter += 1
+                used_names.add(arcname)
+                archive.write(csv_file, arcname=arcname)
+        else:
+            # Single-image / legacy: flat structure.
+            for csv_path in csv_paths:
+                base_name = csv_path.name
+                arcname = base_name
+                counter = 1
+                while arcname in used_names:
+                    stem = Path(base_name).stem
+                    suffix = Path(base_name).suffix
+                    arcname = f"{stem}_{counter}{suffix}"
+                    counter += 1
+                used_names.add(arcname)
+                archive.write(csv_path, arcname=arcname)
 
     return send_file(
         zip_path,

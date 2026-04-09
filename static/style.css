@@ -1185,6 +1185,94 @@ tbody td:nth-child(3) {
   min-width: 0;
 }
 
+/* Multi-image analysis groups in Step 4 live stream. */
+.analysis-image-group {
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.analysis-image-group-header {
+  margin: 0 0 var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 2px solid var(--accent);
+  color: var(--accent);
+  font-size: 0.95rem;
+}
+
+/* Cross-System Analysis section in Step 5. */
+.cross-system-analysis {
+  border: 2px solid var(--accent);
+  background: var(--bg-card);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  border-radius: 6px;
+  position: relative;
+}
+
+.cross-system-analysis > h3 {
+  color: var(--accent);
+  margin: 0 0 var(--space-3);
+  font-size: 1rem;
+}
+
+.cross-system-content {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  min-width: 0;
+}
+
+/* Per-image summary sections in Step 5. */
+.per-image-summaries {
+  margin-top: var(--space-4);
+}
+
+.per-image-summary-section {
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+}
+
+.per-image-summary-header {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  padding: var(--space-2) 0;
+}
+
+.per-image-summary-header:hover {
+  color: var(--accent);
+}
+
+.per-image-summary-body {
+  padding-top: var(--space-3);
+}
+
+/* Multi-image findings groups in Step 5. */
+.findings-image-group {
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+}
+
+.findings-image-group-header {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--accent);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-2);
+}
+
+.findings-image-group-header:hover {
+  color: var(--text-primary);
+}
+
 .summary-card dl {
   margin: 0;
   display: grid;

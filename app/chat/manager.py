@@ -293,22 +293,63 @@ class ChatManager:
     # CSV data retrieval (delegates to csv_retrieval module)
     # ------------------------------------------------------------------
 
-    def retrieve_csv_data(self, question: str, parsed_dir: str | Path) -> dict[str, Any]:
+    def retrieve_csv_data(
+        self,
+        question: str,
+        parsed_dir: str | Path,
+        additional_parsed_dirs: list[str | Path] | None = None,
+    ) -> dict[str, Any]:
         """Best-effort retrieval of raw CSV rows for data-centric chat questions.
 
         Delegates to :func:`~app.chat.csv_retrieval.retrieve_csv_data`.
+        For multi-image cases, also searches ``additional_parsed_dirs``
+        and merges the results.
 
         Args:
             question: The user's chat question text.
-            parsed_dir: Path to the directory containing parsed artifact
-                CSV files.
+            parsed_dir: Path to the primary directory containing parsed
+                artifact CSV files.
+            additional_parsed_dirs: Optional list of additional parsed
+                directories (one per extra image) to search for CSV data.
 
         Returns:
             A dictionary with a ``retrieved`` boolean.  When *True*, also
             includes ``artifacts`` (list of matched CSV filenames) and
             ``data`` (formatted row text).
         """
-        return _retrieve_csv_data(question, parsed_dir)
+        primary = _retrieve_csv_data(question, parsed_dir)
+
+        if not additional_parsed_dirs:
+            return primary
+
+        all_artifacts: list[str] = list(primary.get("artifacts", []))
+        data_parts: list[str] = []
+        if primary.get("retrieved") and str(primary.get("data", "")).strip():
+            data_parts.append(str(primary["data"]).strip())
+
+        for extra_dir in additional_parsed_dirs:
+            if not extra_dir:
+                continue
+            extra_path = Path(extra_dir)
+            if not extra_path.is_dir():
+                continue
+            extra_result = _retrieve_csv_data(question, extra_path)
+            if extra_result.get("retrieved"):
+                for artifact in extra_result.get("artifacts", []):
+                    if artifact and artifact not in all_artifacts:
+                        all_artifacts.append(artifact)
+                extra_data = str(extra_result.get("data", "")).strip()
+                if extra_data:
+                    data_parts.append(extra_data)
+
+        if not data_parts:
+            return primary
+
+        return {
+            "retrieved": True,
+            "artifacts": all_artifacts,
+            "data": "\n\n".join(data_parts),
+        }
 
     # ------------------------------------------------------------------
     # Token budgeting
@@ -412,7 +453,10 @@ class ChatManager:
         """Assemble context sections shared by build and rebuild methods.
 
         Extracts metadata fields, formats the standard sections, and
-        appends the caller-provided findings section.
+        appends the caller-provided findings section.  For multi-image
+        results (containing an ``images`` dict), each image's summary
+        is included with its label, and the cross-image summary is
+        appended if present.
 
         Args:
             analysis_results: The full analysis results mapping.
@@ -433,7 +477,6 @@ class ChatManager:
             default="Unknown",
         )
         domain = _stringify(metadata_map.get("domain"), default="Unknown")
-        summary = _stringify(analysis.get("summary"), default="No executive summary available.")
         context_text = _stringify(
             investigation_context,
             default="No investigation context provided.",
@@ -441,23 +484,65 @@ class ChatManager:
 
         sections = [
             f"Investigation Context:\n{context_text}",
-            (
+        ]
+
+        # Multi-image: include per-image system info and summaries.
+        images_data = analysis.get("images")
+        if isinstance(images_data, Mapping) and images_data:
+            system_lines: list[str] = []
+            per_image_summaries: list[str] = []
+            for image_id, img_data in images_data.items():
+                if not isinstance(img_data, Mapping):
+                    continue
+                label = _stringify(img_data.get("label"), default=image_id)
+                img_summary = _stringify(img_data.get("summary"), default="No summary.")
+                system_lines.append(f"- {label}")
+                per_image_summaries.append(f"### {label}\n{img_summary}")
+
+            sections.append(
+                "Systems Under Analysis:\n" + "\n".join(system_lines)
+                if system_lines
+                else (
+                    "System Under Analysis:\n"
+                    f"- Hostname: {hostname}\n"
+                    f"- OS: {os_value}\n"
+                    f"- Domain: {domain}"
+                )
+            )
+
+            # Cross-image summary.
+            cross_summary = _stringify(analysis.get("cross_image_summary"))
+            if cross_summary:
+                sections.append(f"Cross-System Correlation:\n{cross_summary}")
+
+            # Per-image summaries.
+            if per_image_summaries:
+                sections.append(
+                    "Per-Image Summaries:\n" + "\n\n".join(per_image_summaries)
+                )
+        else:
+            # Single-image layout.
+            sections.append(
                 "System Under Analysis:\n"
                 f"- Hostname: {hostname}\n"
                 f"- OS: {os_value}\n"
                 f"- Domain: {domain}"
-            ),
-            f"Executive Summary:\n{summary}",
-            findings_section,
-        ]
+            )
+            summary = _stringify(analysis.get("summary"), default="No executive summary available.")
+            sections.append(f"Executive Summary:\n{summary}")
+
+        sections.append(findings_section)
         return "\n\n".join(sections)
 
     def _format_per_artifact_findings(self, analysis_results: Mapping[str, Any]) -> str:
         """Format per-artifact findings as a bulleted text block.
 
-        Handles multiple input shapes (dict keyed by artifact name, list
-        of finding dicts, or list of raw strings) and normalises them
-        into ``- artifact_name: analysis_text`` lines.
+        Handles multiple input shapes:
+
+        * **Multi-image** (``images`` dict): groups findings by image
+          label, prefixing each artifact with its image.
+        * **Single-image** (``per_artifact`` list or dict): flat list of
+          ``- artifact_name: analysis_text`` lines.
 
         Args:
             analysis_results: The full analysis results mapping.
@@ -466,11 +551,66 @@ class ChatManager:
             A newline-joined string of bullet-pointed findings, or a
             placeholder message when no findings are available.
         """
+        # Multi-image: check for ``images`` dict first.
+        images_data = analysis_results.get("images")
+        if isinstance(images_data, Mapping) and images_data:
+            return self._format_multi_image_findings(images_data)
+
         raw_findings = analysis_results.get("per_artifact")
         if raw_findings is None:
             raw_findings = analysis_results.get("per_artifact_findings")
 
-        findings: list[tuple[str, str]] = []
+        items = self._normalize_findings_items(raw_findings)
+        findings = self._extract_findings_tuples(items)
+
+        if not findings:
+            return "- No per-artifact findings available."
+
+        return "\n".join(
+            f"- {artifact_name}: {analysis_text}"
+            for artifact_name, analysis_text in findings
+        )
+
+    def _format_multi_image_findings(self, images_data: Mapping[str, Any]) -> str:
+        """Format per-artifact findings from a multi-image analysis result.
+
+        Groups findings by image label, with each artifact prefixed by
+        the image label for clarity.
+
+        Args:
+            images_data: The ``images`` dict from analysis results, keyed
+                by image ID with ``label`` and ``per_artifact`` values.
+
+        Returns:
+            A formatted string with image-grouped findings.
+        """
+        all_findings: list[str] = []
+        for image_id, img_data in images_data.items():
+            if not isinstance(img_data, Mapping):
+                continue
+            label = _stringify(img_data.get("label"), default=image_id)
+            raw = img_data.get("per_artifact")
+            items = self._normalize_findings_items(raw)
+            findings = self._extract_findings_tuples(items)
+
+            if findings:
+                all_findings.append(f"## {label}")
+                all_findings.extend(
+                    f"- {name}: {text}" for name, text in findings
+                )
+
+        return "\n".join(all_findings) if all_findings else "- No per-artifact findings available."
+
+    @staticmethod
+    def _normalize_findings_items(raw_findings: Any) -> list[Any]:
+        """Normalize raw per-artifact findings into a flat list of items.
+
+        Args:
+            raw_findings: Raw findings value (dict, list, or ``None``).
+
+        Returns:
+            A list of finding items (dicts or strings).
+        """
         if isinstance(raw_findings, Mapping):
             items: list[Any] = []
             for artifact_name, value in raw_findings.items():
@@ -480,11 +620,22 @@ class ChatManager:
                     items.append(merged)
                 else:
                     items.append({"artifact_name": artifact_name, "analysis": value})
-        elif isinstance(raw_findings, list):
-            items = list(raw_findings)
-        else:
-            items = []
+            return items
+        if isinstance(raw_findings, list):
+            return list(raw_findings)
+        return []
 
+    @staticmethod
+    def _extract_findings_tuples(items: list[Any]) -> list[tuple[str, str]]:
+        """Extract (artifact_name, analysis_text) tuples from finding items.
+
+        Args:
+            items: List of finding items (dicts or raw strings).
+
+        Returns:
+            List of (name, text) tuples with non-empty text.
+        """
+        findings: list[tuple[str, str]] = []
         for item in items:
             if isinstance(item, Mapping):
                 artifact_name = _stringify(
@@ -503,11 +654,4 @@ class ChatManager:
 
             if analysis_text:
                 findings.append((artifact_name, analysis_text))
-
-        if not findings:
-            return "- No per-artifact findings available."
-
-        return "\n".join(
-            f"- {artifact_name}: {analysis_text}"
-            for artifact_name, analysis_text in findings
-        )
+        return findings
