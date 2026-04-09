@@ -452,11 +452,37 @@
   }
 
   /**
+   * Debounce timer ID for {@link checkMultiImageCompletionImpl}.
+   * @type {number|null}
+   */
+  let _multiImageCompleteTimer = null;
+
+  /**
+   * Schedule a debounced check for multi-image parse completion.
+   *
+   * Multiple SSE streams can fire completion events near-simultaneously.
+   * This wrapper coalesces those calls so the actual finalization logic
+   * runs only once on the next event-loop tick via setTimeout(…, 0).
+   */
+  function checkMultiImageCompletion() {
+    if (_multiImageCompleteTimer != null) clearTimeout(_multiImageCompleteTimer);
+    _multiImageCompleteTimer = setTimeout(() => {
+      _multiImageCompleteTimer = null;
+      checkMultiImageCompletionImpl();
+    }, 0);
+  }
+
+  /**
    * Check if all images have finished parsing in multi-image mode.
    *
    * If all images are done (or failed), finalize the overall parse state.
+   * Guarded: if the parse is already finalized (done or fail while not
+   * running), this is a no-op so concurrent/duplicate calls are harmless.
    */
-  function checkMultiImageCompletion() {
+  function checkMultiImageCompletionImpl() {
+    /* Guard: already finalized — nothing to do. */
+    if (!st.parse.run && (st.parse.done || st.parse.fail)) return;
+
     const imageIds = Object.keys(st.imageParse);
     if (!imageIds.length) return;
 
@@ -466,7 +492,6 @@
     });
     if (!allDone) return;
 
-    const anySuccess = imageIds.some((id) => st.imageParse[id].done);
     const allFailed = imageIds.every((id) => st.imageParse[id].fail);
 
     updateMultiImageParseProgress();

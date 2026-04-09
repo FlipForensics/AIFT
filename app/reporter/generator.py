@@ -154,10 +154,11 @@ class ReportGenerator:
         analysis = dict(analysis_results or {})
         audit_entries = self._normalize_audit_entries(audit_log_entries)
 
-        # Detect multi-image vs V1 format
-        is_multi_image = "images" in analysis and isinstance(analysis["images"], Mapping)
+        # Detect multi-image vs V1 format.  The caller passes an "images"
+        # dict when the case involves more than one disk image.
+        has_images_key = "images" in analysis and isinstance(analysis["images"], Mapping)
 
-        if is_multi_image:
+        if has_images_key:
             multi_analysis = analysis
         else:
             multi_analysis = self._convert_v1_to_multi_image(analysis)
@@ -166,7 +167,8 @@ class ReportGenerator:
         metadata_list = self._normalize_to_list(image_metadata)
         hashes_list = self._normalize_to_list(evidence_hashes)
 
-        # Resolve case-level fields from the first metadata/hashes entry
+        # The first metadata/hashes entry is used to resolve case-level
+        # identifiers (case_id) which are shared across all images.
         first_metadata = dict(metadata_list[0]) if metadata_list else {}
         first_hashes = dict(hashes_list[0]) if hashes_list else {}
 
@@ -179,7 +181,17 @@ class ReportGenerator:
         # Build per-image data for the template
         images_data = multi_analysis.get("images", {})
         image_count = len(images_data)
-        is_multi = image_count > 1
+
+        # Determine whether the template should render multi-image sections.
+        # This must be True whenever multiple images are present -- either from
+        # the analysis "images" dict, or from multiple metadata/hashes entries
+        # (which indicates the caller supplied per-image lists even if the
+        # analysis structure was not fully populated).
+        is_multi = (
+            image_count > 1
+            or len(metadata_list) > 1
+            or len(hashes_list) > 1
+        )
 
         # Build evidence rows (one per image)
         evidence_rows = self._build_evidence_rows(metadata_list, hashes_list, images_data)
@@ -195,7 +207,21 @@ class ReportGenerator:
             multi_analysis.get("cross_image_summary"), default=""
         )
 
-        # For single-image backward compatibility, also set V1 template vars
+        # V1 backward-compatibility: the template has two rendering paths
+        # controlled by ``is_multi_image``.  The V1 (single-image) path uses
+        # ``evidence``, ``hash_verification``, ``executive_summary``, and
+        # ``per_artifact_findings`` variables.  These are populated from the
+        # first (and only) image's metadata/hashes so that older single-image
+        # templates continue to work.  When ``is_multi`` is True the template
+        # ignores these variables entirely, using ``evidence_rows``,
+        # ``hash_rows``, and ``image_sections`` instead.
+        #
+        # We still populate ``evidence`` and ``hash_verification`` in the
+        # multi-image branch as a safety net -- if the template ever falls
+        # through, it will at least show first-image data rather than crash.
+        evidence_summary = self._build_evidence_summary(first_metadata, first_hashes)
+        hash_verification = self._resolve_hash_verification(first_hashes)
+
         if not is_multi:
             first_image_data = next(iter(images_data.values()), {})
             summary_text = self._stringify(
@@ -208,13 +234,9 @@ class ReportGenerator:
             per_artifact = self._normalize_per_artifact_findings(
                 {"per_artifact": first_image_data.get("per_artifact", [])}
             )
-            evidence_summary = self._build_evidence_summary(first_metadata, first_hashes)
-            hash_verification = self._resolve_hash_verification(first_hashes)
         else:
             executive_summary = ""
             per_artifact = []
-            evidence_summary = self._build_evidence_summary(first_metadata, first_hashes)
-            hash_verification = self._resolve_hash_verification(first_hashes)
 
         render_context = {
             "case_name": case_name,

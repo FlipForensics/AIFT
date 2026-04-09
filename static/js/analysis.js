@@ -75,6 +75,9 @@
     if (isMulti) {
       var selections = A.allImageArtifactSelections();
       if (selections && selections.length) {
+        // Backend expects body.images as an array of {image_id: string,
+        // artifacts: string[]} where each artifact entry is a key string
+        // (e.g. "evtx", "prefetch").  See analysis.py start_analysis().
         body.images = selections.map(function(sel) {
           return {
             image_id: sel.image_id,
@@ -645,9 +648,14 @@
     if (el.runBtn) el.runBtn.disabled = false;
     if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
 
-    // Hide cross-system analysis section.
+    // Hide and clear cross-system analysis section so stale content from a
+    // prior multi-image run does not persist into a subsequent single-image run.
     var crossSection = document.getElementById("cross-system-analysis");
-    if (crossSection) crossSection.hidden = true;
+    if (crossSection) {
+      crossSection.hidden = true;
+      var crossContent = crossSection.querySelector(".cross-system-content");
+      if (crossContent) crossContent.innerHTML = "";
+    }
 
     // Remove any per-image summary sections from previous runs.
     var oldPerImage = document.querySelector(".per-image-summaries");

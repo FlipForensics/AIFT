@@ -68,6 +68,13 @@ from .state import (  # noqa: F401
     success_response,
 )
 
+# Shared evidence utilities:
+from .evidence_utils import (  # noqa: F401
+    compute_evidence_hashes,
+    open_dissect_target,
+    should_skip_hashing,
+)
+
 # Evidence helpers and blueprint:
 from .evidence import (  # noqa: F401
     EWF_SEGMENT_RE,

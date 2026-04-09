@@ -23,6 +23,11 @@ from flask import Blueprint, Response, current_app, request
 
 from ..audit import AuditLogger
 from ..case_manager import CaseManager
+from .evidence_utils import (
+    compute_evidence_hashes as _compute_evidence_hashes,
+    open_dissect_target as _open_dissect_target,
+    should_skip_hashing as _should_skip_hashing,
+)
 
 from .state import (
     ANALYSIS_PROGRESS,
@@ -86,8 +91,17 @@ def _get_or_create_default_image(case_id: str) -> str | None:
     if info["images"]:
         return info["images"][0]["image_id"]
 
-    # No images yet -- create a default one.
-    return cm.add_image(case_id, label="default")
+    # No images yet -- create a default one and ensure the in-memory
+    # case state tracks it so downstream code that reads case["images"]
+    # does not find an uninitialised list.
+    image_id = cm.add_image(case_id, label="default")
+    case = get_case(case_id)
+    if case is not None:
+        with STATE_LOCK:
+            images_list = case.setdefault("images", [])
+            if not any(img.get("image_id") == image_id for img in images_list):
+                images_list.append({"image_id": image_id, "label": "default"})
+    return image_id
 
 
 def _progress_key(case_id: str, image_id: str) -> str:
@@ -428,7 +442,10 @@ def start_image_parse(case_id: str, image_id: str) -> tuple[Response, int]:
         PARSE_PROGRESS[progress_key] = new_progress(status="running")
 
         # Also set the case-level progress for backward compat.
-        PARSE_PROGRESS[case_id] = PARSE_PROGRESS[progress_key]
+        # Use copy.copy() to avoid a shared reference -- otherwise
+        # mutations to the per-image progress dict would silently
+        # affect the case-level progress (and vice-versa).
+        PARSE_PROGRESS[case_id] = copy.copy(PARSE_PROGRESS[progress_key])
 
         case["status"] = "running"
         case["selected_artifacts"] = list(parse_artifacts)
@@ -517,112 +534,6 @@ def _resolve_evidence_for_image(image_dir: Path) -> dict[str, Any]:
     """
     from .evidence import resolve_evidence_payload
     return resolve_evidence_payload(image_dir)
-
-
-def _should_skip_hashing() -> bool:
-    """Check whether the current request opts to skip hashing.
-
-    Returns:
-        ``True`` if the user requested hashing be skipped.
-    """
-    if request.content_type and "multipart" in request.content_type:
-        return bool(request.form.get("skip_hashing"))
-    payload = request.get_json(silent=True) or {}
-    if isinstance(payload, dict):
-        return bool(payload.get("skip_hashing"))
-    return False
-
-
-def _compute_evidence_hashes(
-    files_to_hash: list[str],
-    source_path: Path,
-    skip_hashing: bool,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Compute hashes for evidence files.
-
-    Args:
-        files_to_hash: List of file paths to hash.
-        source_path: The primary source evidence path.
-        skip_hashing: Whether hashing was skipped by user request.
-
-    Returns:
-        ``(hashes_summary, file_hashes_list)`` tuple.
-    """
-    if skip_hashing:
-        hashes = {"sha256": "N/A (skipped)", "md5": "N/A (skipped)", "size_bytes": 0}
-        return hashes, []
-
-    if files_to_hash:
-        # Import from evidence module so test patches are respected.
-        from . import evidence as _ev_mod
-        _compute = _ev_mod.compute_hashes
-        file_hashes: list[dict[str, Any]] = []
-        for fpath in files_to_hash:
-            h = dict(_compute(fpath))
-            h["path"] = fpath
-            file_hashes.append(h)
-        if len(file_hashes) == 1:
-            hashes = dict(file_hashes[0])
-        else:
-            hashes = {
-                "sha256": file_hashes[0]["sha256"],
-                "md5": file_hashes[0]["md5"],
-                "size_bytes": sum(h["size_bytes"] for h in file_hashes),
-            }
-        hashes["filename"] = source_path.name
-        return hashes, file_hashes
-
-    hashes = {"sha256": "N/A (directory)", "md5": "N/A (directory)", "size_bytes": 0}
-    hashes["filename"] = source_path.name
-    return hashes, []
-
-
-def _open_dissect_target(
-    dissect_path: Path,
-    case_dir: Any,
-    audit_logger: Any,
-    case_id: str,
-) -> tuple[dict[str, str], list[dict[str, Any]], str]:
-    """Open a Dissect target and extract metadata and available artifacts.
-
-    Args:
-        dissect_path: Path to the evidence for Dissect.
-        case_dir: Case directory path.
-        audit_logger: Audit logger instance.
-        case_id: UUID of the case (for log messages).
-
-    Returns:
-        ``(metadata, available_artifacts, os_type)`` tuple.
-    """
-    # Import ForensicParser from evidence module so test patches are respected.
-    from . import evidence as _ev_mod
-    _ForensicParser = _ev_mod.ForensicParser
-
-    try:
-        with _ForensicParser(
-            evidence_path=dissect_path,
-            case_dir=case_dir,
-            audit_logger=audit_logger,
-        ) as parser:
-            metadata = parser.get_image_metadata()
-            available_artifacts = parser.get_available_artifacts()
-            detected_os_type = parser.os_type
-    except Exception:
-        LOGGER.warning(
-            "Failed to open evidence with Dissect for case %s — "
-            "returning degraded response.",
-            case_id,
-            exc_info=True,
-        )
-        metadata = {
-            "hostname": "Unknown",
-            "os_version": "Unknown",
-            "domain": "Unknown",
-        }
-        available_artifacts = []
-        detected_os_type = "unknown"
-
-    return metadata, available_artifacts, detected_os_type
 
 
 def _update_image_metadata(

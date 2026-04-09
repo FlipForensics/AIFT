@@ -675,6 +675,7 @@ def run_multi_image_analysis_task(
 
     # Build image descriptors for the analyzer.
     images: list[dict[str, Any]] = []
+    skipped_images: list[dict[str, str]] = []
     for img in images_payload:
         image_id = str(img.get("image_id", ""))
         if not image_id:
@@ -698,7 +699,19 @@ def run_multi_image_analysis_task(
                 image_dir = cm.get_image_dir(case_id, image_id)
                 parsed_dir = str(image_dir / "parsed")
             except FileNotFoundError:
+                skip_label = label_lookup.get(image_id, image_id)
                 LOGGER.warning("Image dir not found for %s/%s", case_id, image_id)
+                skipped_images.append({
+                    "image_id": image_id,
+                    "label": skip_label,
+                    "reason": "Parsed data directory not found.",
+                })
+                emit_progress(ANALYSIS_PROGRESS, case_id, {
+                    "type": "image_skipped",
+                    "image_id": image_id,
+                    "label": skip_label,
+                    "reason": "Parsed data directory not found.",
+                })
                 continue
 
         label = label_lookup.get(image_id, "")
@@ -780,6 +793,10 @@ def run_multi_image_analysis_task(
             cancel_check=(lambda: cancel_event.is_set()) if cancel_event is not None else None,
         )
 
+        # Attach skipped image information so the report can mention them.
+        if skipped_images:
+            output["skipped_images"] = skipped_images
+
         # Save results to disk.
         analysis_results_path = Path(case_dir) / "analysis_results.json"
         with analysis_results_path.open("w", encoding="utf-8") as f:
@@ -828,6 +845,7 @@ def run_multi_image_analysis_task(
                 if isinstance(img_data, dict)
             },
             "cross_image_summary": cross_summary,
+            "skipped_images": skipped_images,
         })
         set_progress_status(ANALYSIS_PROGRESS, case_id, "completed")
         emit_progress(ANALYSIS_PROGRESS, case_id, {
@@ -845,6 +863,7 @@ def run_multi_image_analysis_task(
                 if isinstance(img_data, dict)
             },
             "cross_image_summary": cross_summary,
+            "skipped_images": skipped_images,
         })
         mark_case_status(case_id, "completed")
 

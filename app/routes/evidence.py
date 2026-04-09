@@ -868,64 +868,23 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
         source_path = Path(evidence_payload["source_path"])
         dissect_path = Path(evidence_payload["dissect_path"])
 
-        # Determine whether the user opted to skip hashing.
-        skip_hashing = False
-        if request.content_type and "multipart" in request.content_type:
-            skip_hashing = bool(request.form.get("skip_hashing"))
-        else:
-            payload = request.get_json(silent=True) or {}
-            if isinstance(payload, dict):
-                skip_hashing = bool(payload.get("skip_hashing"))
+        # Use shared utilities for skip-hashing detection, hash
+        # computation, and Dissect target opening.
+        from .evidence_utils import (
+            compute_evidence_hashes as _compute_hashes_util,
+            open_dissect_target as _open_target_util,
+            should_skip_hashing as _skip_hash_util,
+        )
 
+        skip_hashing = _skip_hash_util()
         files_to_hash = evidence_payload.get("evidence_files_to_hash", [])
-        if skip_hashing:
-            hashes = {"sha256": "N/A (skipped)", "md5": "N/A (skipped)", "size_bytes": 0}
-            file_hashes = []
-        elif files_to_hash:
-            file_hashes: list[dict[str, Any]] = []
-            for fpath in files_to_hash:
-                h = dict(compute_hashes(fpath))
-                h["path"] = fpath
-                file_hashes.append(h)
-            if len(file_hashes) == 1:
-                hashes = dict(file_hashes[0])
-            else:
-                # Summary entry for backward compat — individual hashes
-                # are persisted separately in evidence_file_hashes.
-                hashes = {
-                    "sha256": file_hashes[0]["sha256"],
-                    "md5": file_hashes[0]["md5"],
-                    "size_bytes": sum(h["size_bytes"] for h in file_hashes),
-                }
-        else:
-            hashes = {"sha256": "N/A (directory)", "md5": "N/A (directory)", "size_bytes": 0}
-            file_hashes = []
-        hashes["filename"] = source_path.name
+        hashes, file_hashes = _compute_hashes_util(
+            files_to_hash, source_path, skip_hashing,
+        )
 
-        try:
-            with ForensicParser(
-                evidence_path=dissect_path,
-                case_dir=case_dir,
-                audit_logger=audit_logger,
-            ) as parser:
-                metadata = parser.get_image_metadata()
-                available_artifacts = parser.get_available_artifacts()
-                detected_os_type = parser.os_type
-        except Exception:
-            LOGGER.warning(
-                "Failed to open evidence with Dissect for case %s — "
-                "returning degraded response so the user sees the "
-                "unsupported-evidence screen.",
-                case_id,
-                exc_info=True,
-            )
-            metadata = {
-                "hostname": "Unknown",
-                "os_version": "Unknown",
-                "domain": "Unknown",
-            }
-            available_artifacts = []
-            detected_os_type = "unknown"
+        metadata, available_artifacts, detected_os_type = _open_target_util(
+            dissect_path, case_dir, audit_logger, case_id,
+        )
 
         audit_logger.log(
             "evidence_intake",

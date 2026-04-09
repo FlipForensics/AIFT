@@ -203,6 +203,12 @@ def run_multi_image_analysis(
         if cancel_check is not None and cancel_check():
             raise AnalysisCancelledError("Analysis cancelled by user.")
 
+        # Clear stale CSV paths from prior image iterations so that
+        # analyze_artifact() and citation validation always reference the
+        # current image's data — not a leftover path from an earlier image
+        # that shares the same artifact key.
+        analyzer.artifact_csv_paths.clear()
+
         # Register the image's parsed CSV paths into the analyzer
         _register_image_csv_paths(analyzer, artifact_keys, parsed_dir)
 

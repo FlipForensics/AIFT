@@ -1201,6 +1201,58 @@ tbody td:nth-child(3) {
   font-size: 0.95rem;
 }
 
+/* Per-image summaries in the executive summary (Step 5). */
+.per-image-summaries {
+  margin-top: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.per-image-summary-section {
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  border-radius: 6px;
+  padding: var(--space-3);
+}
+
+.per-image-summary-section[open] {
+  padding-bottom: var(--space-4);
+}
+
+.per-image-summary-header {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: var(--space-2) 0;
+  list-style: none;
+}
+
+.per-image-summary-header::-webkit-details-marker {
+  display: none;
+}
+
+.per-image-summary-header::before {
+  content: "\25B6";
+  display: inline-block;
+  margin-right: var(--space-2);
+  font-size: 0.7rem;
+  transition: transform 0.2s ease;
+}
+
+.per-image-summary-section[open] > .per-image-summary-header::before {
+  transform: rotate(90deg);
+}
+
+.per-image-summary-body {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  line-height: 1.6;
+}
+
 /* Cross-System Analysis section in Step 5. */
 .cross-system-analysis {
   border: 2px solid var(--accent);

@@ -36,9 +36,14 @@
     if (addBtn) addBtn.addEventListener("click", addImageForm);
   }
 
-  /** Show/hide upload vs. path panels for legacy (kept for compatibility). */
+  /**
+   * Batch-sync upload/path panels for every image form card.
+   *
+   * Called from app.js when restoring wizard state.  Per-image sync is
+   * handled by syncImageFormMode(); this is the convenience wrapper that
+   * iterates all cards.
+   */
   function syncMode() {
-    /* Sync each image form's panels. */
     getImageForms().forEach(syncImageFormMode);
   }
 
@@ -492,6 +497,26 @@
   }
 
   /**
+   * Format an OS version string, prepending the OS type label when it is
+   * not already contained in the version text.
+   *
+   * @param {string} rawVersion - Raw os_version value (may be empty/"-").
+   * @param {string} osType - Detected OS type label (e.g. "windows").
+   * @returns {string} Formatted OS version string.
+   */
+  function formatOsVersion(rawVersion, osType) {
+    let osVersion = String(rawVersion || "-");
+    const osLabel = String(osType || "").trim().toLowerCase();
+    if (osLabel && osLabel !== "unknown" && osVersion !== "-") {
+      if (osVersion.toLowerCase().indexOf(osLabel) === -1) {
+        const capitalized = osLabel.charAt(0).toUpperCase() + osLabel.slice(1);
+        osVersion = capitalized + " \u2014 " + osVersion;
+      }
+    }
+    return osVersion;
+  }
+
+  /**
    * Render per-image metadata on a card in Step 1.
    *
    * @param {HTMLElement} card - The .image-form-card element.
@@ -507,16 +532,7 @@
       if (el) el.textContent = val;
     };
     setText("image-sum-hostname", String(metadata.hostname || "-"));
-    let osVersion = String(metadata.os_version || "-");
-    const osLabel = String(osType || "").trim().toLowerCase();
-    if (osLabel && osLabel !== "unknown" && osVersion !== "-") {
-      const versionLower = osVersion.toLowerCase();
-      if (versionLower.indexOf(osLabel) === -1) {
-        const capitalized = osLabel.charAt(0).toUpperCase() + osLabel.slice(1);
-        osVersion = capitalized + " \u2014 " + osVersion;
-      }
-    }
-    setText("image-sum-os", osVersion);
+    setText("image-sum-os", formatOsVersion(metadata.os_version, osType));
     setText("image-sum-domain", String(metadata.domain || "-"));
     setText("image-sum-ips", String(metadata.ips || "-"));
     setText("image-sum-sha256", String(hashes.sha256 || "-"));
@@ -549,13 +565,7 @@
       article.className = "summary-card";
       const m = img.metadata || {};
       const h = img.hashes || {};
-      let osVersion = String(m.os_version || "-");
-      const osLabel = String(img.os_type || "").trim().toLowerCase();
-      if (osLabel && osLabel !== "unknown" && osVersion !== "-") {
-        if (osVersion.toLowerCase().indexOf(osLabel) === -1) {
-          osVersion = osLabel.charAt(0).toUpperCase() + osLabel.slice(1) + " \u2014 " + osVersion;
-        }
-      }
+      const osVersion = formatOsVersion(m.os_version, img.os_type);
       article.innerHTML = `
         <h4>${A.escapeHtml(img.label || "Image")}</h4>
         <dl>
@@ -1187,6 +1197,12 @@
       const selections = allImageArtifactSelections();
       hasArtifacts = selections.some((s) => s.artifact_options.length > 0);
     } else {
+      /* Ensure the main artifact form is visible and its state is current
+         before reading selections (avoids stale state when switching back
+         from multi-image mode). */
+      if (el.artifactsForm && el.artifactsForm.hidden) {
+        el.artifactsForm.hidden = false;
+      }
       const options = selectedArtifactOptions();
       hasArtifacts = options.length > 0;
     }
@@ -1246,10 +1262,17 @@
    * its own checkboxes filtered to that image's available artifacts.  The
    * main form is hidden and the tab interface is shown instead.
    */
+  /** AbortController used to remove prior change listeners from the panels container. */
+  let _panelsChangeAC = null;
+
   function buildMultiImageArtifactTabs() {
     const tabContainer = q("artifact-image-tabs");
     const panelsContainer = q("artifact-image-panels");
     if (!tabContainer || !panelsContainer) return;
+
+    /* Abort the previous change listener so we don't accumulate handlers. */
+    if (_panelsChangeAC) _panelsChangeAC.abort();
+    _panelsChangeAC = new AbortController();
 
     /* Clean up any prior tabs. */
     const tabBar = tabContainer.querySelector(".artifact-tab-bar");
@@ -1333,7 +1356,7 @@
       panelsContainer.appendChild(panel);
     });
 
-    /* Wire change events on the panels container. */
+    /* Wire change events on the panels container (with abort signal to prevent accumulation). */
     panelsContainer.addEventListener("change", (e) => {
       const t = e.target;
       if (t instanceof HTMLInputElement && t.type === "checkbox" && t.dataset.artifactKey) {
@@ -1344,7 +1367,7 @@
         t.value = artifactModeValue(t.value);
         return updateParseButton();
       }
-    });
+    }, { signal: _panelsChangeAC.signal });
   }
 
   /**
@@ -1384,6 +1407,7 @@
    * @returns {{artifact_key: string, mode: string}[]}
    */
   function selectedArtifactOptionsForImage(imageId) {
+    if (!imageId) return [];
     const panelsContainer = q("artifact-image-panels");
     if (!panelsContainer) return [];
     const panel = panelsContainer.querySelector(`.artifact-image-panel[data-image-id="${imageId}"]`);
