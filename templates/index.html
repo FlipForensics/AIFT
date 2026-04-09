@@ -189,6 +189,16 @@
       </article>
 
       <div id="artifact-selection-content">
+
+      <!-- Multi-image tab bar (hidden for single image) -->
+      <div id="artifact-image-tabs" class="artifact-image-tabs" hidden>
+        <nav class="artifact-tab-bar" role="tablist" aria-label="Image artifact tabs">
+        </nav>
+      </div>
+
+      <!-- Per-image artifact panels container (populated by JS for multi-image) -->
+      <div id="artifact-image-panels"></div>
+
       <div class="preset-actions">
         <button id="preset-quick-triage" type="button">Recommended</button>
         <button id="preset-clear-all" type="button">Clear All</button>
@@ -484,7 +494,10 @@
       <button id="cancel-parse" type="button" hidden>Cancel Parsing</button>
       <p id="parse-error-message" role="alert" hidden></p>
 
-      <table>
+      <!-- Per-image parse progress sections (populated by JS for multi-image) -->
+      <div id="parse-image-sections"></div>
+
+      <table id="parse-single-table">
         <caption>Artifact parse status</caption>
         <thead>
           <tr>
