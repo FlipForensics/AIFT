@@ -103,19 +103,15 @@
 
   /** Re-number image form titles after add/remove. */
   function renumberImageForms() {
-    A.getImageForms().forEach((card, i) => {
+    const forms = A.getImageForms();
+    const totalForms = forms.length;
+    forms.forEach((card, i) => {
       const title = card.querySelector(".image-form-title");
       if (title) title.textContent = `Image ${i + 1}`;
-      /* Show remove button on all except the first if there are multiple. */
+      /* Show remove button only when there are multiple forms. */
       const removeBtn = card.querySelector(".image-remove-btn");
-      if (removeBtn) removeBtn.hidden = (i === 0 && A.getImageForms().length === 1);
+      if (removeBtn) removeBtn.hidden = totalForms <= 1;
     });
-    /* Update first card's remove button visibility. */
-    const forms = A.getImageForms();
-    if (forms.length > 0) {
-      const firstRemoveBtn = forms[0].querySelector(".image-remove-btn");
-      if (firstRemoveBtn) firstRemoveBtn.hidden = forms.length <= 1;
-    }
   }
 
   /**

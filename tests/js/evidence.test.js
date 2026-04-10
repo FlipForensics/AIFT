@@ -105,25 +105,39 @@ describe("setPendingFiles", () => {
   });
 });
 
-// ── syncMode ────────────────────────────────────────────────────────────────
+// ── syncMode (per-card) ─────────────────────────────────────────────────────
 
 describe("syncMode", () => {
-  test("shows upload panel when upload mode is selected", () => {
-    if (!A.el.modeUpload || !A.el.uploadPanel) return;
-    A.el.modeUpload.checked = true;
-    A.el.modePath.checked = false;
+  test("shows upload panel when upload mode is selected on first card", () => {
+    const cards = A.getImageForms();
+    if (!cards.length) return;
+    const card = cards[0];
+    const modeUpload = card.querySelector(".image-mode-upload");
+    const modePath = card.querySelector(".image-mode-path");
+    const uploadPanel = card.querySelector(".image-upload-panel");
+    const pathPanel = card.querySelector(".image-path-panel");
+    if (!modeUpload || !modePath || !uploadPanel || !pathPanel) return;
+    modeUpload.checked = true;
+    modePath.checked = false;
     A.syncMode();
-    expect(A.el.uploadPanel.hidden).toBe(false);
-    expect(A.el.pathPanel.hidden).toBe(true);
+    expect(uploadPanel.hidden).toBe(false);
+    expect(pathPanel.hidden).toBe(true);
   });
 
-  test("shows path panel when path mode is selected", () => {
-    if (!A.el.modePath || !A.el.pathPanel) return;
-    A.el.modePath.checked = true;
-    A.el.modeUpload.checked = false;
+  test("shows path panel when path mode is selected on first card", () => {
+    const cards = A.getImageForms();
+    if (!cards.length) return;
+    const card = cards[0];
+    const modeUpload = card.querySelector(".image-mode-upload");
+    const modePath = card.querySelector(".image-mode-path");
+    const uploadPanel = card.querySelector(".image-upload-panel");
+    const pathPanel = card.querySelector(".image-path-panel");
+    if (!modeUpload || !modePath || !uploadPanel || !pathPanel) return;
+    modePath.checked = true;
+    modeUpload.checked = false;
     A.syncMode();
-    expect(A.el.pathPanel.hidden).toBe(false);
-    expect(A.el.uploadPanel.hidden).toBe(true);
+    expect(pathPanel.hidden).toBe(false);
+    expect(uploadPanel.hidden).toBe(true);
   });
 });
 
@@ -371,5 +385,186 @@ describe("clearDynamicArtifacts", () => {
 
   test("does nothing when no dynamic category exists", () => {
     expect(() => A.clearDynamicArtifacts()).not.toThrow();
+  });
+});
+
+// ── Multi-image: getImageForms ──────────────────────────────────────────────
+
+describe("getImageForms", () => {
+  test("returns at least one image form card from the template", () => {
+    const forms = A.getImageForms();
+    expect(Array.isArray(forms)).toBe(true);
+    expect(forms.length).toBeGreaterThanOrEqual(1);
+    expect(forms[0].classList.contains("image-form-card")).toBe(true);
+  });
+});
+
+// ── Multi-image: addImageForm / removeImageForm ─────────────────────────────
+
+describe("addImageForm", () => {
+  test("adds a new image form card to the container", () => {
+    const before = A.getImageForms().length;
+    A.addImageForm();
+    const after = A.getImageForms().length;
+    expect(after).toBe(before + 1);
+  });
+
+  test("new card has the expected UI elements", () => {
+    A.addImageForm();
+    const forms = A.getImageForms();
+    const card = forms[forms.length - 1];
+    expect(card.querySelector(".image-label-input")).not.toBeNull();
+    expect(card.querySelector(".image-mode-upload")).not.toBeNull();
+    expect(card.querySelector(".image-mode-path")).not.toBeNull();
+    expect(card.querySelector(".image-upload-panel")).not.toBeNull();
+    expect(card.querySelector(".image-path-panel")).not.toBeNull();
+    expect(card.querySelector(".image-dropzone")).not.toBeNull();
+    expect(card.querySelector(".image-file-input")).not.toBeNull();
+    expect(card.querySelector(".image-path-input")).not.toBeNull();
+    expect(card.querySelector(".image-metadata-card")).not.toBeNull();
+    expect(card.querySelector(".image-status-msg")).not.toBeNull();
+    expect(card.querySelector(".image-remove-btn")).not.toBeNull();
+  });
+
+  test("renumbers titles after adding", () => {
+    A.addImageForm();
+    const forms = A.getImageForms();
+    forms.forEach((card, i) => {
+      const title = card.querySelector(".image-form-title");
+      expect(title.textContent).toBe(`Image ${i + 1}`);
+    });
+  });
+
+  test("shows remove button on all cards when multiple exist", () => {
+    A.addImageForm();
+    const forms = A.getImageForms();
+    expect(forms.length).toBeGreaterThan(1);
+    forms.forEach((card) => {
+      const removeBtn = card.querySelector(".image-remove-btn");
+      expect(removeBtn.hidden).toBe(false);
+    });
+  });
+
+  test("new card defaults to path mode", () => {
+    A.addImageForm();
+    const forms = A.getImageForms();
+    const card = forms[forms.length - 1];
+    const modePath = card.querySelector(".image-mode-path");
+    expect(modePath.checked).toBe(true);
+    const uploadPanel = card.querySelector(".image-upload-panel");
+    expect(uploadPanel.hidden).toBe(true);
+    const pathPanel = card.querySelector(".image-path-panel");
+    expect(pathPanel.hidden).toBe(false);
+  });
+});
+
+describe("removeImageForm", () => {
+  test("removes a card when multiple exist", () => {
+    A.addImageForm();
+    const forms = A.getImageForms();
+    const count = forms.length;
+    expect(count).toBeGreaterThan(1);
+    A.removeImageForm(forms[forms.length - 1]);
+    expect(A.getImageForms().length).toBe(count - 1);
+  });
+
+  test("does not remove the last remaining card", () => {
+    const forms = A.getImageForms();
+    expect(forms.length).toBe(1);
+    A.removeImageForm(forms[0]);
+    expect(A.getImageForms().length).toBe(1);
+  });
+
+  test("renumbers titles after removing", () => {
+    A.addImageForm();
+    A.addImageForm();
+    const forms = A.getImageForms();
+    expect(forms.length).toBe(3);
+    A.removeImageForm(forms[1]);
+    const remaining = A.getImageForms();
+    expect(remaining.length).toBe(2);
+    remaining.forEach((card, i) => {
+      const title = card.querySelector(".image-form-title");
+      expect(title.textContent).toBe(`Image ${i + 1}`);
+    });
+  });
+
+  test("hides remove button when only one card remains", () => {
+    A.addImageForm();
+    expect(A.getImageForms().length).toBe(2);
+    A.removeImageForm(A.getImageForms()[1]);
+    const forms = A.getImageForms();
+    expect(forms.length).toBe(1);
+    const removeBtn = forms[0].querySelector(".image-remove-btn");
+    expect(removeBtn.hidden).toBe(true);
+  });
+
+  test("does nothing when passed null", () => {
+    expect(() => A.removeImageForm(null)).not.toThrow();
+  });
+});
+
+// ── Multi-image: renderImageSummaries ───────────────────────────────────────
+
+describe("renderImageSummaries", () => {
+  test("hides container for single image", () => {
+    const singleImage = [{ image_id: "img1", label: "Test", metadata: {}, hashes: {} }];
+    A.renderImageSummaries(singleImage);
+    const container = document.getElementById("evidence-summaries-container");
+    if (container) {
+      expect(container.hidden).toBe(true);
+    }
+  });
+
+  test("renders summary cards for multiple images", () => {
+    const images = [
+      { image_id: "img1", label: "Image A", metadata: { hostname: "PC1" }, hashes: { sha256: "abc" }, os_type: "windows" },
+      { image_id: "img2", label: "Image B", metadata: { hostname: "PC2" }, hashes: { sha256: "def" }, os_type: "linux" },
+    ];
+    A.renderImageSummaries(images);
+    const container = document.getElementById("evidence-summaries-container");
+    const list = document.getElementById("evidence-summaries-list");
+    if (container && list) {
+      expect(container.hidden).toBe(false);
+      const cards = list.querySelectorAll(".summary-card");
+      expect(cards.length).toBe(2);
+      expect(cards[0].textContent).toContain("PC1");
+      expect(cards[1].textContent).toContain("PC2");
+    }
+  });
+
+  test("escapes HTML in labels and metadata", () => {
+    const images = [
+      { image_id: "img1", label: "<script>alert(1)</script>", metadata: { hostname: "<b>evil</b>" }, hashes: {} },
+      { image_id: "img2", label: "Normal", metadata: { hostname: "PC2" }, hashes: {} },
+    ];
+    A.renderImageSummaries(images);
+    const list = document.getElementById("evidence-summaries-list");
+    if (list) {
+      expect(list.innerHTML).not.toContain("<script>");
+      expect(list.innerHTML).not.toContain("<b>evil");
+      expect(list.innerHTML).toContain("&lt;script&gt;");
+    }
+  });
+});
+
+// ── Multi-image: sanitizeEvidencePath ───────────────────────────────────────
+
+describe("sanitizeEvidencePath", () => {
+  test("trims whitespace", () => {
+    expect(A.sanitizeEvidencePath("  C:\\path  ")).toBe("C:\\path");
+  });
+
+  test("removes curly quotes", () => {
+    expect(A.sanitizeEvidencePath("\u201CC:\\path\u201D")).toBe("C:\\path");
+  });
+
+  test("removes straight double quotes", () => {
+    expect(A.sanitizeEvidencePath('"C:\\path"')).toBe("C:\\path");
+  });
+
+  test("returns empty string for null/undefined", () => {
+    expect(A.sanitizeEvidencePath(null)).toBe("");
+    expect(A.sanitizeEvidencePath(undefined)).toBe("");
   });
 });
