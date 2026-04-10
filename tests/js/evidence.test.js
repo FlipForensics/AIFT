@@ -550,6 +550,238 @@ describe("renderImageSummaries", () => {
   });
 });
 
+// ── Multi-image: isMultiImage ─────────────────────────────────────────────
+
+describe("isMultiImage", () => {
+  test("returns false when no images loaded", () => {
+    A.st.images = [];
+    expect(A.isMultiImage()).toBe(false);
+  });
+
+  test("returns false when single image loaded", () => {
+    A.st.images = [{ image_id: "img1", label: "Image 1" }];
+    expect(A.isMultiImage()).toBe(false);
+  });
+
+  test("returns true when multiple images loaded", () => {
+    A.st.images = [
+      { image_id: "img1", label: "Image 1" },
+      { image_id: "img2", label: "Image 2" },
+    ];
+    expect(A.isMultiImage()).toBe(true);
+  });
+});
+
+// ── Multi-image: allImageArtifactSelections ────────────────────────────────
+
+describe("allImageArtifactSelections", () => {
+  test("returns empty array when single image loaded", () => {
+    A.st.images = [{ image_id: "img1", label: "Image 1" }];
+    expect(A.allImageArtifactSelections()).toEqual([]);
+  });
+
+  test("returns per-image entries when multiple images loaded", () => {
+    A.st.images = [
+      { image_id: "img1", label: "Image A", available_artifacts: [] },
+      { image_id: "img2", label: "Image B", available_artifacts: [] },
+    ];
+    const selections = A.allImageArtifactSelections();
+    expect(selections.length).toBe(2);
+    expect(selections[0].image_id).toBe("img1");
+    expect(selections[1].image_id).toBe("img2");
+    expect(Array.isArray(selections[0].artifact_options)).toBe(true);
+  });
+
+  test("returns empty array when no images loaded", () => {
+    A.st.images = [];
+    expect(A.allImageArtifactSelections()).toEqual([]);
+  });
+});
+
+// ── Multi-image: buildMultiImageArtifactTabs ──────────────────────────────
+
+describe("buildMultiImageArtifactTabs", () => {
+  afterEach(() => {
+    A.st.images = [];
+  });
+
+  test("hides tab container when single image loaded", () => {
+    A.st.images = [{ image_id: "img1", label: "Image 1", available_artifacts: [] }];
+    A.buildMultiImageArtifactTabs();
+    const tabContainer = document.getElementById("artifact-image-tabs");
+    if (tabContainer) {
+      expect(tabContainer.hidden).toBe(true);
+    }
+  });
+
+  test("shows tab container with buttons for multiple images", () => {
+    A.st.images = [
+      { image_id: "img1", label: "Image A", available_artifacts: [{ key: "evtx", available: true }] },
+      { image_id: "img2", label: "Image B", available_artifacts: [{ key: "evtx", available: true }] },
+    ];
+    A.buildMultiImageArtifactTabs();
+    const tabContainer = document.getElementById("artifact-image-tabs");
+    if (tabContainer) {
+      expect(tabContainer.hidden).toBe(false);
+      const buttons = tabContainer.querySelectorAll(".artifact-tab-bar button");
+      expect(buttons.length).toBe(2);
+      expect(buttons[0].textContent).toBe("Image A");
+      expect(buttons[1].textContent).toBe("Image B");
+    }
+  });
+
+  test("first tab is active by default", () => {
+    A.st.images = [
+      { image_id: "img1", label: "Image A", available_artifacts: [] },
+      { image_id: "img2", label: "Image B", available_artifacts: [] },
+    ];
+    A.buildMultiImageArtifactTabs();
+    const tabContainer = document.getElementById("artifact-image-tabs");
+    if (tabContainer) {
+      const buttons = tabContainer.querySelectorAll(".artifact-tab-bar button");
+      expect(buttons[0].classList.contains("is-active")).toBe(true);
+      expect(buttons[1].classList.contains("is-active")).toBe(false);
+    }
+  });
+
+  test("creates panels for each image", () => {
+    A.st.images = [
+      { image_id: "img1", label: "Image A", available_artifacts: [] },
+      { image_id: "img2", label: "Image B", available_artifacts: [] },
+    ];
+    A.buildMultiImageArtifactTabs();
+    const panelsContainer = document.getElementById("artifact-image-panels");
+    if (panelsContainer) {
+      const panels = panelsContainer.querySelectorAll(".artifact-image-panel");
+      expect(panels.length).toBe(2);
+      expect(panels[0].dataset.imageId).toBe("img1");
+      expect(panels[1].dataset.imageId).toBe("img2");
+    }
+  });
+
+  test("hides main artifact form when multi-image", () => {
+    A.st.images = [
+      { image_id: "img1", label: "Image A", available_artifacts: [] },
+      { image_id: "img2", label: "Image B", available_artifacts: [] },
+    ];
+    A.buildMultiImageArtifactTabs();
+    if (A.el.artifactsForm) {
+      expect(A.el.artifactsForm.hidden).toBe(true);
+    }
+  });
+
+  test("shows main artifact form when reverting to single image", () => {
+    /* First build multi tabs, then revert. */
+    A.st.images = [
+      { image_id: "img1", label: "A", available_artifacts: [] },
+      { image_id: "img2", label: "B", available_artifacts: [] },
+    ];
+    A.buildMultiImageArtifactTabs();
+    A.st.images = [{ image_id: "img1", label: "A", available_artifacts: [] }];
+    A.buildMultiImageArtifactTabs();
+    if (A.el.artifactsForm) {
+      expect(A.el.artifactsForm.hidden).toBe(false);
+    }
+  });
+});
+
+// ── Multi-image: switchArtifactTab ────────────────────────────────────────
+
+describe("switchArtifactTab", () => {
+  afterEach(() => {
+    A.st.images = [];
+  });
+
+  test("switches active tab and panel", () => {
+    A.st.images = [
+      { image_id: "img1", label: "Image A", available_artifacts: [] },
+      { image_id: "img2", label: "Image B", available_artifacts: [] },
+    ];
+    A.buildMultiImageArtifactTabs();
+    A.switchArtifactTab("img2");
+
+    const tabContainer = document.getElementById("artifact-image-tabs");
+    const panelsContainer = document.getElementById("artifact-image-panels");
+    if (tabContainer && panelsContainer) {
+      const buttons = tabContainer.querySelectorAll(".artifact-tab-bar button");
+      expect(buttons[0].classList.contains("is-active")).toBe(false);
+      expect(buttons[1].classList.contains("is-active")).toBe(true);
+
+      const panels = panelsContainer.querySelectorAll(".artifact-image-panel");
+      expect(panels[0].classList.contains("is-active")).toBe(false);
+      expect(panels[1].classList.contains("is-active")).toBe(true);
+    }
+  });
+});
+
+// ── Multi-image: activeArtifactTabImageId ─────────────────────────────────
+
+describe("activeArtifactTabImageId", () => {
+  afterEach(() => {
+    A.st.images = [];
+  });
+
+  test("returns null when no tabs exist", () => {
+    A.st.images = [];
+    A.buildMultiImageArtifactTabs();
+    expect(A.activeArtifactTabImageId()).toBeNull();
+  });
+
+  test("returns first image ID by default", () => {
+    A.st.images = [
+      { image_id: "img1", label: "A", available_artifacts: [] },
+      { image_id: "img2", label: "B", available_artifacts: [] },
+    ];
+    A.buildMultiImageArtifactTabs();
+    expect(A.activeArtifactTabImageId()).toBe("img1");
+  });
+
+  test("returns switched image ID after tab switch", () => {
+    A.st.images = [
+      { image_id: "img1", label: "A", available_artifacts: [] },
+      { image_id: "img2", label: "B", available_artifacts: [] },
+    ];
+    A.buildMultiImageArtifactTabs();
+    A.switchArtifactTab("img2");
+    expect(A.activeArtifactTabImageId()).toBe("img2");
+  });
+});
+
+// ── Multi-image: applyPresetMultiAware ────────────────────────────────────
+
+describe("applyPresetMultiAware", () => {
+  afterEach(() => {
+    A.st.images = [];
+  });
+
+  test("falls back to applyPreset when single image", () => {
+    A.st.images = [{ image_id: "img1", label: "A", available_artifacts: [] }];
+    /* Should not throw. */
+    expect(() => A.applyPresetMultiAware("clear")).not.toThrow();
+  });
+
+  test("clears checkboxes in active tab when mode is clear", () => {
+    A.st.images = [
+      { image_id: "img1", label: "A", available_artifacts: [{ key: "evtx", available: true }] },
+      { image_id: "img2", label: "B", available_artifacts: [{ key: "evtx", available: true }] },
+    ];
+    A.buildMultiImageArtifactTabs();
+
+    /* Check some boxes in the first tab panel. */
+    const panelsContainer = document.getElementById("artifact-image-panels");
+    if (!panelsContainer) return;
+    const panel = panelsContainer.querySelector('.artifact-image-panel[data-image-id="img1"]');
+    if (!panel) return;
+    const checkboxes = panel.querySelectorAll("input[type='checkbox'][data-artifact-key]");
+    checkboxes.forEach((cb) => { if (!cb.disabled) cb.checked = true; });
+
+    A.applyPresetMultiAware("clear");
+    checkboxes.forEach((cb) => {
+      if (!cb.disabled) expect(cb.checked).toBe(false);
+    });
+  });
+});
+
 // ── Multi-image: sanitizeEvidencePath ───────────────────────────────────────
 
 describe("sanitizeEvidencePath", () => {
