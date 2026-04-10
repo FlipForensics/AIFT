@@ -413,9 +413,8 @@ class ReparseCleanupIntegrationTests(unittest.TestCase):
             self.assertIn("prefetch", case["artifact_csv_paths"])
 
     def _apply_patches(self):
-        """Context manager that applies all patches at once."""
-        import contextlib
-        return contextlib.ExitStack().__enter__() or _MultiPatch(self._patches())
+        """Return a context manager that applies all patches at once."""
+        return _MultiPatch(self._patches())
 
 
 class _MultiPatch:
@@ -434,10 +433,6 @@ class _MultiPatch:
         for p in reversed(self._patches):
             p.stop()
         return False
-
-
-# Fix the _apply_patches method to return the proper context manager
-ReparseCleanupIntegrationTests._apply_patches = lambda self: _MultiPatch(self._patches())
 
 
 if __name__ == "__main__":
