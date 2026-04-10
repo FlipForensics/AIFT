@@ -7,10 +7,14 @@ analyzer sub-modules.
 
 from __future__ import annotations
 
+import inspect
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+logger = logging.getLogger(__name__)
 
 from .constants import (
     INTEGER_RE,
@@ -389,24 +393,12 @@ def normalize_artifact_key(artifact_key: str) -> str:
         The lowercased, normalized artifact key.
     """
     key = artifact_key.strip().lower()
-    if key == "mft":
-        return "mft"
-    if key.startswith("evtx") or key.endswith(".evtx") or ".evtx" in key:
-        return "evtx"
-    if key.startswith("shimcache"):
-        return "shimcache"
-    if key.startswith("amcache"):
-        return "amcache"
-    if key.startswith("prefetch"):
-        return "prefetch"
-    if key.startswith("services"):
-        return "services"
-    if key.startswith("tasks"):
-        return "tasks"
-    if key.startswith("userassist"):
-        return "userassist"
-    if key.startswith("runkeys"):
-        return "runkeys"
+    # Strip common file extensions so "evtx_Security.csv" → "evtx_security".
+    for ext in (".csv", ".evtx", ".json"):
+        if key.endswith(ext):
+            key = key[: -len(ext)]
+    # Strip trailing _partN suffixes from multi-file splits.
+    key = re.sub(r"_part\d+$", "", key)
     return key
 
 
@@ -484,6 +476,41 @@ def coerce_projection_columns(value: Any) -> list[str]:
 # Progress callback
 # ---------------------------------------------------------------------------
 
+def _callback_accepts_multiple_args(callback: Any) -> bool:
+    """Check whether *callback* accepts three positional arguments.
+
+    Inspects the callable's signature to decide between the multi-arg
+    ``(artifact_key, status, payload)`` convention and the single-dict
+    convention.  Returns ``True`` for three-or-more positional parameters
+    (or a ``*args`` catch-all), ``False`` otherwise.
+
+    Args:
+        callback: The callable to inspect.
+
+    Returns:
+        ``True`` if the callback can receive three positional arguments.
+    """
+    try:
+        sig = inspect.signature(callback)
+    except (ValueError, TypeError):
+        # Signature introspection failed (e.g. built-in or C extension);
+        # fall back to the multi-arg convention as the default.
+        return True
+
+    positional_kinds = {
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    }
+    positional_count = sum(
+        1 for p in sig.parameters.values() if p.kind in positional_kinds
+    )
+    has_var_positional = any(
+        p.kind == inspect.Parameter.VAR_POSITIONAL
+        for p in sig.parameters.values()
+    )
+    return positional_count >= 3 or has_var_positional
+
+
 def emit_analysis_progress(
     progress_callback: Any,
     artifact_key: str,
@@ -492,28 +519,39 @@ def emit_analysis_progress(
 ) -> None:
     """Emit a progress event to the frontend via the callback.
 
+    Determines the correct calling convention by inspecting the callback's
+    signature rather than catching ``TypeError``, so genuine bugs in the
+    callback are not silently swallowed.
+
     Args:
-        progress_callback: The user-supplied progress callback.
+        progress_callback: The user-supplied progress callback.  May accept
+            either ``(artifact_key, status, payload)`` or a single dict.
         artifact_key: Artifact identifier for the event.
         status: Event status.
         payload: Event payload dict.
     """
     try:
-        progress_callback(artifact_key, status, payload)
-        return
-    except TypeError:
-        pass
+        if _callback_accepts_multiple_args(progress_callback):
+            progress_callback(artifact_key, status, payload)
+        else:
+            logger.debug(
+                "Progress callback %r uses single-dict signature; "
+                "falling back to dict convention for artifact '%s'.",
+                progress_callback,
+                artifact_key,
+            )
+            progress_callback({
+                "artifact_key": artifact_key,
+                "status": status,
+                "result": payload,
+            })
     except Exception:
-        return
-
-    try:
-        progress_callback({
-            "artifact_key": artifact_key,
-            "status": status,
-            "result": payload,
-        })
-    except Exception:
-        return
+        logger.debug(
+            "Progress callback %r raised an exception for artifact '%s'.",
+            progress_callback,
+            artifact_key,
+            exc_info=True,
+        )
 
 
 # ---------------------------------------------------------------------------

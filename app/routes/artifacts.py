@@ -25,14 +25,13 @@ from __future__ import annotations
 import copy
 import json
 import logging
-import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
 import re
 from typing import Any
 
-from flask import Blueprint, Response, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, request
 
 from ..parser import LINUX_ARTIFACT_REGISTRY, WINDOWS_ARTIFACT_REGISTRY
 from .state import (
@@ -465,6 +464,8 @@ def _ensure_recommended_profile(profiles_root: Path) -> None:
         profiles_root: Directory for profile files.
     """
     recommended_path = profiles_root / f"{BUILTIN_RECOMMENDED_PROFILE}{PROFILE_FILE_SUFFIX}"
+    if recommended_path.exists():
+        return
     write_profile_file(recommended_path, _recommended_profile_payload())
 
 
@@ -585,11 +586,13 @@ def _purge_stale_parsed_data(case_dir: Path, prev_csv_output_dir: str) -> None:
         prev_csv_output_dir: The ``csv_output_dir`` stored from the previous
             parse run.  May be empty if no prior run exists.
     """
+    from .evidence_utils import safe_rmtree
+
+    cases_root = case_dir.resolve().parent
+
     # Clean the default parsed directory inside the case folder.
     default_parsed = case_dir / "parsed"
-    if default_parsed.is_dir():
-        LOGGER.info("Removing stale parsed output: %s", default_parsed)
-        shutil.rmtree(default_parsed, ignore_errors=True)
+    safe_rmtree(default_parsed, cases_root)
 
     # Clean external CSV output directory if configured and different
     # from the default location.
@@ -602,25 +605,7 @@ def _purge_stale_parsed_data(case_dir: Path, prev_csv_output_dir: str) -> None:
     resolved_default = default_parsed.resolve()
     if resolved_prev == resolved_default:
         return  # Already handled above.
-    # Safety: refuse to delete filesystem roots or paths outside the
-    # known cases root.  The part-count heuristic is not reliable across
-    # platforms (e.g. ``C:\foo`` has 3 parts on Windows), so we anchor
-    # against the case directory's parent (i.e. the cases root) instead.
-    if resolved_prev == resolved_prev.root or resolved_prev == resolved_prev.anchor:
-        LOGGER.warning("Refusing to remove parsed output at filesystem root: %s", resolved_prev)
-        return
-    cases_root = case_dir.resolve().parent
-    try:
-        if not resolved_prev.is_relative_to(cases_root):
-            LOGGER.warning(
-                "Refusing to remove parsed output outside cases root: %s",
-                resolved_prev,
-            )
-            return
-    except (TypeError, ValueError):
-        return
-    LOGGER.info("Removing stale external parsed output: %s", resolved_prev)
-    shutil.rmtree(resolved_prev, ignore_errors=True)
+    safe_rmtree(prev_path, cases_root)
 
 
 def _purge_stale_downstream_case_files(case_dir: Path) -> None:
@@ -737,8 +722,7 @@ def start_parse(case_id: str) -> tuple[Response, int]:
     }
     if analysis_date_range is not None:
         response_payload["analysis_date_range"] = analysis_date_range
-    response_payload["success"] = True
-    return jsonify(response_payload), 202
+    return success_response(response_payload, 202)
 
 
 @artifact_bp.get("/api/cases/<case_id>/parse/progress")

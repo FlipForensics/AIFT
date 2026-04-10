@@ -116,17 +116,25 @@ def extract_ioc_targets(investigation_context: str) -> dict[str, list[str]]:
     return iocs
 
 
-def format_ioc_targets(investigation_context: str) -> str:
+def format_ioc_targets(
+    investigation_context: str,
+    ioc_targets: dict[str, list[str]] | None = None,
+) -> str:
     """Format extracted IOC targets as a human-readable bullet list.
 
     Args:
         investigation_context: Free-text investigation context string.
+        ioc_targets: Optional pre-extracted IOC dict from
+            ``extract_ioc_targets()``.  When provided the function
+            skips redundant extraction.  ``None`` (the default) means
+            extraction is performed internally for backward
+            compatibility.
 
     Returns:
         A multi-line string with one bullet per IOC category (up to
         20 values each), or a message indicating no IOCs were found.
     """
-    ioc_map = extract_ioc_targets(investigation_context)
+    ioc_map = ioc_targets if ioc_targets is not None else extract_ioc_targets(investigation_context)
     if not ioc_map:
         return "No explicit IOC patterns were extracted from the investigation context."
 
@@ -138,7 +146,10 @@ def format_ioc_targets(investigation_context: str) -> str:
     return "\n".join(lines)
 
 
-def build_priority_directives(investigation_context: str) -> str:
+def build_priority_directives(
+    investigation_context: str,
+    ioc_targets: dict[str, list[str]] | None = None,
+) -> str:
     """Build numbered priority directives for the AI analysis prompt.
 
     Generates a set of directives that instruct the AI to prioritize
@@ -147,11 +158,16 @@ def build_priority_directives(investigation_context: str) -> str:
 
     Args:
         investigation_context: Free-text investigation context string.
+        ioc_targets: Optional pre-extracted IOC dict from
+            ``extract_ioc_targets()``.  When provided the function
+            skips redundant extraction.  ``None`` (the default) means
+            extraction is performed internally for backward
+            compatibility.
 
     Returns:
         A multi-line numbered list of priority directives.
     """
-    ioc_map = extract_ioc_targets(investigation_context)
+    ioc_map = ioc_targets if ioc_targets is not None else extract_ioc_targets(investigation_context)
     has_iocs = bool(ioc_map)
     lines = [
         "1. Treat the user investigation context as highest priority and address it before generic hunting.",
@@ -171,6 +187,7 @@ def build_artifact_final_context_reminder(
     artifact_key: str,
     artifact_name: str,
     investigation_context: str,
+    ioc_targets: dict[str, list[str]] | None = None,
 ) -> str:
     """Build a short end-of-prompt reminder that survives left-side truncation.
 
@@ -182,6 +199,12 @@ def build_artifact_final_context_reminder(
         artifact_key: Unique identifier for the artifact.
         artifact_name: Human-readable artifact name.
         investigation_context: The user's investigation context text.
+        ioc_targets: Optional pre-extracted IOC dict from
+            ``extract_ioc_targets()``.  When provided the function
+            passes it through to ``format_ioc_targets()`` to skip
+            redundant extraction.  ``None`` (the default) means
+            extraction is performed internally for backward
+            compatibility.
 
     Returns:
         A multi-line reminder section string starting with a Markdown
@@ -193,15 +216,15 @@ def build_artifact_final_context_reminder(
     else:
         context_text = "No investigation context provided."
 
-    ioc_targets = format_ioc_targets(investigation_context)
-    ioc_targets = truncate_for_prompt(ioc_targets, limit=1200)
+    ioc_targets_text = format_ioc_targets(investigation_context, ioc_targets=ioc_targets)
+    ioc_targets_text = truncate_for_prompt(ioc_targets_text, limit=1200)
 
     lines = [
         "## Final Context Reminder (Do Not Ignore)",
         f"- Artifact key: {artifact_key}",
         f"- Artifact name: {artifact_name}",
         f"- Investigation context (mandatory): {context_text}",
-        f"- IOC targets (mandatory follow-through): {ioc_targets}",
+        f"- IOC targets (mandatory follow-through): {ioc_targets_text}",
         "- Always run default DFIR checks: privilege escalation, credential-access/Mimikatz-like behavior, malicious program execution, persistence/evasion/lateral movement/exfiltration.",
         "- If evidence is insufficient, mark IOC or DFIR check as Not Assessable.",
     ]

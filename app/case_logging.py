@@ -27,15 +27,17 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
+import functools
 import logging
 from pathlib import Path
 import threading
-from typing import Iterator
+from typing import Callable, Iterator, TypeVar
 
 __all__ = [
     "push_case_log_context",
     "pop_case_log_context",
     "case_log_context",
+    "copy_case_log_context",
     "register_case_log_handler",
     "unregister_case_log_handler",
     "unregister_all_case_log_handlers",
@@ -63,12 +65,15 @@ class _CasePathLogHandler(logging.Handler):
     def __init__(self, log_path: Path) -> None:
         super().__init__()
         self.log_path = Path(log_path)
+        self._dir_ensured = False
 
     def emit(self, record: logging.LogRecord) -> None:
         """Write a single formatted log record to :attr:`log_path`."""
         try:
             rendered = self.format(record)
-            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            if not self._dir_ensured:
+                self.log_path.parent.mkdir(parents=True, exist_ok=True)
+                self._dir_ensured = True
             with self.log_path.open("a", encoding="utf-8") as stream:
                 stream.write(f"{rendered}\n")
         except OSError:
@@ -137,6 +142,58 @@ def case_log_context(case_id: str | None) -> Iterator[None]:
         yield
     finally:
         pop_case_log_context(token)
+
+
+_F = TypeVar("_F", bound=Callable[..., object])
+
+
+def copy_case_log_context() -> Callable[[_F], _F]:
+    """Capture the current case-log context for propagation to another thread.
+
+    :class:`~contextvars.ContextVar` values are thread-local and do **not**
+    automatically propagate when a new :class:`threading.Thread` is created.
+    This helper snapshots the active case ID at call time and returns a
+    wrapper factory.  Wrapping a callable with the returned factory ensures
+    the case ID is restored inside the new thread so that case-scoped logging
+    works correctly.
+
+    Typical usage::
+
+        ctx = copy_case_log_context()
+        thread = threading.Thread(target=ctx(my_func), args=(arg1, arg2))
+        thread.start()
+
+    Returns:
+        A callable that accepts a target function and returns a wrapped
+        version of it.  The wrapped function sets the captured case ID
+        before invoking the original and restores the previous value on
+        exit, regardless of whether the target raises an exception.
+    """
+    captured_case_id: str | None = _ACTIVE_CASE_ID.get()
+
+    def _wrap(fn: _F) -> _F:
+        """Wrap *fn* so it executes with the captured case log context.
+
+        Args:
+            fn: The callable to wrap.
+
+        Returns:
+            A wrapper that behaves identically to *fn* but ensures the
+            case log context variable is set for the duration of the call.
+        """
+
+        @functools.wraps(fn)
+        def _inner(*args: object, **kwargs: object) -> object:
+            """Execute the wrapped function with the captured case ID."""
+            token = push_case_log_context(captured_case_id)
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                pop_case_log_context(token)
+
+        return _inner  # type: ignore[return-value]
+
+    return _wrap  # type: ignore[return-value]
 
 
 def register_case_log_handler(case_id: str, case_dir: str | Path) -> Path:

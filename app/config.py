@@ -328,5 +328,12 @@ def save_config(config: dict[str, Any], path: str | Path | None = None) -> None:
     if config_path.parent != Path("."):
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with config_path.open("w", encoding="utf-8") as file:
-        yaml.safe_dump(config, file, sort_keys=False)
+    tmp_path = config_path.with_suffix(".yaml.tmp")
+    try:
+        with tmp_path.open("w", encoding="utf-8") as file:
+            yaml.safe_dump(config, file, sort_keys=False)
+        tmp_path.replace(config_path)
+    finally:
+        # Clean up the temp file if it still exists (e.g. replace() failed).
+        if tmp_path.exists():
+            tmp_path.unlink()

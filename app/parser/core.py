@@ -740,16 +740,26 @@ class ForensicParser:
         try:
             progress_callback(payload)
             return
-        except TypeError:
-            pass
+        except TypeError as exc:
+            logger.debug(
+                "progress_callback(dict) failed for %s: %s; trying (key, count)",
+                artifact_key, exc,
+            )
 
         try:
             progress_callback(artifact_key, record_count)  # type: ignore[misc]
             return
-        except TypeError:
-            pass
+        except TypeError as exc:
+            logger.debug(
+                "progress_callback(key, count) failed for %s: %s; trying (count)",
+                artifact_key, exc,
+            )
 
         try:
             progress_callback(record_count)  # type: ignore[misc]
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "All progress_callback signatures failed for %s: %s",
+                artifact_key, exc,
+            )
             return

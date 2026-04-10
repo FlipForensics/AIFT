@@ -1,9 +1,10 @@
 """Shared evidence-handling utilities used by both evidence and images routes.
 
 Provides common logic for computing evidence hashes, checking whether hashing
-should be skipped, and opening a Dissect forensic target.  These functions
-were extracted from duplicated code in :mod:`~app.routes.evidence` and
-:mod:`~app.routes.images` to ensure consistent behaviour.
+should be skipped, opening a Dissect forensic target, and safety-checked
+directory removal.  These functions were extracted from duplicated code in
+:mod:`~app.routes.evidence` and :mod:`~app.routes.images` to ensure
+consistent behaviour.
 
 Attributes:
     LOGGER: Module-level logger instance.
@@ -12,6 +13,7 @@ Attributes:
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +24,59 @@ LOGGER = logging.getLogger(__name__)
 __all__ = [
     "compute_evidence_hashes",
     "open_dissect_target",
+    "safe_rmtree",
     "should_skip_hashing",
 ]
+
+
+def safe_rmtree(target_dir: Path, cases_root: Path) -> bool:
+    """Remove a directory only if it passes safety checks.
+
+    Guards against accidentally deleting filesystem roots or directories
+    outside the known *cases_root*.  This is the single implementation of
+    the safety-checked removal logic shared by evidence cleanup and stale
+    parsed-data purging.
+
+    Args:
+        target_dir: The directory to remove.  Must already exist on disk
+            for any removal to occur.
+        cases_root: The resolved root directory that contains all case
+            directories.  *target_dir* must be a descendant of this path.
+
+    Returns:
+        ``True`` if the directory was removed (or an ``rmtree`` was
+        attempted with ``ignore_errors=True``).  ``False`` if removal
+        was skipped due to a safety check or because the directory does
+        not exist.
+    """
+    if not target_dir.is_dir():
+        return False
+
+    resolved = target_dir.resolve()
+
+    # Refuse to delete filesystem roots.
+    if resolved == Path(resolved.root) or resolved == Path(resolved.anchor):
+        LOGGER.warning(
+            "Refusing to remove directory at filesystem root: %s",
+            resolved,
+        )
+        return False
+
+    # Refuse to delete paths outside the known cases root.
+    resolved_cases_root = cases_root.resolve()
+    try:
+        if not resolved.is_relative_to(resolved_cases_root):
+            LOGGER.warning(
+                "Refusing to remove directory outside cases root: %s",
+                resolved,
+            )
+            return False
+    except (TypeError, ValueError):
+        return False
+
+    LOGGER.info("Removing directory: %s", resolved)
+    shutil.rmtree(resolved, ignore_errors=True)
+    return True
 
 
 def should_skip_hashing() -> bool:

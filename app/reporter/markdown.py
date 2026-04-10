@@ -36,6 +36,8 @@ from typing import Any
 
 from markupsafe import Markup, escape
 
+from ..utils import stringify as _stringify_canonical
+
 __all__ = [
     "CONFIDENCE_CLASS_MAP",
     "CONFIDENCE_PATTERN",
@@ -67,6 +69,8 @@ CONFIDENCE_CLASS_MAP = {
 def _stringify(value: Any, default: str = "") -> str:
     """Convert *value* to a stripped string, returning *default* if empty.
 
+    Delegates to the canonical :func:`app.utils.stringify` implementation.
+
     Args:
         value: Any value to convert to string.
         default: Fallback when *value* is None or empty after stripping.
@@ -74,10 +78,7 @@ def _stringify(value: Any, default: str = "") -> str:
     Returns:
         The stripped string representation, or *default*.
     """
-    if value is None:
-        return default
-    text = str(value).strip()
-    return text if text else default
+    return _stringify_canonical(value, default)
 
 
 def highlight_confidence_tokens(text: str) -> str:
@@ -102,20 +103,35 @@ def highlight_confidence_tokens(text: str) -> str:
     return CONFIDENCE_PATTERN.sub(_replace_confidence, text)
 
 
-def render_inline_markdown(value: str) -> str:
+def render_inline_markdown(value: str, *, escape_html: bool = False) -> str:
     """Render inline Markdown formatting to HTML.
 
     Handles backtick code spans, bold (``**`` and ``__``), italic
-    (``*`` and ``_``), and confidence-token highlighting.  Code spans
-    are preserved verbatim; all other text is HTML-escaped first.
+    (``*`` and ``_``), and confidence-token highlighting.
+
+    .. warning:: Security consideration
+
+        This function expects **pre-escaped** HTML input by default.
+        When called from :func:`markdown_to_html`, the input has already
+        been passed through :func:`html.escape`, so it is safe.  However,
+        if you call this function directly on untrusted user input, you
+        **must** pass ``escape_html=True`` to prevent XSS injection.
+        Failing to do so will pass raw HTML through unescaped.
 
     Args:
-        value: Raw inline Markdown text.
+        value: Inline Markdown text.  Must be pre-escaped HTML unless
+            *escape_html* is ``True``.
+        escape_html: When ``True``, apply :func:`html.escape` to *value*
+            before processing Markdown formatting.  Defaults to ``False``
+            for backward compatibility with callers that already escape
+            their input.
 
     Returns:
         An HTML string with inline formatting applied.
     """
     source = str(value or "")
+    if escape_html:
+        source = html.escape(source)
     if not source:
         return ""
 

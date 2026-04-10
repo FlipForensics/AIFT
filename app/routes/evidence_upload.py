@@ -13,6 +13,7 @@ Attributes:
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 import uuid
@@ -24,6 +25,8 @@ from werkzeug.utils import secure_filename
 
 from .evidence_archive import extract_zip, extract_tar, extract_7z
 from .state import safe_name
+
+LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "EWF_SEGMENT_RE",
@@ -238,19 +241,35 @@ def resolve_uploaded_dissect_path(uploaded_paths: list[Path]) -> Path:
 def normalize_user_path(value: str) -> str:
     """Strip surrounding quotes and whitespace from a user-supplied path.
 
+    Also rejects paths containing ``..`` components to prevent path traversal
+    attacks.
+
     Args:
         value: Raw path string.
 
     Returns:
         Cleaned path string.
+
+    Raises:
+        ValueError: If the cleaned path contains ``..`` traversal components.
     """
-    return (
+    cleaned = (
         str(value)
         .replace('"', "")
         .replace("\u201c", "")
         .replace("\u201d", "")
         .strip()
     )
+
+    if ".." in Path(cleaned).parts:
+        LOGGER.warning(
+            "Rejected path containing '..' traversal component: %s", cleaned
+        )
+        raise ValueError(
+            "Path must not contain '..' directory traversal components."
+        )
+
+    return cleaned
 
 
 def make_extract_dir(evidence_dir: Path, source_path: Path) -> Path:
@@ -315,7 +334,7 @@ def resolve_evidence_payload(case_dir: Path) -> dict[str, Any]:
             raise ValueError(
                 "Provide evidence via multipart upload or JSON body with {'path': 'C:\\Evidence\\disk-image.E01'}."
             )
-        source_path = Path(normalized_path).expanduser()
+        source_path = Path(normalized_path).expanduser().resolve()
         if not source_path.exists():
             raise FileNotFoundError(f"Evidence path does not exist: {source_path}")
         if not source_path.is_file() and not source_path.is_dir():

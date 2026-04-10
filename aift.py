@@ -50,7 +50,7 @@ def main() -> None:
     host = server_config.get("host", "127.0.0.1")
     port = int(server_config.get("port", 5000))
 
-    app = create_app()
+    app = create_app(config=config)
     url = f"http://{host}:{port}"
 
     def _open_browser() -> None:

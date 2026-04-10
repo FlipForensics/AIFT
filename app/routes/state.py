@@ -433,9 +433,9 @@ def stream_sse(store: dict[str, dict[str, Any]], case_id: str) -> Response:
                         break
 
                     status = str(state.get("status", "idle"))
-                    events = list(state.get("events", []))
-                    pending: list[dict[str, Any]] = events[last:]
-                    last = len(events)
+                    all_events = state.get("events", [])
+                    pending: list[dict[str, Any]] = list(all_events[last:])
+                    last = len(all_events)
 
                 if not pending and status == "idle":
                     if time.monotonic() < initial_idle_deadline:

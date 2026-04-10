@@ -29,24 +29,16 @@ from .routes import register_routes
 
 __all__ = [
     "create_app",
-    "ai_providers",
-    "analyzer",
-    "audit",
-    "case_logging",
-    "chat",
-    "config",
-    "hasher",
-    "parser",
-    "reporter",
-    "routes",
-    "version",
 ]
 
 CSRF_HEADER = "X-CSRF-Token"
 CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
-def create_app(config_path: str | None = None) -> Flask:
+def create_app(
+    config_path: str | None = None,
+    config: dict | None = None,
+) -> Flask:
     """Create and configure the Flask application instance.
 
     Loads AIFT configuration (merging defaults, YAML, and environment
@@ -57,12 +49,16 @@ def create_app(config_path: str | None = None) -> Flask:
     Args:
         config_path: Optional path to a YAML configuration file.  When
             *None*, the default ``config.yaml`` in the project root is used.
+            Ignored when *config* is provided.
+        config: Optional pre-loaded configuration dictionary.  When
+            provided, :func:`~app.config.load_config` is **not** called,
+            avoiding redundant parsing and validation of ``config.yaml``.
 
     Returns:
         A fully configured :class:`~flask.Flask` application instance.
     """
     app = Flask(__name__, template_folder="../templates", static_folder="../static")
-    aift_config = load_config(config_path)
+    aift_config = config if config is not None else load_config(config_path)
     # Store the resolved absolute path so all downstream code uses it consistently.
     resolved_config_path = str(Path(config_path).resolve()) if config_path is not None else str(PROJECT_ROOT / "config.yaml")
     app.config["AIFT_CONFIG"] = aift_config

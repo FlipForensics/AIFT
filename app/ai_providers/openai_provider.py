@@ -19,6 +19,7 @@ from .base import (
     AIProviderError,
     DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_MAX_TOKENS,
+    DEFAULT_OPENAI_MODEL,
     _is_attachment_unsupported_error,
     _is_context_length_error,
     _is_unsupported_parameter_error,
@@ -37,14 +38,13 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OPENAI_MODEL = "gpt-5.4"
-
 
 class OpenAIProvider(AIProvider):
     """OpenAI API provider implementation.
 
     Attributes:
-        api_key (str): The OpenAI API key.
+        _api_key (str): The OpenAI API key (private to reduce
+            accidental exposure in repr/debug output).
         model (str): The OpenAI model identifier.
         attach_csv_as_file (bool): Whether to upload CSV artifacts as
             file attachments via the Responses API.
@@ -87,7 +87,7 @@ class OpenAIProvider(AIProvider):
             )
 
         self._openai = openai
-        self.api_key = normalized_api_key
+        self._api_key = normalized_api_key
         self.model = model
         self.attach_csv_as_file = bool(attach_csv_as_file)
         self._csv_attachment_supported: bool | None = None
@@ -178,24 +178,8 @@ class OpenAIProvider(AIProvider):
                     yield chunk_text
             except AIProviderError:
                 raise
-            except self._openai.APIConnectionError as error:
-                raise AIProviderError(
-                    "Unable to connect to OpenAI API. Check network access and endpoint configuration."
-                ) from error
-            except self._openai.AuthenticationError as error:
-                raise AIProviderError(
-                    "OpenAI authentication failed. Check `ai.openai.api_key` or OPENAI_API_KEY."
-                ) from error
-            except self._openai.BadRequestError as error:
-                if _is_context_length_error(error):
-                    raise AIProviderError(
-                        "OpenAI request exceeded the model context length. Reduce prompt size and retry."
-                    ) from error
-                raise AIProviderError(f"OpenAI request was rejected: {error}") from error
-            except self._openai.APIError as error:
-                raise AIProviderError(f"OpenAI API error: {error}") from error
             except Exception as error:
-                raise AIProviderError(f"Unexpected OpenAI provider error: {error}") from error
+                raise self._map_api_error(error) from error
 
             if not emitted:
                 raise AIProviderError("OpenAI returned an empty response.")
@@ -253,24 +237,35 @@ class OpenAIProvider(AIProvider):
             )
         except AIProviderError:
             raise
-        except self._openai.APIConnectionError as error:
-            raise AIProviderError(
-                "Unable to connect to OpenAI API. Check network access and endpoint configuration."
-            ) from error
-        except self._openai.AuthenticationError as error:
-            raise AIProviderError(
-                "OpenAI authentication failed. Check `ai.openai.api_key` or OPENAI_API_KEY."
-            ) from error
-        except self._openai.BadRequestError as error:
-            if _is_context_length_error(error):
-                raise AIProviderError(
-                    "OpenAI request exceeded the model context length. Reduce prompt size and retry."
-                ) from error
-            raise AIProviderError(f"OpenAI request was rejected: {error}") from error
-        except self._openai.APIError as error:
-            raise AIProviderError(f"OpenAI API error: {error}") from error
         except Exception as error:
-            raise AIProviderError(f"Unexpected OpenAI provider error: {error}") from error
+            raise self._map_api_error(error) from error
+
+    def _map_api_error(self, error: Exception) -> AIProviderError:
+        """Map an OpenAI SDK exception to an ``AIProviderError``.
+
+        Args:
+            error: The raw SDK or network exception.
+
+        Returns:
+            An ``AIProviderError`` with a user-friendly message.
+        """
+        if isinstance(error, self._openai.APIConnectionError):
+            return AIProviderError(
+                "Unable to connect to OpenAI API. Check network access and endpoint configuration."
+            )
+        if isinstance(error, self._openai.AuthenticationError):
+            return AIProviderError(
+                "OpenAI authentication failed. Check `ai.openai.api_key` or OPENAI_API_KEY."
+            )
+        if isinstance(error, self._openai.BadRequestError):
+            if _is_context_length_error(error):
+                return AIProviderError(
+                    "OpenAI request exceeded the model context length. Reduce prompt size and retry."
+                )
+            return AIProviderError(f"OpenAI request was rejected: {error}")
+        if isinstance(error, self._openai.APIError):
+            return AIProviderError(f"OpenAI API error: {error}")
+        return AIProviderError(f"Unexpected OpenAI provider error: {error}")
 
     def _request_non_stream(
         self,

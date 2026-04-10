@@ -20,6 +20,7 @@ from .base import (
     AIProvider,
     AIProviderError,
     DEFAULT_LOCAL_BASE_URL,
+    DEFAULT_LOCAL_MODEL,
     DEFAULT_MAX_TOKENS,
     DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS,
     _is_attachment_unsupported_error,
@@ -41,8 +42,6 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LOCAL_MODEL = "llama3.1:70b"
-
 
 class LocalProvider(AIProvider):
     """OpenAI-compatible local provider implementation.
@@ -50,7 +49,8 @@ class LocalProvider(AIProvider):
     Attributes:
         base_url (str): The normalized local endpoint base URL.
         model (str): The local model identifier.
-        api_key (str): The API key for the local endpoint.
+        _api_key (str): The API key for the local endpoint (private to
+            reduce accidental exposure in repr/debug output).
         attach_csv_as_file (bool): Whether to attempt file-attachment mode.
         request_timeout_seconds (float): HTTP timeout in seconds.
         client: The ``openai.OpenAI`` SDK client instance.
@@ -92,7 +92,7 @@ class LocalProvider(AIProvider):
             default_base_url=DEFAULT_LOCAL_BASE_URL,
         )
         self.model = model
-        self.api_key = normalized_api_key
+        self._api_key = normalized_api_key
         self.attach_csv_as_file = bool(attach_csv_as_file)
         self.request_timeout_seconds = _resolve_timeout_seconds(
             request_timeout_seconds,
@@ -220,22 +220,8 @@ class LocalProvider(AIProvider):
                     )
             except AIProviderError:
                 raise
-            except self._openai.APIConnectionError as error:
-                self._raise_connection_error(error)
-            except self._openai.AuthenticationError as error:
-                raise AIProviderError(
-                    "Local AI endpoint rejected authentication. Check `ai.local.api_key` if your server requires one."
-                ) from error
-            except self._openai.BadRequestError as error:
-                if _is_context_length_error(error):
-                    raise AIProviderError(
-                        "Local model request exceeded the context length. Reduce prompt size and retry."
-                    ) from error
-                raise AIProviderError(f"Local provider request was rejected: {error}") from error
-            except self._openai.APIError as error:
-                self._raise_api_error(error)
             except Exception as error:
-                raise AIProviderError(f"Unexpected local provider error: {error}") from error
+                raise self._map_api_error(error) from error
 
         return _stream()
 
@@ -290,62 +276,73 @@ class LocalProvider(AIProvider):
             )
         except AIProviderError:
             raise
-        except self._openai.APIConnectionError as error:
-            self._raise_connection_error(error)
-        except self._openai.AuthenticationError as error:
-            raise AIProviderError(
-                "Local AI endpoint rejected authentication. Check `ai.local.api_key` if your server requires one."
-            ) from error
-        except self._openai.BadRequestError as error:
-            if _is_context_length_error(error):
-                raise AIProviderError(
-                    "Local model request exceeded the context length. Reduce prompt size and retry."
-                ) from error
-            raise AIProviderError(f"Local provider request was rejected: {error}") from error
-        except self._openai.APIError as error:
-            self._raise_api_error(error)
         except Exception as error:
-            raise AIProviderError(f"Unexpected local provider error: {error}") from error
+            raise self._map_api_error(error) from error
 
-    def _raise_connection_error(self, error: Exception) -> None:
+    def _map_api_error(self, error: Exception) -> AIProviderError:
+        """Map an OpenAI SDK exception to an ``AIProviderError`` with local messages.
+
+        Args:
+            error: The raw SDK or network exception.
+
+        Returns:
+            An ``AIProviderError`` with a user-friendly message.
+        """
+        if isinstance(error, self._openai.APIConnectionError):
+            return self._make_connection_error(error)
+        if isinstance(error, self._openai.AuthenticationError):
+            return AIProviderError(
+                "Local AI endpoint rejected authentication. Check `ai.local.api_key` if your server requires one."
+            )
+        if isinstance(error, self._openai.BadRequestError):
+            if _is_context_length_error(error):
+                return AIProviderError(
+                    "Local model request exceeded the context length. Reduce prompt size and retry."
+                )
+            return AIProviderError(f"Local provider request was rejected: {error}")
+        if isinstance(error, self._openai.APIError):
+            return self._make_api_error(error)
+        return AIProviderError(f"Unexpected local provider error: {error}")
+
+    def _make_connection_error(self, error: Exception) -> AIProviderError:
         """Map APIConnectionError to AIProviderError with timeout detection.
 
         Args:
             error: The connection error to map.
 
-        Raises:
-            AIProviderError: Always raised with appropriate message.
+        Returns:
+            An ``AIProviderError`` with an appropriate message.
         """
         if (
             self._api_timeout_error_type is not None
             and isinstance(error, self._api_timeout_error_type)
         ) or "timeout" in str(error).lower():
-            raise AIProviderError(
+            return AIProviderError(
                 "Local AI request timed out after "
                 f"{self.request_timeout_seconds:g} seconds. "
                 "Increase `ai.local.request_timeout_seconds` for long-running prompts."
-            ) from error
-        raise AIProviderError(
+            )
+        return AIProviderError(
             "Unable to connect to local AI endpoint. Check `ai.local.base_url` and ensure the server is running."
-        ) from error
+        )
 
-    def _raise_api_error(self, error: Exception) -> None:
+    def _make_api_error(self, error: Exception) -> AIProviderError:
         """Map APIError to AIProviderError with 404 detection.
 
         Args:
             error: The API error to map.
 
-        Raises:
-            AIProviderError: Always raised with appropriate message.
+        Returns:
+            An ``AIProviderError`` with an appropriate message.
         """
         error_text = str(error).lower()
         if "404" in error_text or "not found" in error_text:
-            raise AIProviderError(
+            return AIProviderError(
                 "Local AI endpoint returned 404 (not found). "
                 "This is often caused by a base URL missing `/v1`. "
                 f"Current base URL: {self.base_url}"
-            ) from error
-        raise AIProviderError(f"Local provider API error: {error}") from error
+            )
+        return AIProviderError(f"Local provider API error: {error}")
 
     def analyze_with_progress(
         self,

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -54,6 +55,7 @@ class ChatManager:
         MAX_CONTEXT_TOKENS: Maximum token budget for chat context assembly.
         case_dir: Resolved path to the case directory.
         chat_file: Path to the ``chat_history.jsonl`` file.
+        _write_lock: Threading lock that serialises writes to the chat file.
     """
 
     MAX_CONTEXT_TOKENS = 100000
@@ -70,6 +72,7 @@ class ChatManager:
         """
         self.case_dir = Path(case_dir)
         self.chat_file = self.case_dir / "chat_history.jsonl"
+        self._write_lock = threading.Lock()
         self.MAX_CONTEXT_TOKENS = self._resolve_max_context_tokens(max_context_tokens)
 
     # ------------------------------------------------------------------
@@ -117,10 +120,11 @@ class ChatManager:
             message["metadata"] = metadata
 
         line = json.dumps(message, separators=(",", ":")) + "\n"
-        self.chat_file.parent.mkdir(parents=True, exist_ok=True)
-        with self.chat_file.open("ab", buffering=0) as chat_stream:
-            chat_stream.write(line.encode("utf-8"))
-            chat_stream.flush()
+        with self._write_lock:
+            self.chat_file.parent.mkdir(parents=True, exist_ok=True)
+            with self.chat_file.open("ab", buffering=0) as chat_stream:
+                chat_stream.write(line.encode("utf-8"))
+                chat_stream.flush()
 
     def get_history(self) -> list[dict[str, Any]]:
         """Load the full chat history in insertion order.
@@ -155,14 +159,19 @@ class ChatManager:
 
         Messages are paired in order: a ``user`` message followed by the
         next ``assistant`` message forms a pair.  Only the last
-        *max_pairs* complete pairs are returned.
+        *max_pairs* complete pairs are returned.  If the most recent
+        message is an unpaired ``user`` message (i.e. no assistant
+        response yet), it is appended so the pending question is not
+        lost from context.
 
         Args:
             max_pairs: Maximum number of user/assistant pairs to return.
 
         Returns:
             A flat list of message dictionaries alternating
-            ``[user, assistant, user, assistant, ...]``.
+            ``[user, assistant, user, assistant, ...]``, potentially
+            ending with a single ``user`` message if the last message
+            has no paired response yet.
         """
         if max_pairs <= 0:
             return []
@@ -185,6 +194,12 @@ class ChatManager:
         for user_message, assistant_message in recent_pairs:
             recent_history.append(user_message)
             recent_history.append(assistant_message)
+
+        # Keep a trailing unpaired user message so the pending question
+        # is not silently dropped from the returned context.
+        if pending_user is not None:
+            recent_history.append(pending_user)
+
         return recent_history
 
     def clear(self) -> None:
@@ -193,8 +208,9 @@ class ChatManager:
         This is a destructive operation -- all chat messages for this
         case are permanently removed.
         """
-        if self.chat_file.exists():
-            self.chat_file.unlink()
+        with self._write_lock:
+            if self.chat_file.exists():
+                self.chat_file.unlink()
 
     # ------------------------------------------------------------------
     # Context assembly

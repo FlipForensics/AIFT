@@ -18,6 +18,7 @@ from typing import Any, Callable, Iterator, Mapping
 from .base import (
     AIProvider,
     AIProviderError,
+    DEFAULT_CLAUDE_MODEL,
     DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_MAX_TOKENS,
     _is_attachment_unsupported_error,
@@ -37,8 +38,6 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CLAUDE_MODEL = "claude-opus-4-6"
-
 
 class ClaudeProvider(AIProvider):
     """Anthropic Claude provider implementation.
@@ -48,7 +47,8 @@ class ClaudeProvider(AIProvider):
     token-limit retry when ``max_tokens`` exceeds the model's maximum.
 
     Attributes:
-        api_key (str): The Anthropic API key.
+        _api_key (str): The Anthropic API key (private to reduce
+            accidental exposure in repr/debug output).
         model (str): The Claude model identifier.
         attach_csv_as_file (bool): Whether to upload CSV artifacts as
             content blocks.
@@ -91,7 +91,7 @@ class ClaudeProvider(AIProvider):
             )
 
         self._anthropic = anthropic
-        self.api_key = normalized_api_key
+        self._api_key = normalized_api_key
         self.model = model
         self.attach_csv_as_file = bool(attach_csv_as_file)
         self._csv_attachment_supported: bool | None = None
@@ -178,24 +178,8 @@ class ClaudeProvider(AIProvider):
                     raise AIProviderError("Claude returned an empty response.")
             except AIProviderError:
                 raise
-            except self._anthropic.APIConnectionError as error:
-                raise AIProviderError(
-                    "Unable to connect to Claude API. Check network access and endpoint configuration."
-                ) from error
-            except self._anthropic.AuthenticationError as error:
-                raise AIProviderError(
-                    "Claude authentication failed. Check `ai.claude.api_key` or ANTHROPIC_API_KEY."
-                ) from error
-            except self._anthropic.BadRequestError as error:
-                if _is_context_length_error(error):
-                    raise AIProviderError(
-                        "Claude request exceeded the model context length. Reduce prompt size and retry."
-                    ) from error
-                raise AIProviderError(f"Claude request was rejected: {error}") from error
-            except self._anthropic.APIError as error:
-                raise AIProviderError(f"Claude API error: {error}") from error
             except Exception as error:
-                raise AIProviderError(f"Unexpected Claude provider error: {error}") from error
+                raise self._map_api_error(error) from error
 
         return _stream()
 
@@ -271,24 +255,35 @@ class ClaudeProvider(AIProvider):
             )
         except AIProviderError:
             raise
-        except self._anthropic.APIConnectionError as error:
-            raise AIProviderError(
-                "Unable to connect to Claude API. Check network access and endpoint configuration."
-            ) from error
-        except self._anthropic.AuthenticationError as error:
-            raise AIProviderError(
-                "Claude authentication failed. Check `ai.claude.api_key` or ANTHROPIC_API_KEY."
-            ) from error
-        except self._anthropic.BadRequestError as error:
-            if _is_context_length_error(error):
-                raise AIProviderError(
-                    "Claude request exceeded the model context length. Reduce prompt size and retry."
-                ) from error
-            raise AIProviderError(f"Claude request was rejected: {error}") from error
-        except self._anthropic.APIError as error:
-            raise AIProviderError(f"Claude API error: {error}") from error
         except Exception as error:
-            raise AIProviderError(f"Unexpected Claude provider error: {error}") from error
+            raise self._map_api_error(error) from error
+
+    def _map_api_error(self, error: Exception) -> AIProviderError:
+        """Map an Anthropic SDK exception to an ``AIProviderError``.
+
+        Args:
+            error: The raw SDK or network exception.
+
+        Returns:
+            An ``AIProviderError`` with a user-friendly message.
+        """
+        if isinstance(error, self._anthropic.APIConnectionError):
+            return AIProviderError(
+                "Unable to connect to Claude API. Check network access and endpoint configuration."
+            )
+        if isinstance(error, self._anthropic.AuthenticationError):
+            return AIProviderError(
+                "Claude authentication failed. Check `ai.claude.api_key` or ANTHROPIC_API_KEY."
+            )
+        if isinstance(error, self._anthropic.BadRequestError):
+            if _is_context_length_error(error):
+                return AIProviderError(
+                    "Claude request exceeded the model context length. Reduce prompt size and retry."
+                )
+            return AIProviderError(f"Claude request was rejected: {error}")
+        if isinstance(error, self._anthropic.APIError):
+            return AIProviderError(f"Claude API error: {error}")
+        return AIProviderError(f"Unexpected Claude provider error: {error}")
 
     def _request_with_csv_attachments(
         self,
@@ -447,23 +442,22 @@ class ClaudeProvider(AIProvider):
                 other than token limits, or if the retry also fails.
         """
         effective_kwargs: dict[str, Any] = dict(request_kwargs)
-        for _ in range(2):
-            try:
-                return create_fn(effective_kwargs)
-            except self._anthropic.BadRequestError as error:
-                requested_tokens = int(effective_kwargs.get("max_tokens", 0))
-                retry_token_count = _resolve_completion_token_retry_limit(
-                    error=error,
-                    requested_tokens=requested_tokens,
-                )
-                if retry_token_count is None:
-                    raise
-                logger.warning(
-                    "Claude rejected max_tokens=%d; retrying with max_tokens=%d.",
-                    requested_tokens,
-                    retry_token_count,
-                )
-                effective_kwargs["max_tokens"] = retry_token_count
+        try:
+            return create_fn(effective_kwargs)
+        except self._anthropic.BadRequestError as error:
+            requested_tokens = int(effective_kwargs.get("max_tokens", 0))
+            retry_token_count = _resolve_completion_token_retry_limit(
+                error=error,
+                requested_tokens=requested_tokens,
+            )
+            if retry_token_count is None:
+                raise
+            logger.warning(
+                "Claude rejected max_tokens=%d; retrying with max_tokens=%d.",
+                requested_tokens,
+                retry_token_count,
+            )
+            effective_kwargs["max_tokens"] = retry_token_count
         return create_fn(effective_kwargs)
 
     def get_model_info(self) -> dict[str, str]:

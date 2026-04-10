@@ -24,6 +24,7 @@ from .constants import (
 from .ioc import (
     build_artifact_final_context_reminder,
     build_priority_directives,
+    extract_ioc_targets,
     format_ioc_targets,
 )
 from .utils import (
@@ -141,6 +142,13 @@ def select_ai_columns(
     """
     normalized_key = normalize_artifact_key(artifact_key)
     configured_columns = column_projections.get(normalized_key)
+    # Fallback: try the base artifact type (part before first underscore/dot)
+    # so that "evtx_security" still picks up the generic "evtx" projection
+    # when no channel-specific projection is configured.
+    if not configured_columns:
+        base_key = normalized_key.split("_", 1)[0].split(".", 1)[0]
+        if base_key != normalized_key:
+            configured_columns = column_projections.get(base_key)
     if not configured_columns:
         return list(available_columns), False
 
@@ -401,11 +409,14 @@ def prepare_artifact_data(
     case_dir: Path | None,
     audit_log_fn: Any = None,
 ) -> tuple[str, Path, list[str]]:
-    """Prepare one artifact CSV as a bounded, analysis-ready prompt.
+    """Prepare one artifact CSV as an analysis-ready prompt.
 
-    Reads the full artifact CSV (all rows), applies column projection,
+    Reads the full artifact CSV, applies column projection,
     deduplication, and statistics computation.  Fills the appropriate
     prompt template with all gathered data.
+
+    All rows are loaded to preserve forensic completeness — no data is
+    silently discarded.
 
     Args:
         artifact_key: Unique identifier for the artifact.
@@ -429,7 +440,6 @@ def prepare_artifact_data(
     template = artifact_prompt_template if include_statistics else artifact_prompt_template_small_context
 
     rows: list[dict[str, str]] = []
-    source_row_count = 0
     columns: list[str] = []
 
     with csv_path.open("r", newline="", encoding="utf-8-sig", errors="replace") as handle:
@@ -509,8 +519,9 @@ def prepare_artifact_data(
         min_time, max_time = time_range_for_rows(analysis_rows)
 
     full_data_csv = build_full_data_csv(rows=analysis_rows, columns=analysis_columns)
-    priority_directives = build_priority_directives(investigation_context)
-    ioc_targets = format_ioc_targets(investigation_context)
+    extracted_iocs = extract_ioc_targets(investigation_context)
+    priority_directives = build_priority_directives(investigation_context, ioc_targets=extracted_iocs)
+    ioc_targets = format_ioc_targets(investigation_context, ioc_targets=extracted_iocs)
     artifact_guidance = _resolve_analysis_instructions(
         artifact_key=artifact_key, artifact_metadata=artifact_metadata,
         artifact_instruction_prompts=artifact_instruction_prompts,
@@ -540,6 +551,7 @@ def prepare_artifact_data(
         artifact_key=artifact_key,
         artifact_name=artifact_metadata.get("name", artifact_key),
         investigation_context=investigation_context,
+        ioc_targets=extracted_iocs,
     )
     if final_context_reminder:
         filled = f"{filled.rstrip()}\n\n{final_context_reminder}\n"
@@ -566,6 +578,11 @@ def _resolve_analysis_instructions(
     # Try the raw key, the normalised key, and dot/underscore variants
     # so that "ssh.authorized_keys" matches "ssh_authorized_keys.md".
     candidates: list[str] = [artifact_key, normalized_key]
+    # Also try the base artifact type (e.g. "evtx" from "evtx_security")
+    # so channel-specific keys fall back to the generic instruction prompt.
+    base_key = normalized_key.split("_", 1)[0].split(".", 1)[0]
+    if base_key != normalized_key and base_key not in candidates:
+        candidates.append(base_key)
     for variant in (artifact_key.replace(".", "_"), artifact_key.replace("_", ".")):
         if variant not in candidates:
             candidates.append(variant)

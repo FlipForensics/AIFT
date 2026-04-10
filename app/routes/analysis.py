@@ -109,7 +109,6 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
         analysis_state = ANALYSIS_PROGRESS.setdefault(case_id, new_progress())
         if analysis_state.get("status") == "running":
             return error_response("Analysis is already running for this case.", 409)
-        prompt_path.write_text(prompt, encoding="utf-8")
         ANALYSIS_PROGRESS[case_id] = new_progress(status="running")
         case["status"] = "running"
         case["investigation_context"] = prompt
@@ -117,6 +116,10 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
         # leave stale results accessible via chat/report/download routes.
         case["analysis_results"] = {}
         analysis_artifacts_snapshot = list(case.get("analysis_artifacts", []))
+
+    # Write the prompt file outside the lock — it doesn't depend on shared
+    # state and avoids blocking other threads during file I/O.
+    prompt_path.write_text(prompt, encoding="utf-8")
 
     # Remove the on-disk results file outside the lock to avoid holding
     # the lock during I/O.

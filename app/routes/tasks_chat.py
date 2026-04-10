@@ -155,7 +155,7 @@ def compress_findings_with_ai(
         )
         result = str(compressed).strip()
         return result if result else None
-    except (AIProviderError, Exception):
+    except Exception:
         LOGGER.warning(
             "AI-powered findings compression failed; falling back to full context.",
             exc_info=True,

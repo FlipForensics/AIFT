@@ -540,9 +540,14 @@ def _is_attachment_unsupported_error(error: Exception) -> bool:
     """
     message = str(error).lower()
     unsupported_markers = (
-        "404",
-        "not found",
-        "unsupported",
+        "file not found",
+        "file_not_found",
+        "attachment not found",
+        "unsupported file",
+        "file upload not supported",
+        "attachments not supported",
+        "unsupported_content",
+        "unsupported document",
         "does not support",
         "input_file",
         "/responses",

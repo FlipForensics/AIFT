@@ -106,7 +106,7 @@ CITED_ISO_TIMESTAMP_RE = re.compile(
 )
 CITED_ROW_REF_RE = re.compile(r"\brow[_ ]?(?:ref(?:erence)?)?[:\s#]*(\d+)\b", re.IGNORECASE)
 CITED_COLUMN_REF_RE = re.compile(
-    r"(?:`([^`]{2,60})`"
+    r"(?:`([A-Za-z][A-Za-z0-9_.]{1,59})`"
     r"|(?:column|field)\s+[\"']([^\"']{2,60})[\"']"
     r"|[\"']([^\"']{2,60})[\"']\s+(?:column|field))",
     re.IGNORECASE,

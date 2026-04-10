@@ -20,7 +20,7 @@ from typing import Any, Mapping
 import yaml
 
 from .constants import PROJECT_ROOT
-from .ioc import build_priority_directives, format_ioc_targets
+from .ioc import build_priority_directives, extract_ioc_targets, format_ioc_targets
 from .utils import coerce_projection_columns, normalize_artifact_key, normalize_os_type
 
 LOGGER = logging.getLogger(__name__)
@@ -235,8 +235,9 @@ def build_summary_prompt(
         else "No per-artifact findings available."
     )
 
-    priority_directives = build_priority_directives(investigation_context)
-    ioc_targets = format_ioc_targets(investigation_context)
+    extracted_iocs = extract_ioc_targets(investigation_context)
+    priority_directives = build_priority_directives(investigation_context, ioc_targets=extracted_iocs)
+    ioc_targets = format_ioc_targets(investigation_context, ioc_targets=extracted_iocs)
 
     summary_prompt = summary_prompt_template
     replacements = {

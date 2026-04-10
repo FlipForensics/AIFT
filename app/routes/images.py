@@ -208,33 +208,47 @@ def delete_image(case_id: str, image_id: str) -> tuple[Response, int]:
         return error_response("Invalid image identifier.", 400)
 
     # Prevent deletion while parsing or analysis is running.
-    # Hold the lock through the disk deletion to prevent a race where
-    # another thread starts a parse between the status check and deletion.
     with STATE_LOCK:
         case_status = str(case.get("status", "")).strip().lower()
         if case_status == "running":
             return error_response(
                 "Cannot remove an image while parsing or analysis is running.", 409,
             )
+        # Mark the image as deleting so concurrent operations won't start
+        # on it while we perform disk I/O outside the lock.
+        image_states = case.get("image_states", {})
+        image_states[image_id] = "deleting"
 
-        # Remove the image directory from disk while still holding the lock
-        # so that no concurrent operation can begin on this image.
-        try:
-            cm.delete_image(case_id, image_id)
-        except FileNotFoundError:
-            return error_response(f"Image not found: {image_id}", 404)
-        except ValueError:
-            return error_response("Invalid image identifier.", 400)
-        except OSError:
-            LOGGER.exception(
-                "Failed to delete image directory for case %s image %s",
-                case_id, image_id,
-            )
-            return error_response(
-                "Failed to remove the image directory from disk.", 500,
-            )
+    # Perform the potentially slow disk deletion outside the lock to avoid
+    # blocking other threads waiting on STATE_LOCK.
+    try:
+        cm.delete_image(case_id, image_id)
+    except FileNotFoundError:
+        # Roll back the deleting marker before returning.
+        with STATE_LOCK:
+            image_states = case.get("image_states", {})
+            image_states.pop(image_id, None)
+        return error_response(f"Image not found: {image_id}", 404)
+    except ValueError:
+        with STATE_LOCK:
+            image_states = case.get("image_states", {})
+            image_states.pop(image_id, None)
+        return error_response("Invalid image identifier.", 400)
+    except OSError:
+        LOGGER.exception(
+            "Failed to delete image directory for case %s image %s",
+            case_id, image_id,
+        )
+        with STATE_LOCK:
+            image_states = case.get("image_states", {})
+            image_states.pop(image_id, None)
+        return error_response(
+            "Failed to remove the image directory from disk.", 500,
+        )
 
-        # Clear in-memory state for the image (still under STATE_LOCK).
+    # Re-acquire the lock to update in-memory state now that disk I/O
+    # is complete.
+    with STATE_LOCK:
         # Remove from the images list.
         images_list = case.get("images", [])
         case["images"] = [
@@ -631,9 +645,7 @@ def start_image_parse(case_id: str, image_id: str) -> tuple[Response, int]:
     }
     if analysis_date_range is not None:
         response_payload["analysis_date_range"] = analysis_date_range
-    response_payload["success"] = True
-    from flask import jsonify
-    return jsonify(response_payload), 202
+    return success_response(response_payload, 202)
 
 
 @images_bp.get("/api/cases/<case_id>/images/<image_id>/parse/progress")

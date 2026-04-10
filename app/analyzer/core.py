@@ -455,7 +455,19 @@ class ForensicAnalyzer:
 
         candidate_path = Path(artifact_key)
         if candidate_path.exists():
-            return candidate_path
+            resolved = candidate_path.resolve()
+            if self.case_dir is not None and not resolved.is_relative_to(
+                self.case_dir.resolve()
+            ):
+                logging.warning(
+                    "Path traversal blocked: artifact_key %r resolved to %s "
+                    "which is outside case directory %s",
+                    artifact_key,
+                    resolved,
+                    self.case_dir.resolve(),
+                )
+            else:
+                return resolved
 
         if self.case_dir is not None:
             parsed_dir = self.case_dir / "parsed"
@@ -556,7 +568,7 @@ class ForensicAnalyzer:
         for csv_path in csv_paths:
             if not csv_path.exists():
                 continue
-            with csv_path.open("r", newline="", encoding="utf-8") as fh:
+            with csv_path.open("r", newline="", encoding="utf-8-sig", errors="replace") as fh:
                 reader = csv_mod.DictReader(fh)
                 if reader.fieldnames:
                     for fn in reader.fieldnames:
@@ -570,7 +582,7 @@ class ForensicAnalyzer:
             for csv_path in csv_paths:
                 if not csv_path.exists():
                     continue
-                with csv_path.open("r", newline="", encoding="utf-8") as fh:
+                with csv_path.open("r", newline="", encoding="utf-8-sig", errors="replace") as fh:
                     reader = csv_mod.DictReader(fh)
                     for row in reader:
                         writer.writerow(row)
@@ -889,6 +901,8 @@ class ForensicAnalyzer:
                 "token_count": self._estimate_tokens(analysis_text),
                 "duration_seconds": round(duration_seconds, 6), "status": "success",
             })
+        except AnalysisCancelledError:
+            raise
         except Exception as error:
             duration_seconds = perf_counter() - start_time
             analysis_text = f"Analysis failed: {error}"

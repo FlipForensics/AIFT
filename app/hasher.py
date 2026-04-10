@@ -146,7 +146,7 @@ def verify_hash(
         ``(match, computed_sha256)`` when it is *True*.
     """
     computed_sha256 = compute_sha256(filepath)
-    matches = computed_sha256 == expected_sha256.strip().lower()
+    matches = computed_sha256.lower() == expected_sha256.strip().lower()
     if return_computed:
         return matches, computed_sha256
     return matches

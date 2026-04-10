@@ -46,7 +46,8 @@ class KimiProvider(AIProvider):
     """Moonshot Kimi API provider implementation.
 
     Attributes:
-        api_key (str): The Moonshot/Kimi API key.
+        _api_key (str): The Moonshot/Kimi API key (private to reduce
+            accidental exposure in repr/debug output).
         model (str): The Kimi model identifier.
         base_url (str): The normalized Kimi API base URL.
         attach_csv_as_file (bool): Whether to upload CSV artifacts as
@@ -91,7 +92,7 @@ class KimiProvider(AIProvider):
             )
 
         self._openai = openai
-        self.api_key = normalized_api_key
+        self._api_key = normalized_api_key
         self.model = _normalize_kimi_model_name(model)
         self.base_url = _normalize_openai_compatible_base_url(
             base_url=base_url,
@@ -187,31 +188,8 @@ class KimiProvider(AIProvider):
                     yield chunk_text
             except AIProviderError:
                 raise
-            except self._openai.APIConnectionError as error:
-                raise AIProviderError(
-                    "Unable to connect to Kimi API. Check `ai.kimi.base_url` and network access."
-                ) from error
-            except self._openai.AuthenticationError as error:
-                raise AIProviderError(
-                    "Kimi authentication failed. Check `ai.kimi.api_key`, MOONSHOT_API_KEY, or KIMI_API_KEY."
-                ) from error
-            except self._openai.BadRequestError as error:
-                if _is_context_length_error(error):
-                    raise AIProviderError(
-                        "Kimi request exceeded the model context length. Reduce prompt size and retry."
-                    ) from error
-                raise AIProviderError(f"Kimi request was rejected: {error}") from error
-            except self._openai.APIError as error:
-                if _is_kimi_model_not_available_error(error):
-                    raise AIProviderError(
-                        "Kimi rejected the configured model. "
-                        f"Current model: `{self.model}`. "
-                        "Set `ai.kimi.model` to a model enabled for your Moonshot account "
-                        "(for example `kimi-k2-turbo-preview`) and retry."
-                    ) from error
-                raise AIProviderError(f"Kimi API error: {error}") from error
             except Exception as error:
-                raise AIProviderError(f"Unexpected Kimi provider error: {error}") from error
+                raise self._map_api_error(error) from error
 
             if not emitted:
                 raise AIProviderError("Kimi returned an empty response.")
@@ -269,31 +247,42 @@ class KimiProvider(AIProvider):
             )
         except AIProviderError:
             raise
-        except self._openai.APIConnectionError as error:
-            raise AIProviderError(
+        except Exception as error:
+            raise self._map_api_error(error) from error
+
+    def _map_api_error(self, error: Exception) -> AIProviderError:
+        """Map an OpenAI SDK exception to an ``AIProviderError`` with Kimi messages.
+
+        Args:
+            error: The raw SDK or network exception.
+
+        Returns:
+            An ``AIProviderError`` with a user-friendly message.
+        """
+        if isinstance(error, self._openai.APIConnectionError):
+            return AIProviderError(
                 "Unable to connect to Kimi API. Check `ai.kimi.base_url` and network access."
-            ) from error
-        except self._openai.AuthenticationError as error:
-            raise AIProviderError(
+            )
+        if isinstance(error, self._openai.AuthenticationError):
+            return AIProviderError(
                 "Kimi authentication failed. Check `ai.kimi.api_key`, MOONSHOT_API_KEY, or KIMI_API_KEY."
-            ) from error
-        except self._openai.BadRequestError as error:
+            )
+        if isinstance(error, self._openai.BadRequestError):
             if _is_context_length_error(error):
-                raise AIProviderError(
+                return AIProviderError(
                     "Kimi request exceeded the model context length. Reduce prompt size and retry."
-                ) from error
-            raise AIProviderError(f"Kimi request was rejected: {error}") from error
-        except self._openai.APIError as error:
+                )
+            return AIProviderError(f"Kimi request was rejected: {error}")
+        if isinstance(error, self._openai.APIError):
             if _is_kimi_model_not_available_error(error):
-                raise AIProviderError(
+                return AIProviderError(
                     "Kimi rejected the configured model. "
                     f"Current model: `{self.model}`. "
                     "Set `ai.kimi.model` to a model enabled for your Moonshot account "
                     "(for example `kimi-k2-turbo-preview`) and retry."
-                ) from error
-            raise AIProviderError(f"Kimi API error: {error}") from error
-        except Exception as error:
-            raise AIProviderError(f"Unexpected Kimi provider error: {error}") from error
+                )
+            return AIProviderError(f"Kimi API error: {error}")
+        return AIProviderError(f"Unexpected Kimi provider error: {error}")
 
     def _request_non_stream(
         self,

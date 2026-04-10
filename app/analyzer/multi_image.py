@@ -192,36 +192,37 @@ def run_multi_image_analysis(
 
     # ------------------------------------------------------------------
     # Phase 1: Per-artifact analysis for each image
+    # Save original analyzer state before the loop so we can restore it
+    # after all images are processed (or on failure).  Without this,
+    # Phase 2 summaries would see the last image's os_type / CSV paths
+    # instead of the caller's original values.
+    saved_os_type = analyzer.os_type
+    saved_csv_paths = dict(analyzer.artifact_csv_paths)
+
     # ------------------------------------------------------------------
-    for image in images:
-        image_id = str(image.get("image_id", "unknown"))
-        label = str(image.get("label", image_id))
-        metadata = image.get("metadata") or {}
-        artifact_keys = image.get("artifact_keys", [])
-        parsed_dir = image.get("parsed_dir", "")
+    try:
+        for image in images:
+            image_id = str(image.get("image_id", "unknown"))
+            label = str(image.get("label", image_id))
+            metadata = image.get("metadata") or {}
+            artifact_keys = image.get("artifact_keys", [])
+            parsed_dir = image.get("parsed_dir", "")
 
-        if cancel_check is not None and cancel_check():
-            raise AnalysisCancelledError("Analysis cancelled by user.")
+            if cancel_check is not None and cancel_check():
+                raise AnalysisCancelledError("Analysis cancelled by user.")
 
-        # Save original analyzer state so we can restore it on failure,
-        # preventing a partially-mutated analyzer from leaking into the
-        # caller if an exception is caught externally.
-        saved_os_type = analyzer.os_type
-        saved_csv_paths = dict(analyzer.artifact_csv_paths)
+            # Update the analyzer's os_type for the current image so that
+            # OS-specific analysis logic uses the correct operating system.
+            analyzer.os_type = str(
+                metadata.get("os_type", "unknown")
+            )
 
-        # Update the analyzer's os_type for the current image so that
-        # OS-specific analysis logic uses the correct operating system.
-        analyzer.os_type = str(
-            metadata.get("os_type", "unknown")
-        )
+            # Clear stale CSV paths from prior image iterations so that
+            # analyze_artifact() and citation validation always reference the
+            # current image's data — not a leftover path from an earlier image
+            # that shares the same artifact key.
+            analyzer.artifact_csv_paths.clear()
 
-        # Clear stale CSV paths from prior image iterations so that
-        # analyze_artifact() and citation validation always reference the
-        # current image's data — not a leftover path from an earlier image
-        # that shares the same artifact key.
-        analyzer.artifact_csv_paths.clear()
-
-        try:
             # Register the image's parsed CSV paths into the analyzer
             _register_image_csv_paths(analyzer, artifact_keys, parsed_dir)
 
@@ -256,12 +257,12 @@ def run_multi_image_analysis(
                 "summary": "",
                 "metadata": metadata,
             }
-        except Exception:
-            # Restore analyzer state so the caller does not inherit a
-            # partially-mutated object from this failed image iteration.
-            analyzer.os_type = saved_os_type
-            analyzer.artifact_csv_paths = saved_csv_paths
-            raise
+    finally:
+        # Restore analyzer state so the caller (and Phase 2 summaries)
+        # always see the original os_type and artifact_csv_paths,
+        # regardless of whether the loop succeeded or raised.
+        analyzer.os_type = saved_os_type
+        analyzer.artifact_csv_paths = saved_csv_paths
 
     # ------------------------------------------------------------------
     # Phase 2: Per-image summary

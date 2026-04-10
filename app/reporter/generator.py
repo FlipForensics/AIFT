@@ -36,6 +36,7 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..config import LOGO_FILE_CANDIDATES
+from ..utils import stringify as _stringify_impl
 from ..version import TOOL_VERSION
 from .markdown import (
     CONFIDENCE_CLASS_MAP,
@@ -936,8 +937,8 @@ class ReportGenerator:
 
     @staticmethod
     def _stringify(value: Any, default: str = "") -> str:
-        """Convert *value* to a stripped string, returning *default* if empty."""
-        if value is None:
-            return default
-        text = str(value).strip()
-        return text if text else default
+        """Convert *value* to a stripped string, returning *default* if empty.
+
+        Delegates to the canonical :func:`app.utils.stringify` implementation.
+        """
+        return _stringify_impl(value, default)

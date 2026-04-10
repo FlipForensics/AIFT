@@ -23,7 +23,7 @@ Attributes:
 from __future__ import annotations
 
 import copy
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import threading  # noqa: F401 -- re-exported for test patching
@@ -45,7 +45,6 @@ from flask import (
 from ..ai_providers import AIProviderError, create_provider  # noqa: F401 -- re-exported
 from ..analyzer import ForensicAnalyzer  # noqa: F401 -- re-exported for test patching
 from ..audit import AuditLogger
-from ..case_manager import CaseManager
 from ..case_logging import (
     case_log_context,  # noqa: F401 -- re-exported
     pop_case_log_context,
@@ -238,12 +237,12 @@ def create_case() -> tuple[Response, int]:
     case_name = str(payload.get("case_name", "")).strip()
     has_custom_name = bool(case_name)
     if not case_name:
-        case_name = datetime.now().strftime("Case %Y-%m-%d %H:%M:%S")
+        case_name = datetime.now(timezone.utc).strftime("Case %Y-%m-%d %H:%M:%S")
 
     # Use sanitised case name + timestamp as folder name for readability;
     # fall back to UUID if no custom name was provided.
     if has_custom_name:
-        folder_name = safe_name(case_name, "case") + "_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder_name = safe_name(case_name, "case") + "_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     else:
         folder_name = str(uuid4())
     case_id = folder_name

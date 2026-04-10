@@ -18,13 +18,12 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from zipfile import ZipFile, ZIP_DEFLATED
 
-from flask import Blueprint, Response, send_file
+from flask import Blueprint, Response, make_response, send_file
 
 from ..hasher import compute_hashes, verify_hash
 from ..parser import ForensicParser
@@ -285,29 +284,11 @@ def _cleanup_parsed_output(case_dir: Path, prev_csv_output_dir: str) -> None:
     except (TypeError, ValueError):
         return
 
-    # Safety: refuse to delete filesystem roots or paths outside the
-    # known cases root.  The part-count heuristic is not reliable across
-    # platforms (e.g. ``C:\foo`` has 3 parts on Windows), so we anchor
-    # against the case directory's parent (i.e. the cases root) instead.
-    if resolved_prev == resolved_prev.root or resolved_prev == resolved_prev.anchor:
-        LOGGER.warning(
-            "Refusing to remove parsed output at filesystem root: %s",
-            resolved_prev,
-        )
-        return
-    cases_root = resolved_case.parent
-    try:
-        if not resolved_prev.is_relative_to(cases_root):
-            LOGGER.warning(
-                "Refusing to remove parsed output outside cases root: %s",
-                resolved_prev,
-            )
-            return
-    except (TypeError, ValueError):
-        return
+    # Delegate safety-checked removal to the shared helper.
+    from .evidence_utils import safe_rmtree
 
-    LOGGER.info("Removing stale external parsed output: %s", resolved_prev)
-    shutil.rmtree(resolved_prev, ignore_errors=True)
+    cases_root = resolved_case.parent
+    safe_rmtree(prev_path, cases_root)
 
 
 # ---------------------------------------------------------------------------
@@ -538,7 +519,7 @@ def generate_case_report(case_id: str) -> dict[str, Any]:
             # Fallback for cases created before evidence_file_hashes existed.
             verification_path = resolve_hash_verification_path(case_snapshot)
             if verification_path is None or not intake_sha256:
-                return {"success": False, "error": "Evidence hash context is missing for this case."}
+                return {"success": False, "error": "Evidence integrity data is missing for this case. Please re-upload or re-reference the evidence file to generate verification hashes."}
             if not verification_path.exists():
                 return {"success": False, "error": "Evidence file is no longer available for hash verification."}
             hash_ok, computed_sha256 = verify_hash(
@@ -645,12 +626,35 @@ def download_report(case_id: str) -> Response | tuple[Response, int]:
         existing = sorted(reports_dir.glob("report_*.html"))
         if existing:
             report_path = existing[-1]
-            return send_file(
-                report_path,
-                as_attachment=True,
-                download_name=report_path.name,
-                mimetype="text/html",
+            # Check whether this report is stale relative to analysis
+            # results.  If analysis was re-run but report generation
+            # failed, the old report will be older than the results
+            # file.  We still serve it (stale is better than nothing)
+            # but add a header so the frontend can show a notice.
+            stale = False
+            analysis_path = Path(case_dir) / "analysis_results.json"
+            if analysis_path.is_file():
+                report_mtime = report_path.stat().st_mtime
+                analysis_mtime = analysis_path.stat().st_mtime
+                if report_mtime < analysis_mtime:
+                    stale = True
+                    LOGGER.warning(
+                        "Report %s is older than analysis_results.json "
+                        "for case %s — serving stale report",
+                        report_path.name,
+                        case_id,
+                    )
+            response = make_response(
+                send_file(
+                    report_path,
+                    as_attachment=True,
+                    download_name=report_path.name,
+                    mimetype="text/html",
+                )
             )
+            if stale:
+                response.headers["X-Report-Stale"] = "true"
+            return response
 
     result = generate_case_report(case_id)
     if not result["success"]:
