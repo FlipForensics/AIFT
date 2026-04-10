@@ -654,7 +654,7 @@
     if (!imageId) return [];
     const panelsContainer = q("artifact-image-panels");
     if (!panelsContainer) return [];
-    const panel = panelsContainer.querySelector(`.artifact-image-panel[data-image-id="${imageId}"]`);
+    const panel = panelsContainer.querySelector(`.artifact-image-panel[data-image-id="${CSS.escape(imageId)}"]`);
     if (!panel) return [];
     return Array.from(panel.querySelectorAll("input[type='checkbox'][data-artifact-key]"))
       .filter((cb) => cb.checked && !cb.disabled && cb.dataset.artifactKey)
@@ -701,7 +701,7 @@
     if (!activeId) return A.applyPreset(mode);
     const panelsContainer = q("artifact-image-panels");
     if (!panelsContainer) return;
-    const panel = panelsContainer.querySelector(`.artifact-image-panel[data-image-id="${activeId}"]`);
+    const panel = panelsContainer.querySelector(`.artifact-image-panel[data-image-id="${CSS.escape(activeId)}"]`);
     if (!panel) return;
     panel.querySelectorAll("input[type='checkbox'][data-artifact-key]").forEach((cb) => {
       const select = A.ensureArtifactModeControl(cb, A.MODE_PARSE_AND_AI);

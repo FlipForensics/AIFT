@@ -409,7 +409,7 @@
   function setImageParseSectionStatus(imageId, status) {
     const container = q("parse-image-sections");
     if (!container) return;
-    const section = container.querySelector(`.parse-image-section[data-image-id="${imageId}"]`);
+    const section = container.querySelector(`.parse-image-section[data-image-id="${CSS.escape(imageId)}"]`);
     if (!section) return;
     const statusEl = section.querySelector(".parse-image-status");
     if (statusEl) {
@@ -427,7 +427,7 @@
   function setImageParseSectionError(imageId, msg) {
     const container = q("parse-image-sections");
     if (!container) return;
-    const section = container.querySelector(`.parse-image-section[data-image-id="${imageId}"]`);
+    const section = container.querySelector(`.parse-image-section[data-image-id="${CSS.escape(imageId)}"]`);
     if (!section) return;
     const errP = section.querySelector(".parse-image-error");
     if (errP) {

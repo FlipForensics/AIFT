@@ -35,6 +35,8 @@ function setup() {
 
   global.fetch = () => Promise.reject(new Error("fetch not available in tests"));
   global.EventSource = class { close() {} };
+  if (!global.CSS) global.CSS = {};
+  if (!global.CSS.escape) global.CSS.escape = (v) => String(v).replace(/([^\w-])/g, "\\$1");
 
   const scripts = [
     "js/utils.js",
