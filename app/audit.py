@@ -61,6 +61,7 @@ ACTION_TYPES = frozenset(
         "hash_verification",
         "config_changed",
         "image_added",
+        "image_deleted",
         "legacy_case_migrated",
     }
 )

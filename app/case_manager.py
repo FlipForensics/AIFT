@@ -175,7 +175,13 @@ class CaseManager:
                 does not exist.
         """
         case_dir = self._require_case_dir(case_id)
-        image_dir = case_dir / "images" / image_id
+        image_dir = (case_dir / "images" / image_id).resolve()
+        # Guard against path traversal via crafted image_id.
+        expected_parent = str(case_dir / "images")
+        if not str(image_dir).startswith(expected_parent):
+            raise ValueError(
+                f"Invalid image_id: path traversal detected ({image_id!r})."
+            )
         if not image_dir.is_dir():
             raise FileNotFoundError(
                 f"Image directory not found: {image_dir}"
@@ -246,7 +252,13 @@ class CaseManager:
                 exist.
         """
         case_dir = self._require_case_dir(case_id)
-        image_dir = case_dir / "images" / image_id
+        image_dir = (case_dir / "images" / image_id).resolve()
+        # Guard against path traversal via crafted image_id.
+        expected_parent = str(case_dir / "images")
+        if not str(image_dir).startswith(expected_parent):
+            raise ValueError(
+                f"Invalid image_id: path traversal detected ({image_id!r})."
+            )
         if not image_dir.is_dir():
             raise FileNotFoundError(
                 f"Image directory not found: {image_dir}"
@@ -352,6 +364,10 @@ class CaseManager:
     def _require_case_dir(self, case_id: str) -> Path:
         """Return the case directory path, raising if it does not exist.
 
+        Also validates that the resolved path is actually inside
+        :attr:`cases_dir` to prevent path-traversal attacks via
+        crafted *case_id* values.
+
         Args:
             case_id: UUID of the case.
 
@@ -360,8 +376,15 @@ class CaseManager:
 
         Raises:
             FileNotFoundError: If the directory does not exist.
+            ValueError: If the resolved path escapes the cases
+                directory (path traversal attempt).
         """
-        case_dir = self.cases_dir / case_id
+        case_dir = (self.cases_dir / case_id).resolve()
+        # Guard against path traversal (e.g. case_id = "../../etc").
+        if not str(case_dir).startswith(str(self.cases_dir)):
+            raise ValueError(
+                f"Invalid case_id: path traversal detected ({case_id!r})."
+            )
         if not case_dir.is_dir():
             raise FileNotFoundError(f"Case directory not found: {case_dir}")
         return case_dir

@@ -99,8 +99,65 @@ class TestCaseManagerAddImage(unittest.TestCase):
                 cm.add_image("nonexistent-case-id")
 
 
+class TestCaseManagerDeleteImage(unittest.TestCase):
+    """Tests for CaseManager.delete_image."""
+
+    def test_delete_image_removes_directory(self) -> None:
+        """Deleting an image removes its directory and contents."""
+        with TemporaryDirectory(prefix="aift-cm-") as tmp:
+            cm = CaseManager(tmp)
+            case_id = cm.create_case()
+            image_id = cm.add_image(case_id, label="to-delete.E01")
+            image_dir = Path(tmp) / case_id / "images" / image_id
+            self.assertTrue(image_dir.is_dir())
+
+            result = cm.delete_image(case_id, image_id)
+            self.assertEqual(result, image_id)
+            self.assertFalse(image_dir.exists())
+
+    def test_delete_image_logs_audit(self) -> None:
+        """Deleting an image writes an image_deleted audit entry."""
+        with TemporaryDirectory(prefix="aift-cm-") as tmp:
+            cm = CaseManager(tmp)
+            case_id = cm.create_case()
+            image_id = cm.add_image(case_id, label="audit-del.E01")
+            cm.delete_image(case_id, image_id)
+
+            audit_file = Path(tmp) / case_id / "audit.jsonl"
+            entries = [
+                json.loads(line)
+                for line in audit_file.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            del_entries = [e for e in entries if e["action"] == "image_deleted"]
+            self.assertEqual(len(del_entries), 1)
+            self.assertEqual(del_entries[0]["details"]["image_id"], image_id)
+
+    def test_delete_image_nonexistent_image_raises(self) -> None:
+        """Deleting a non-existent image raises FileNotFoundError."""
+        with TemporaryDirectory(prefix="aift-cm-") as tmp:
+            cm = CaseManager(tmp)
+            case_id = cm.create_case()
+            with self.assertRaises(FileNotFoundError):
+                cm.delete_image(case_id, "nonexistent-image-id")
+
+    def test_delete_image_nonexistent_case_raises(self) -> None:
+        """Deleting from a non-existent case raises FileNotFoundError."""
+        with TemporaryDirectory(prefix="aift-cm-") as tmp:
+            cm = CaseManager(tmp)
+            with self.assertRaises(FileNotFoundError):
+                cm.delete_image("nonexistent-case-id", "some-image-id")
+
+
 class TestCaseManagerGetCaseInfo(unittest.TestCase):
     """Tests for CaseManager.get_case_info."""
+
+    def test_get_case_info_nonexistent_case_raises(self) -> None:
+        """Querying info for a non-existent case raises FileNotFoundError."""
+        with TemporaryDirectory(prefix="aift-cm-") as tmp:
+            cm = CaseManager(tmp)
+            with self.assertRaises(FileNotFoundError):
+                cm.get_case_info("nonexistent-case-id")
 
     def test_get_case_info_returns_all_images(self) -> None:
         with TemporaryDirectory(prefix="aift-cm-") as tmp:
@@ -243,6 +300,36 @@ class TestCaseManagerLegacy(unittest.TestCase):
             self.assertTrue(cm.is_legacy_case(case_id))
             cm.migrate_legacy_case(case_id)
             self.assertFalse(cm.is_legacy_case(case_id))
+
+
+class TestCaseManagerPathTraversal(unittest.TestCase):
+    """Tests for path traversal protection."""
+
+    def test_case_id_path_traversal_raises(self) -> None:
+        """A case_id containing '..' must raise ValueError."""
+        with TemporaryDirectory(prefix="aift-cm-") as tmp:
+            cm = CaseManager(tmp)
+            # Create a directory outside cases_dir that the traversal
+            # would reach, so the guard fires before FileNotFoundError.
+            (Path(tmp).parent / "evil").mkdir(exist_ok=True)
+            with self.assertRaises((ValueError, FileNotFoundError)):
+                cm.get_case_info("../evil")
+
+    def test_image_id_path_traversal_raises(self) -> None:
+        """An image_id containing '..' must raise ValueError."""
+        with TemporaryDirectory(prefix="aift-cm-") as tmp:
+            cm = CaseManager(tmp)
+            case_id = cm.create_case()
+            with self.assertRaises((ValueError, FileNotFoundError)):
+                cm.get_image_dir(case_id, "../../etc")
+
+    def test_delete_image_path_traversal_raises(self) -> None:
+        """delete_image with traversal image_id must raise ValueError."""
+        with TemporaryDirectory(prefix="aift-cm-") as tmp:
+            cm = CaseManager(tmp)
+            case_id = cm.create_case()
+            with self.assertRaises((ValueError, FileNotFoundError)):
+                cm.delete_image(case_id, "../../etc")
 
 
 if __name__ == "__main__":
