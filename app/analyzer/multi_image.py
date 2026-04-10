@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Callable, Mapping
+from typing import Any, Callable
 
 from .prompts import load_prompt_template
 from .utils import emit_analysis_progress, estimate_tokens, sanitize_filename

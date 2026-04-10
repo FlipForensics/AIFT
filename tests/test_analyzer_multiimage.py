@@ -9,16 +9,19 @@ and prompt construction.
 from __future__ import annotations
 
 import csv
-import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
 from app.analyzer import ForensicAnalyzer
-from app.analyzer.multi_image import build_cross_image_prompt, run_multi_image_analysis
+from app.analyzer.multi_image import (
+    _build_image_metadata_table,
+    _build_per_image_summaries_text,
+    _register_image_csv_paths,
+    build_cross_image_prompt,
+    run_multi_image_analysis,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -359,3 +362,188 @@ class TestModelInfoInResult:
         assert "model_info" in result
         assert result["model_info"]["provider"] == "fake"
         assert result["model_info"]["model"] == "fake-model-1"
+
+
+class TestBuildImageMetadataTable:
+    """Tests for the _build_image_metadata_table helper."""
+
+    def test_empty_images(self) -> None:
+        """Empty images list produces a header-only table."""
+        result = _build_image_metadata_table([])
+        assert "| # |" in result
+        # Only header + separator, no data rows
+        assert result.count("\n") == 1
+
+    def test_missing_metadata(self) -> None:
+        """Images without metadata default to 'Unknown' for all fields."""
+        images = [{"image_id": "x", "label": "TestImg"}]
+        result = _build_image_metadata_table(images)
+        assert "Unknown" in result
+        assert "TestImg" in result
+
+    def test_os_type_fallback(self) -> None:
+        """os_type is used when os_version is absent."""
+        images = [{"image_id": "z", "label": "L", "metadata": {"os_type": "Linux"}}]
+        result = _build_image_metadata_table(images)
+        assert "Linux" in result
+
+
+class TestBuildPerImageSummariesText:
+    """Tests for the _build_per_image_summaries_text helper."""
+
+    def test_empty_summaries(self) -> None:
+        """Empty dict returns fallback text."""
+        result = _build_per_image_summaries_text({})
+        assert "No per-image summaries available" in result
+
+    def test_single_summary(self) -> None:
+        """Single summary is rendered without separator."""
+        summaries = {"img1": {"label": "WS01", "summary": "Found malware."}}
+        result = _build_per_image_summaries_text(summaries)
+        assert "WS01" in result
+        assert "Found malware." in result
+        assert "---" not in result
+
+    def test_multiple_summaries_separated(self) -> None:
+        """Multiple summaries are separated by horizontal rules."""
+        summaries = {
+            "a": {"label": "A", "summary": "Summary A"},
+            "b": {"label": "B", "summary": "Summary B"},
+        }
+        result = _build_per_image_summaries_text(summaries)
+        assert "---" in result
+        assert "Summary A" in result
+        assert "Summary B" in result
+
+
+class TestRegisterImageCsvPaths:
+    """Tests for _register_image_csv_paths."""
+
+    def test_empty_parsed_dir(self, tmp_path: Path) -> None:
+        """Empty parsed_dir string is a no-op."""
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.artifact_csv_paths.clear()
+        _register_image_csv_paths(analyzer, ["runkeys"], "")
+        assert len(analyzer.artifact_csv_paths) == 0
+
+    def test_nonexistent_directory(self, tmp_path: Path) -> None:
+        """Non-existent directory logs a warning and is a no-op."""
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.artifact_csv_paths.clear()
+        _register_image_csv_paths(analyzer, ["runkeys"], str(tmp_path / "nope"))
+        assert len(analyzer.artifact_csv_paths) == 0
+
+    def test_exact_csv_match(self, tmp_path: Path) -> None:
+        """Exact CSV filename match registers the path."""
+        parsed_dir = tmp_path / "parsed"
+        parsed_dir.mkdir()
+        csv_path = parsed_dir / "runkeys.csv"
+        csv_path.write_text("col\nval\n", encoding="utf-8")
+
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.artifact_csv_paths.clear()
+        _register_image_csv_paths(analyzer, ["runkeys"], str(parsed_dir))
+        assert "runkeys" in analyzer.artifact_csv_paths
+        assert analyzer.artifact_csv_paths["runkeys"] == csv_path
+
+    def test_prefixed_csv_match(self, tmp_path: Path) -> None:
+        """Prefixed CSV files are found via glob."""
+        parsed_dir = tmp_path / "parsed"
+        parsed_dir.mkdir()
+        (parsed_dir / "services_sub1.csv").write_text("c\nv\n", encoding="utf-8")
+        (parsed_dir / "services_sub2.csv").write_text("c\nv\n", encoding="utf-8")
+
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.artifact_csv_paths.clear()
+        _register_image_csv_paths(analyzer, ["services"], str(parsed_dir))
+        assert "services" in analyzer.artifact_csv_paths
+        # Multiple matches should be stored as a list
+        assert isinstance(analyzer.artifact_csv_paths["services"], list)
+        assert len(analyzer.artifact_csv_paths["services"]) == 2
+
+    def test_no_matching_csv(self, tmp_path: Path) -> None:
+        """No matching CSV files leaves artifact_csv_paths unchanged."""
+        parsed_dir = tmp_path / "parsed"
+        parsed_dir.mkdir()
+        (parsed_dir / "unrelated.csv").write_text("c\nv\n", encoding="utf-8")
+
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.artifact_csv_paths.clear()
+        _register_image_csv_paths(analyzer, ["runkeys"], str(parsed_dir))
+        assert "runkeys" not in analyzer.artifact_csv_paths
+
+
+class TestEmptyImagesListAnalysis:
+    """Tests for edge case of empty images list."""
+
+    def test_empty_images_returns_empty_result(self, tmp_path: Path) -> None:
+        """An empty images list produces an empty result with no cross-image summary."""
+        analyzer = _build_analyzer(tmp_path, responses=["resp"])
+        result = analyzer.run_multi_image_analysis(
+            images=[],
+            investigation_context="Test",
+        )
+        assert result["images"] == {}
+        assert result["cross_image_summary"] is None
+
+
+class TestCrossImageCorrelationFailure:
+    """Tests for Phase 3 error handling when AI call fails."""
+
+    def test_ai_failure_returns_error_message(self, tmp_path: Path) -> None:
+        """When AI call fails in Phase 3, the error is captured in the summary."""
+        # Track how many successful (non-cross-image) calls we expect:
+        # 2 artifact analyses + 2 summaries = 4 successful calls, then all
+        # subsequent calls (the cross-image retries) should fail.
+        call_idx = 0
+
+        class FailOnCrossImageProvider(FakeProvider):
+            """Provider that fails on all cross-image correlation calls."""
+
+            def analyze(self, system_prompt: str, user_prompt: str, max_tokens: int = 4096) -> str:
+                """Succeed for the first 4 calls, fail on all subsequent."""
+                nonlocal call_idx
+                call_idx += 1
+                if call_idx > 4:
+                    raise RuntimeError("AI service unavailable")
+                return f"resp-{call_idx}"
+
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.ai_provider = FailOnCrossImageProvider()
+
+        img1 = _make_image(tmp_path, "img1", "WS01", ["runkeys"])
+        img2 = _make_image(tmp_path, "img2", "SRV01", ["services"])
+
+        result = analyzer.run_multi_image_analysis(
+            images=[img1, img2],
+            investigation_context="Test",
+        )
+
+        # Phase 3 failed, so the error message should appear in cross_image_summary
+        assert result["cross_image_summary"] is not None
+        assert "Cross-image correlation failed" in result["cross_image_summary"]
+        assert "AI service unavailable" in result["cross_image_summary"]
+
+
+class TestBuildCrossImagePromptEdgeCases:
+    """Additional edge case tests for build_cross_image_prompt."""
+
+    def test_empty_investigation_context(self) -> None:
+        """Empty investigation context is replaced with a fallback message."""
+        result = build_cross_image_prompt(
+            template="{{investigation_context}}",
+            investigation_context="",
+            images=[],
+            image_summaries={},
+        )
+        assert "No investigation context provided" in result
+
+    def test_whitespace_only_investigation_context(self) -> None:
+        """Whitespace-only investigation context is replaced with fallback."""
+        result = build_cross_image_prompt(
+            template="{{investigation_context}}",
+            investigation_context="   \n\t  ",
+            images=[],
+            image_summaries={},
+        )
+        assert "No investigation context provided" in result
