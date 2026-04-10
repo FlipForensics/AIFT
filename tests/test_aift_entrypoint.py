@@ -274,7 +274,7 @@ class TestMainCallsAssertVersion(unittest.TestCase):
 
         mock_app = MagicMock()
 
-        def track_create_app() -> MagicMock:
+        def track_create_app(**kwargs: object) -> MagicMock:
             """Track when create_app is called."""
             call_order.append("create_app")
             return mock_app
@@ -322,7 +322,7 @@ class TestMainInvalidConfig(unittest.TestCase):
             self.assertIn("Cannot start AIFT", printed)
 
 
-
+class TestDebugDisabled(unittest.TestCase):
     """Ensure the Flask app always runs with debug and reloader off."""
 
     def test_debug_false(self) -> None:

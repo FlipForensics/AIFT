@@ -2,7 +2,7 @@
  * Unit tests for AIFT evidence intake and artifact selection (evidence.js).
  *
  * Covers:
- *  - setPendingFiles updates dropzone help text
+ *  - syncMode shows correct panels for each mode
  *  - syncMode toggles upload vs. path panels
  *  - artifactBoxes returns checkbox elements
  *  - selectedArtifactOptions / selectedArtifacts / selectedAiArtifacts
@@ -67,44 +67,6 @@ let A;
 
 beforeEach(() => {
   A = setup();
-});
-
-// ── setPendingFiles ─────────────────────────────────────────────────────────
-
-describe("setPendingFiles", () => {
-  test("sets empty files and restores default help text", () => {
-    A.setPendingFiles([]);
-    expect(A.st.pendingFiles).toEqual([]);
-    if (A.el.dropHelp) {
-      expect(A.el.dropHelp.textContent).toBe(A.DROP_HELP);
-    }
-  });
-
-  test("sets single file and shows filename", () => {
-    const file = { name: "evidence.E01", size: 2048 };
-    A.setPendingFiles([file]);
-    expect(A.st.pendingFiles).toHaveLength(1);
-    if (A.el.dropHelp) {
-      expect(A.el.dropHelp.textContent).toContain("evidence.E01");
-    }
-  });
-
-  test("sets multiple files and shows count", () => {
-    const files = [
-      { name: "file1.E01", size: 1024 },
-      { name: "file2.E02", size: 2048 },
-    ];
-    A.setPendingFiles(files);
-    expect(A.st.pendingFiles).toHaveLength(2);
-    if (A.el.dropHelp) {
-      expect(A.el.dropHelp.textContent).toContain("2 files selected");
-    }
-  });
-
-  test("filters out falsy entries", () => {
-    A.setPendingFiles([null, undefined, { name: "real.E01", size: 100 }]);
-    expect(A.st.pendingFiles).toHaveLength(1);
-  });
 });
 
 // ── syncMode (per-card) ─────────────────────────────────────────────────────

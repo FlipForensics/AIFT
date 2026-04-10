@@ -156,23 +156,19 @@ class ConfigPathResolutionTests(unittest.TestCase):
 
     def test_save_config_default_path_uses_project_root(self) -> None:
         """save_config() with no explicit path writes next to the project root."""
-        expected = PROJECT_ROOT / "config.yaml"
-        # Ensure the file exists first so we can verify it's overwritten there.
-        original_content = None
-        if expected.exists():
-            original_content = expected.read_text(encoding="utf-8")
-        try:
-            config = {"ai": {"provider": "test-sentinel"}}
-            save_config(config)
-            self.assertTrue(expected.exists())
-            reloaded = yaml.safe_load(expected.read_text(encoding="utf-8")) or {}
-            self.assertEqual(reloaded.get("ai", {}).get("provider"), "test-sentinel")
-        finally:
-            # Restore original content so we don't corrupt the real config.
-            if original_content is not None:
-                expected.write_text(original_content, encoding="utf-8")
-            elif expected.exists():
-                expected.unlink()
+        with TemporaryDirectory(prefix="aift-save-cfg-") as tmp_dir:
+            fake_root = Path(tmp_dir)
+            with patch("app.config.PROJECT_ROOT", fake_root):
+                config = {"ai": {"provider": "test-sentinel"}}
+                save_config(config)
+                expected = fake_root / "config.yaml"
+                self.assertTrue(expected.exists())
+                reloaded = yaml.safe_load(
+                    expected.read_text(encoding="utf-8")
+                ) or {}
+                self.assertEqual(
+                    reloaded.get("ai", {}).get("provider"), "test-sentinel"
+                )
 
     def test_load_config_with_explicit_path_still_works(self) -> None:
         with TemporaryDirectory(prefix="aift-config-explicit-") as temp_dir:

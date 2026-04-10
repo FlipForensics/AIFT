@@ -27,50 +27,23 @@ import app.routes.tasks_chat as routes_tasks_chat
 import app.routes.state as routes_state
 
 
-class ImmediateThread:
-    def __init__(
-        self,
-        group: object | None = None,
-        target: object | None = None,
-        name: str | None = None,
-        args: tuple[object, ...] = (),
-        kwargs: dict[str, object] | None = None,
-        daemon: bool | None = None,
-    ) -> None:
-        del group, name, daemon
-        self._target = target
-        self._args = args
-        self._kwargs = kwargs or {}
-
-    def start(self) -> None:
-        if callable(self._target):
-            self._target(*self._args, **self._kwargs)
+from tests.conftest import (
+    ImmediateThread,
+    FakeParser as _BaseFakeParser,
+    FakeAnalyzer,
+    FakeReportGenerator,
+)
 
 
-class FakeParser:
-    def __init__(
-        self,
-        evidence_path: str | Path,
-        case_dir: str | Path,
-        audit_logger: object,
-        parsed_dir: str | Path | None = None,
-    ) -> None:
-        del evidence_path, audit_logger
-        self.case_dir = Path(case_dir)
-        self.parsed_dir = Path(parsed_dir) if parsed_dir is not None else self.case_dir / "parsed"
-        self.parsed_dir.mkdir(parents=True, exist_ok=True)
-        self.os_type = "windows"
-
-    def __enter__(self) -> "FakeParser":
-        return self
-
-    def __exit__(self, *args: object) -> bool:
-        return False
-
-    def close(self) -> None:
-        pass
+class FakeParser(_BaseFakeParser):
+    """Parser stub returning ``demo-host`` metadata and an unavailable artifact."""
 
     def get_image_metadata(self) -> dict[str, str]:
+        """Return demo-host metadata matching route-test assertions.
+
+        Returns:
+            Dict with ``demo-host`` hostname and extended metadata fields.
+        """
         return {
             "hostname": "demo-host",
             "os_version": "Windows 11",
@@ -81,87 +54,15 @@ class FakeParser:
         }
 
     def get_available_artifacts(self) -> list[dict[str, object]]:
+        """Return artifacts including one marked unavailable.
+
+        Returns:
+            List with ``runkeys`` (available) and ``tasks`` (unavailable).
+        """
         return [
             {"key": "runkeys", "name": "Run/RunOnce Keys", "available": True},
             {"key": "tasks", "name": "Scheduled Tasks", "available": False},
         ]
-
-    def parse_artifact(self, artifact_key: str, progress_callback: object | None = None) -> dict[str, object]:
-        if callable(progress_callback):
-            progress_callback({"artifact_key": artifact_key, "record_count": 1})
-
-        csv_path = self.parsed_dir / f"{artifact_key}.csv"
-        csv_path.write_text("name\nvalue\n", encoding="utf-8")
-        return {
-            "csv_path": str(csv_path),
-            "record_count": 1,
-            "duration_seconds": 0.01,
-            "success": True,
-            "error": None,
-        }
-
-
-class FakeAnalyzer:
-    last_artifact_keys: list[str] = []
-
-    def __init__(
-        self,
-        case_dir: str | Path,
-        config: dict[str, object] | None,
-        audit_logger: object,
-        artifact_csv_paths: dict[str, str],
-        os_type: str = "windows",
-    ) -> None:
-        del case_dir, config, audit_logger, artifact_csv_paths, os_type
-
-    def run_full_analysis(
-        self,
-        artifact_keys: list[str],
-        investigation_context: str,
-        metadata: dict[str, object] | None,
-        progress_callback: object | None = None,
-        cancel_check: object | None = None,
-    ) -> dict[str, object]:
-        del investigation_context, metadata, cancel_check
-        FakeAnalyzer.last_artifact_keys = list(artifact_keys)
-        per_artifact: list[dict[str, str]] = []
-        for artifact in artifact_keys:
-            result = {
-                "artifact_key": artifact,
-                "artifact_name": artifact,
-                "analysis": f"analysis for {artifact}",
-                "model": "fake-model",
-            }
-            per_artifact.append(result)
-            if callable(progress_callback):
-                progress_callback(artifact, "complete", result)
-
-        return {
-            "per_artifact": per_artifact,
-            "summary": "final summary",
-            "model_info": {"provider": "fake", "model": "fake-model"},
-        }
-
-
-class FakeReportGenerator:
-    def __init__(self, cases_root: str | Path | None = None, **_: object) -> None:
-        self.cases_root = Path(cases_root) if cases_root is not None else Path(".")
-
-    def generate(
-        self,
-        analysis_results: dict[str, object],
-        image_metadata: dict[str, object],
-        evidence_hashes: dict[str, object],
-        investigation_context: str,
-        audit_log_entries: list[dict[str, object]],
-    ) -> Path:
-        del image_metadata, evidence_hashes, investigation_context, audit_log_entries
-        case_id = str(analysis_results["case_id"])
-        reports_dir = self.cases_root / case_id / "reports"
-        reports_dir.mkdir(parents=True, exist_ok=True)
-        path = reports_dir / "report_test.html"
-        path.write_text("<html><body>report</body></html>", encoding="utf-8")
-        return path
 
 
 class RoutesTests(unittest.TestCase):
@@ -2475,7 +2376,7 @@ class RoutesTests(unittest.TestCase):
                 routes.CASE_STATES[case_id]["evidence_path"] = ""
             resp = self.client.get(f"/api/cases/{case_id}/report")
             self.assertEqual(resp.status_code, 400)
-            self.assertIn("hash context", resp.get_json()["error"])
+            self.assertIn("integrity data is missing", resp.get_json()["error"])
 
     def test_replace_evidence_clears_stale_downstream_state(self) -> None:
         """Loading new evidence must invalidate parse, analysis, and chat state."""

@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 from app import create_app
 from app.case_logging import unregister_all_case_log_handlers
+from tests.conftest import FakeParser as _BaseFakeParser, ImmediateThread, FAKE_HASHES
 import app.routes as routes
 import app.routes.handlers as routes_handlers
 import app.routes.evidence as routes_evidence
@@ -24,94 +25,19 @@ import app.routes.tasks as routes_tasks
 import app.routes.state as routes_state
 
 
-class ImmediateThread:
-    """Execute thread target synchronously for deterministic testing."""
-
-    def __init__(
-        self,
-        group: object | None = None,
-        target: object | None = None,
-        name: str | None = None,
-        args: tuple[object, ...] = (),
-        kwargs: dict[str, object] | None = None,
-        daemon: bool | None = None,
-    ) -> None:
-        """Store the target and arguments."""
-        del group, name, daemon
-        self._target = target
-        self._args = args
-        self._kwargs = kwargs or {}
-
-    def start(self) -> None:
-        """Run the target synchronously."""
-        if callable(self._target):
-            self._target(*self._args, **self._kwargs)
-
-
-class FakeParser:
-    """Fake ForensicParser for testing without real evidence files."""
-
-    def __init__(
-        self,
-        evidence_path: str | Path,
-        case_dir: str | Path,
-        audit_logger: object,
-        parsed_dir: str | Path | None = None,
-    ) -> None:
-        """Initialise with paths."""
-        del evidence_path, audit_logger
-        self.case_dir = Path(case_dir)
-        self.parsed_dir = Path(parsed_dir) if parsed_dir is not None else self.case_dir / "parsed"
-        self.parsed_dir.mkdir(parents=True, exist_ok=True)
-        self.os_type = "windows"
-
-    def __enter__(self) -> "FakeParser":
-        """Enter context manager."""
-        return self
-
-    def __exit__(self, *args: object) -> bool:
-        """Exit context manager."""
-        return False
-
-    def close(self) -> None:
-        """Close the parser."""
-        pass
-
-    def get_image_metadata(self) -> dict[str, str]:
-        """Return fake image metadata."""
-        return {
-            "hostname": "test-host",
-            "os_version": "Windows 10",
-            "domain": "test.local",
-        }
+class FakeParser(_BaseFakeParser):
+    """Extend the shared FakeParser with an extra ``services`` artifact."""
 
     def get_available_artifacts(self) -> list[dict[str, object]]:
-        """Return fake available artifacts."""
+        """Return fake available artifacts including services.
+
+        Returns:
+            List of two available artifact descriptors.
+        """
         return [
             {"key": "runkeys", "name": "Run/RunOnce Keys", "available": True},
             {"key": "services", "name": "Services", "available": True},
         ]
-
-    def parse_artifact(self, artifact_key: str, progress_callback: object | None = None) -> dict[str, object]:
-        """Fake-parse an artifact."""
-        if callable(progress_callback):
-            progress_callback({"artifact_key": artifact_key, "record_count": 1})
-        csv_path = self.parsed_dir / f"{artifact_key}.csv"
-        csv_path.write_text("name\nvalue\n", encoding="utf-8")
-        return {
-            "csv_path": str(csv_path),
-            "record_count": 1,
-            "duration_seconds": 0.01,
-            "success": True,
-            "error": None,
-        }
-
-
-FAKE_HASHES = {
-    "sha256": "a" * 64,
-    "md5": "b" * 32,
-    "size_bytes": 4,
-}
 
 
 class MultiImageRoutesTests(unittest.TestCase):

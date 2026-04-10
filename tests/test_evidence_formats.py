@@ -23,53 +23,13 @@ from zipfile import ZipFile
 import py7zr
 
 from app import create_app
+from tests.conftest import FakeParser, FAKE_HASHES
 import app.routes as routes
 import app.routes.evidence as routes_evidence
 import app.routes.handlers as routes_handlers
 import app.routes.images as routes_images
 import app.routes.state as routes_state
 import app.routes.tasks as routes_tasks
-
-
-# ---------------------------------------------------------------------------
-# Helpers reused from test_routes
-# ---------------------------------------------------------------------------
-
-class FakeParser:
-    def __init__(
-        self,
-        evidence_path: str | Path,
-        case_dir: str | Path,
-        audit_logger: object,
-        parsed_dir: str | Path | None = None,
-    ) -> None:
-        del evidence_path, audit_logger
-        self.case_dir = Path(case_dir)
-        self.parsed_dir = Path(parsed_dir) if parsed_dir is not None else self.case_dir / "parsed"
-        self.parsed_dir.mkdir(parents=True, exist_ok=True)
-        self.os_type = "windows"
-
-    def __enter__(self) -> "FakeParser":
-        return self
-
-    def __exit__(self, *args: object) -> bool:
-        return False
-
-    def get_image_metadata(self) -> dict[str, str]:
-        return {
-            "hostname": "test-host",
-            "os_version": "Windows 10",
-            "domain": "test.local",
-            "ips": "10.0.0.1",
-            "timezone": "UTC",
-            "install_date": "2025-06-01",
-        }
-
-    def get_available_artifacts(self) -> list[dict[str, object]]:
-        return [{"key": "runkeys", "name": "Run/RunOnce Keys", "available": True}]
-
-
-FAKE_HASHES = {"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4}
 
 
 # ---------------------------------------------------------------------------

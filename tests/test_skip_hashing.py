@@ -26,6 +26,7 @@ from unittest.mock import patch
 from app import create_app
 from app.case_logging import unregister_all_case_log_handlers
 from app.reporter import ReportGenerator
+from tests.conftest import FakeParser, FakeReportGenerator, FAKE_HASHES
 import app.routes as routes
 import app.routes.evidence as routes_evidence
 import app.routes.handlers as routes_handlers
@@ -33,57 +34,8 @@ import app.routes.images as routes_images
 import app.routes.state as routes_state
 import app.routes.tasks as routes_tasks
 
-FAKE_SHA256 = "a" * 64
-FAKE_MD5 = "b" * 32
-
-
-# ---------------------------------------------------------------------------
-# Fakes
-# ---------------------------------------------------------------------------
-
-class FakeParser:
-    """Minimal stand-in for ``ForensicParser``."""
-
-    def __init__(self, evidence_path: object = None, case_dir: object = None,
-                 audit_logger: object = None, parsed_dir: object = None) -> None:
-        self.os_type = "windows"
-
-    def __enter__(self) -> "FakeParser":
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        pass
-
-    def get_image_metadata(self) -> dict[str, str]:
-        """Return minimal metadata."""
-        return {"hostname": "test-host", "os_version": "Windows 10", "domain": "WORKGROUP"}
-
-    def get_available_artifacts(self) -> list[dict[str, object]]:
-        """Return a single artifact."""
-        return [{"key": "runkeys", "label": "Run Keys", "available": True}]
-
-
-class FakeReportGenerator:
-    """Minimal stand-in for ``ReportGenerator``."""
-
-    def __init__(self, cases_root: str | Path | None = None, **_: object) -> None:
-        self.cases_root = Path(cases_root) if cases_root is not None else Path(".")
-
-    def generate(
-        self,
-        analysis_results: dict[str, object],
-        image_metadata: dict[str, object],
-        evidence_hashes: dict[str, object],
-        investigation_context: str,
-        audit_log_entries: list[dict[str, object]],
-    ) -> Path:
-        """Write a dummy report and return its path."""
-        case_id = str(analysis_results["case_id"])
-        reports_dir = self.cases_root / case_id / "reports"
-        reports_dir.mkdir(parents=True, exist_ok=True)
-        path = reports_dir / "report_test.html"
-        path.write_text("<html><body>report</body></html>", encoding="utf-8")
-        return path
+FAKE_SHA256 = FAKE_HASHES["sha256"]
+FAKE_MD5 = FAKE_HASHES["md5"]
 
 
 # ---------------------------------------------------------------------------

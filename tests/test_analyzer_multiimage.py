@@ -594,12 +594,13 @@ class TestArtifactCsvPathsClearedBetweenImages:
             investigation_context="Test CSV path isolation",
         )
 
-        # Calls: img1-artifact, img1-summary, img2-artifact, img2-summary, cross-image
+        # Calls: img1-artifact, img2-artifact, img1-summary, img2-summary, cross-image
+        # (Phase 1 processes all image artifacts, then Phase 2 generates summaries)
         assert calls_with_paths[0] is not None, "img1 should have registered runkeys path"
-        assert calls_with_paths[2] is not None, "img2 should have registered runkeys path"
+        assert calls_with_paths[1] is not None, "img2 should have registered runkeys path"
 
         path1 = calls_with_paths[0]
-        path2 = calls_with_paths[2]
+        path2 = calls_with_paths[1]
         if isinstance(path1, list):
             path1 = path1[0]
         if isinstance(path2, list):

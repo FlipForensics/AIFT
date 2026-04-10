@@ -300,17 +300,37 @@ class TestIsContextLengthError(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestIsAttachmentUnsupportedError(unittest.TestCase):
-    def test_detects_404(self) -> None:
-        error = Exception("404 page not found")
+    def test_detects_file_not_found(self) -> None:
+        error = Exception("file not found on server")
         self.assertTrue(_is_attachment_unsupported_error(error))
 
-    def test_detects_not_found(self) -> None:
+    def test_detects_file_not_found_underscore(self) -> None:
+        error = Exception("error: file_not_found")
+        self.assertTrue(_is_attachment_unsupported_error(error))
+
+    def test_detects_attachment_not_found(self) -> None:
+        error = Exception("attachment not found")
+        self.assertTrue(_is_attachment_unsupported_error(error))
+
+    def test_detects_unsupported_file(self) -> None:
+        error = Exception("unsupported file format")
+        self.assertTrue(_is_attachment_unsupported_error(error))
+
+    def test_detects_attachments_not_supported(self) -> None:
+        error = Exception("attachments not supported by this model")
+        self.assertTrue(_is_attachment_unsupported_error(error))
+
+    def test_ignores_generic_404(self) -> None:
+        error = Exception("404 model not found")
+        self.assertFalse(_is_attachment_unsupported_error(error))
+
+    def test_ignores_generic_not_found(self) -> None:
         error = Exception("endpoint not found")
-        self.assertTrue(_is_attachment_unsupported_error(error))
+        self.assertFalse(_is_attachment_unsupported_error(error))
 
-    def test_detects_unsupported(self) -> None:
+    def test_ignores_generic_unsupported(self) -> None:
         error = Exception("unsupported feature")
-        self.assertTrue(_is_attachment_unsupported_error(error))
+        self.assertFalse(_is_attachment_unsupported_error(error))
 
     def test_detects_does_not_support(self) -> None:
         error = Exception("does not support file uploads")
@@ -1755,7 +1775,7 @@ class TestOpenAIProvider(unittest.TestCase):
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
         mock_client.files.create.return_value = SimpleNamespace(id="file-unsupported")
-        mock_client.responses.create.side_effect = RuntimeError("404 page not found")
+        mock_client.responses.create.side_effect = RuntimeError("unrecognized request url /responses")
         mock_client.chat.completions.create.return_value = _make_openai_response("OpenAI fallback result")
 
         with TemporaryDirectory(prefix="aift-ai-provider-test-") as temp_dir:
@@ -1986,7 +2006,7 @@ class TestKimiProvider(unittest.TestCase):
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
         mock_client.files.create.return_value = SimpleNamespace(id="file-unsupported")
-        mock_client.responses.create.side_effect = RuntimeError("404 page not found")
+        mock_client.responses.create.side_effect = RuntimeError("unrecognized request url /responses")
         mock_client.chat.completions.create.return_value = _make_openai_response("Kimi fallback result")
 
         with TemporaryDirectory(prefix="aift-ai-provider-test-") as temp_dir:
@@ -2137,7 +2157,7 @@ class TestLocalProvider(unittest.TestCase):
         provider = LocalProvider(
             base_url="http://localhost:11434/v1", model="llama3.1:70b"
         )
-        self.assertEqual(provider.api_key, "not-needed")
+        self.assertEqual(provider._api_key, "not-needed")
 
     @patch("openai.OpenAI")
     def test_normalizes_root_base_url_to_v1(self, mock_openai_cls: MagicMock) -> None:
@@ -2408,7 +2428,7 @@ class TestLocalProvider(unittest.TestCase):
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
         mock_client.files.create.return_value = SimpleNamespace(id="file-unsupported")
-        mock_client.responses.create.side_effect = RuntimeError("404 page not found")
+        mock_client.responses.create.side_effect = RuntimeError("unrecognized request url /responses")
         chunk = SimpleNamespace(
             choices=[
                 SimpleNamespace(
@@ -2498,7 +2518,7 @@ class TestLocalProvider(unittest.TestCase):
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
         mock_client.files.create.return_value = SimpleNamespace(id="file-unsupported")
-        mock_client.responses.create.side_effect = RuntimeError("404 page not found")
+        mock_client.responses.create.side_effect = RuntimeError("unrecognized request url /responses")
         mock_client.chat.completions.create.return_value = _make_openai_response("Fallback result")
 
         with TemporaryDirectory(prefix="aift-ai-provider-test-") as temp_dir:
@@ -2947,7 +2967,7 @@ class TestCreateProvider(unittest.TestCase):
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-from-env"}):
             provider = create_provider(config)
         self.assertIsInstance(provider, ClaudeProvider)
-        self.assertEqual(provider.api_key, "sk-from-env")
+        self.assertEqual(provider._api_key, "sk-from-env")
 
     @patch("anthropic.Anthropic")
     def test_env_var_fallback_for_none_claude_key(self, _mock: MagicMock) -> None:
@@ -2955,7 +2975,7 @@ class TestCreateProvider(unittest.TestCase):
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-from-env"}):
             provider = create_provider(config)
         self.assertIsInstance(provider, ClaudeProvider)
-        self.assertEqual(provider.api_key, "sk-from-env")
+        self.assertEqual(provider._api_key, "sk-from-env")
 
     @patch("openai.OpenAI")
     def test_env_var_fallback_for_openai(self, _mock: MagicMock) -> None:
@@ -2963,7 +2983,7 @@ class TestCreateProvider(unittest.TestCase):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-from-env"}):
             provider = create_provider(config)
         self.assertIsInstance(provider, OpenAIProvider)
-        self.assertEqual(provider.api_key, "sk-from-env")
+        self.assertEqual(provider._api_key, "sk-from-env")
 
     @patch("openai.OpenAI")
     def test_env_var_fallback_for_none_openai_key(self, _mock: MagicMock) -> None:
@@ -2971,7 +2991,7 @@ class TestCreateProvider(unittest.TestCase):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-from-env"}):
             provider = create_provider(config)
         self.assertIsInstance(provider, OpenAIProvider)
-        self.assertEqual(provider.api_key, "sk-from-env")
+        self.assertEqual(provider._api_key, "sk-from-env")
 
     @patch("openai.OpenAI")
     def test_env_var_fallback_for_kimi(self, _mock: MagicMock) -> None:
@@ -2979,7 +2999,7 @@ class TestCreateProvider(unittest.TestCase):
         with patch.dict(os.environ, {"MOONSHOT_API_KEY": "sk-from-env"}):
             provider = create_provider(config)
         self.assertIsInstance(provider, KimiProvider)
-        self.assertEqual(provider.api_key, "sk-from-env")
+        self.assertEqual(provider._api_key, "sk-from-env")
 
     @patch("openai.OpenAI")
     def test_env_var_fallback_for_none_kimi_key(self, _mock: MagicMock) -> None:
@@ -2987,7 +3007,7 @@ class TestCreateProvider(unittest.TestCase):
         with patch.dict(os.environ, {"MOONSHOT_API_KEY": "sk-from-env"}):
             provider = create_provider(config)
         self.assertIsInstance(provider, KimiProvider)
-        self.assertEqual(provider.api_key, "sk-from-env")
+        self.assertEqual(provider._api_key, "sk-from-env")
 
     @patch("openai.OpenAI")
     def test_env_var_fallback_for_kimi_api_key_var(self, _mock: MagicMock) -> None:
@@ -2998,7 +3018,7 @@ class TestCreateProvider(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             provider = create_provider(config)
         self.assertIsInstance(provider, KimiProvider)
-        self.assertEqual(provider.api_key, "sk-kimi-env")
+        self.assertEqual(provider._api_key, "sk-kimi-env")
 
     @patch("openai.OpenAI")
     def test_rejects_blank_openai_key_before_client_call(self, mock_openai_cls: MagicMock) -> None:
@@ -3431,7 +3451,7 @@ class TestAttachmentFallbackRegression(unittest.TestCase):
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
         mock_client.files.create.return_value = SimpleNamespace(id="file-x")
-        mock_client.responses.create.side_effect = RuntimeError("404 not found")
+        mock_client.responses.create.side_effect = RuntimeError("unrecognized request url /responses")
         mock_client.chat.completions.create.return_value = _make_openai_response("fallback result")
 
         with TemporaryDirectory(prefix="aift-test-") as tmp:

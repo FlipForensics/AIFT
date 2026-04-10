@@ -21,6 +21,12 @@ from unittest.mock import MagicMock, patch
 
 from app import create_app
 from app.case_logging import unregister_all_case_log_handlers
+from tests.conftest import (
+    FakeParser as _BaseFakeParser,
+    FakeAnalyzer,
+    FakeReportGenerator as _BaseFakeReportGenerator,
+    ImmediateThread,
+)
 import app.routes as routes
 import app.routes.artifacts as routes_artifacts
 import app.routes.analysis as routes_analysis
@@ -32,61 +38,18 @@ import app.routes.state as routes_state
 
 
 # ---------------------------------------------------------------------------
-# Test doubles
+# Test doubles (specialisations of shared fakes)
 # ---------------------------------------------------------------------------
 
-class ImmediateThread:
-    """Runs the target synchronously instead of spawning a real thread."""
-
-    def __init__(
-        self,
-        group: object | None = None,
-        target: object | None = None,
-        name: str | None = None,
-        args: tuple[object, ...] = (),
-        kwargs: dict[str, object] | None = None,
-        daemon: bool | None = None,
-    ) -> None:
-        del group, name, daemon
-        self._target = target
-        self._args = args
-        self._kwargs = kwargs or {}
-
-    def start(self) -> None:
-        """Execute the target synchronously."""
-        if callable(self._target):
-            self._target(*self._args, **self._kwargs)
-
-
-class FakeParser:
-    """Minimal parser stub for route tests."""
-
-    def __init__(
-        self,
-        evidence_path: str | Path,
-        case_dir: str | Path,
-        audit_logger: object,
-        parsed_dir: str | Path | None = None,
-    ) -> None:
-        del evidence_path, audit_logger
-        self.case_dir = Path(case_dir)
-        self.parsed_dir = Path(parsed_dir) if parsed_dir is not None else self.case_dir / "parsed"
-        self.parsed_dir.mkdir(parents=True, exist_ok=True)
-        self.os_type = "windows"
-
-    def __enter__(self) -> "FakeParser":
-        """Enter context manager."""
-        return self
-
-    def __exit__(self, *args: object) -> bool:
-        """Exit context manager."""
-        return False
-
-    def close(self) -> None:
-        """No-op close."""
+class FakeParser(_BaseFakeParser):
+    """Parser stub returning ``demo-host`` metadata for auto-report tests."""
 
     def get_image_metadata(self) -> dict[str, str]:
-        """Return minimal fake image metadata."""
+        """Return demo-host metadata matching auto-report assertions.
+
+        Returns:
+            Dict with ``demo-host`` hostname and extended metadata fields.
+        """
         return {
             "hostname": "demo-host",
             "os_version": "Windows 11",
@@ -96,66 +59,9 @@ class FakeParser:
             "install_date": "2025-01-01",
         }
 
-    def get_available_artifacts(self) -> list[dict[str, object]]:
-        """Return a small set of fake artifacts."""
-        return [
-            {"key": "runkeys", "name": "Run/RunOnce Keys", "available": True},
-        ]
 
-    def parse_artifact(self, artifact_key: str, progress_callback: object | None = None) -> dict[str, object]:
-        """Fake-parse an artifact and write a stub CSV."""
-        if callable(progress_callback):
-            progress_callback({"artifact_key": artifact_key, "record_count": 1})
-        csv_path = self.parsed_dir / f"{artifact_key}.csv"
-        csv_path.write_text("name\nvalue\n", encoding="utf-8")
-        return {
-            "csv_path": str(csv_path),
-            "record_count": 1,
-            "duration_seconds": 0.01,
-            "success": True,
-            "error": None,
-        }
-
-
-class FakeAnalyzer:
-    """Minimal analyzer stub that returns canned results."""
-
-    def __init__(self, **_: object) -> None:
-        pass
-
-    def run_full_analysis(
-        self,
-        artifact_keys: list[str],
-        investigation_context: str,
-        metadata: dict[str, object] | None,
-        progress_callback: object | None = None,
-        cancel_check: object | None = None,
-    ) -> dict[str, object]:
-        """Return fake per-artifact findings and a summary."""
-        del investigation_context, metadata, cancel_check
-        per_artifact: list[dict[str, str]] = []
-        for artifact in artifact_keys:
-            result = {
-                "artifact_key": artifact,
-                "artifact_name": artifact,
-                "analysis": f"analysis for {artifact}",
-                "model": "fake-model",
-            }
-            per_artifact.append(result)
-            if callable(progress_callback):
-                progress_callback(artifact, "complete", result)
-        return {
-            "per_artifact": per_artifact,
-            "summary": "final summary",
-            "model_info": {"provider": "fake", "model": "fake-model"},
-        }
-
-
-class FakeReportGenerator:
-    """Stub report generator that writes a small HTML file."""
-
-    def __init__(self, cases_root: str | Path | None = None, **_: object) -> None:
-        self.cases_root = Path(cases_root) if cases_root is not None else Path(".")
+class FakeReportGenerator(_BaseFakeReportGenerator):
+    """Report generator stub with a timestamped filename for auto-report tests."""
 
     def generate(
         self,
@@ -165,7 +71,18 @@ class FakeReportGenerator:
         investigation_context: str,
         audit_log_entries: list[dict[str, object]],
     ) -> Path:
-        """Write a stub report and return its path."""
+        """Write a stub report with a timestamped filename.
+
+        Args:
+            analysis_results: Must contain a ``"case_id"`` key.
+            image_metadata: Ignored.
+            evidence_hashes: Ignored.
+            investigation_context: Ignored.
+            audit_log_entries: Ignored.
+
+        Returns:
+            Path to the generated stub report file.
+        """
         del image_metadata, evidence_hashes, investigation_context, audit_log_entries
         case_id = str(analysis_results["case_id"])
         reports_dir = self.cases_root / case_id / "reports"

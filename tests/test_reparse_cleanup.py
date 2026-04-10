@@ -22,6 +22,11 @@ from unittest.mock import MagicMock, patch
 
 from app import create_app
 from app.case_logging import unregister_all_case_log_handlers
+from tests.conftest import (
+    FakeParser as _BaseFakeParser,
+    ImmediateThread,
+    FAKE_HASHES,
+)
 import app.routes as routes
 import app.routes.artifacts as routes_artifacts
 import app.routes.analysis as routes_analysis
@@ -35,95 +40,26 @@ import app.routes.state as routes_state
 
 LOGGER = logging.getLogger(__name__)
 
+HASH_RETURN = dict(FAKE_HASHES)
+
 
 # ── Fakes ───────────────────────────────────────────────────────────────────
 
 
-class ImmediateThread:
-    """Thread substitute that runs the target synchronously."""
-
-    def __init__(
-        self,
-        group: object | None = None,
-        target: object | None = None,
-        name: str | None = None,
-        args: tuple[object, ...] = (),
-        kwargs: dict[str, object] | None = None,
-        daemon: bool | None = None,
-    ) -> None:
-        del group, name, daemon
-        self._target = target
-        self._args = args
-        self._kwargs = kwargs or {}
-
-    def start(self) -> None:
-        """Execute the target immediately in the calling thread."""
-        if callable(self._target):
-            self._target(*self._args, **self._kwargs)
-
-
-class FakeParser:
-    """Minimal parser that writes stub CSVs for each requested artifact."""
-
-    def __init__(
-        self,
-        evidence_path: str | Path,
-        case_dir: str | Path,
-        audit_logger: object,
-        parsed_dir: str | Path | None = None,
-    ) -> None:
-        del evidence_path, audit_logger
-        self.case_dir = Path(case_dir)
-        self.parsed_dir = Path(parsed_dir) if parsed_dir is not None else self.case_dir / "parsed"
-        self.parsed_dir.mkdir(parents=True, exist_ok=True)
-        self.os_type = "windows"
-
-    def __enter__(self) -> "FakeParser":
-        return self
-
-    def __exit__(self, *args: object) -> bool:
-        return False
-
-    def close(self) -> None:
-        """No-op cleanup."""
-
-    def get_image_metadata(self) -> dict[str, str]:
-        """Return stub image metadata."""
-        return {
-            "hostname": "test-host",
-            "os_version": "Windows 11",
-            "domain": "corp.local",
-            "ips": "10.0.0.1",
-            "timezone": "UTC",
-            "install_date": "2025-01-01",
-        }
+class FakeParser(_BaseFakeParser):
+    """Extend the shared FakeParser with extra artifacts for re-parse tests."""
 
     def get_available_artifacts(self) -> list[dict[str, object]]:
-        """Return two available artifacts."""
+        """Return three available artifacts.
+
+        Returns:
+            List of runkeys, prefetch, and amcache artifact descriptors.
+        """
         return [
             {"key": "runkeys", "name": "Run/RunOnce Keys", "available": True},
             {"key": "prefetch", "name": "Prefetch", "available": True},
             {"key": "amcache", "name": "Amcache", "available": True},
         ]
-
-    def parse_artifact(
-        self, artifact_key: str, progress_callback: object | None = None
-    ) -> dict[str, object]:
-        """Write a stub CSV and return a success result."""
-        if callable(progress_callback):
-            progress_callback({"artifact_key": artifact_key, "record_count": 1})
-        csv_path = self.parsed_dir / f"{artifact_key}.csv"
-        csv_path.write_text("name\nvalue\n", encoding="utf-8")
-        return {
-            "csv_path": str(csv_path),
-            "record_count": 1,
-            "duration_seconds": 0.01,
-            "success": True,
-            "error": None,
-        }
-
-
-HASH_RETURN = {"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4}
 
 
 # ── Unit tests: _purge_stale_parsed_data ────────────────────────────────────

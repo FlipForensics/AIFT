@@ -2458,14 +2458,15 @@ class TestNormalizeArtifactKey(unittest.TestCase):
         from app.analyzer.utils import normalize_artifact_key
         self.assertEqual(normalize_artifact_key("mft"), "mft")
         self.assertEqual(normalize_artifact_key("MFT"), "mft")
-        self.assertEqual(normalize_artifact_key("evtx_Security"), "evtx")
-        self.assertEqual(normalize_artifact_key("shimcache_data"), "shimcache")
-        self.assertEqual(normalize_artifact_key("amcache.applications"), "amcache")
-        self.assertEqual(normalize_artifact_key("prefetch_data"), "prefetch")
-        self.assertEqual(normalize_artifact_key("services_list"), "services")
-        self.assertEqual(normalize_artifact_key("tasks_scheduled"), "tasks")
-        self.assertEqual(normalize_artifact_key("userassist_data"), "userassist")
-        self.assertEqual(normalize_artifact_key("runkeys_data"), "runkeys")
+        self.assertEqual(normalize_artifact_key("evtx_Security"), "evtx_security")
+        self.assertEqual(normalize_artifact_key("evtx_System"), "evtx_system")
+        self.assertEqual(normalize_artifact_key("shimcache_data"), "shimcache_data")
+        self.assertEqual(normalize_artifact_key("amcache.applications"), "amcache.applications")
+        self.assertEqual(normalize_artifact_key("prefetch_data"), "prefetch_data")
+        self.assertEqual(normalize_artifact_key("services_list"), "services_list")
+        self.assertEqual(normalize_artifact_key("tasks_scheduled"), "tasks_scheduled")
+        self.assertEqual(normalize_artifact_key("userassist_data"), "userassist_data")
+        self.assertEqual(normalize_artifact_key("runkeys_data"), "runkeys_data")
 
     def test_unknown_key_lowered(self) -> None:
         from app.analyzer.utils import normalize_artifact_key

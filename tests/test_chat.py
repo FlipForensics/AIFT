@@ -561,21 +561,22 @@ class ChatManagerTests(unittest.TestCase):
             mgr = ChatManager(tmp)
             self.assertEqual(mgr.get_recent_history(max_pairs=-1), [])
 
-    def test_get_recent_history_skips_unpaired_user_messages(self) -> None:
+    def test_get_recent_history_keeps_trailing_unpaired_user_message(self) -> None:
         with TemporaryDirectory(prefix="aift-chat-") as tmp:
             mgr = ChatManager(tmp)
             mgr.chat_file.parent.mkdir(parents=True, exist_ok=True)
             content = (
                 '{"role":"user","content":"Q1","timestamp":"t1"}\n'
                 '{"role":"assistant","content":"A1","timestamp":"t2"}\n'
-                '{"role":"user","content":"Q2_orphan","timestamp":"t3"}\n'
+                '{"role":"user","content":"Q2_pending","timestamp":"t3"}\n'
             )
             mgr.chat_file.write_text(content, encoding="utf-8")
             recent = mgr.get_recent_history(max_pairs=10)
-            # Only 1 complete pair
-            self.assertEqual(len(recent), 2)
+            # 1 complete pair + trailing pending user message
+            self.assertEqual(len(recent), 3)
             self.assertEqual(recent[0]["content"], "Q1")
             self.assertEqual(recent[1]["content"], "A1")
+            self.assertEqual(recent[2]["content"], "Q2_pending")
 
     def test_get_recent_history_no_file_returns_empty(self) -> None:
         with TemporaryDirectory(prefix="aift-chat-") as tmp:
