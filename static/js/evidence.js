@@ -14,7 +14,7 @@
 
   // ── Multi-image state ──────────────────────────────────────────────────────
 
-  /** Array of image intake entries. Each entry: {index, image_id, label, metadata, available_artifacts, pendingFiles} */
+  /** Array of image intake entries. Each entry: {index, image_id, label, metadata, available_artifacts} */
   st.images = [];
 
   // ── Evidence intake ────────────────────────────────────────────────────────
@@ -143,15 +143,6 @@
     helpEl.textContent = `${files.length} files selected (${A.fmtBytes(totalSize)})`;
   }
 
-  /**
-   * Store pending evidence files and update the dropzone help text (legacy).
-   *
-   * @param {File[]} files - Array of File objects selected by the user.
-   */
-  function setPendingFiles(files) {
-    st.pendingFiles = Array.isArray(files) ? files.filter(Boolean) : [];
-  }
-
   /** Strip curly/smart quotes and whitespace from a user-supplied evidence path. */
   function sanitizeEvidencePath(raw) {
     return String(raw || "").replace(/["\u201c\u201d]/g, "").trim();
@@ -240,7 +231,7 @@
     const fieldsets = el.artifactsForm.querySelectorAll("fieldset.artifact-category");
     fieldsets.forEach((fs) => {
       const fsOs = String(fs.dataset.os || "").trim().toLowerCase();
-      var hide;
+      let hide;
       if (fsOs === "linux") {
         hide = !isLinux;
       } else if (!fsOs) {
@@ -275,13 +266,13 @@
     /* Build the OS display string: include the OS type label when it
        differs meaningfully from the version string (e.g. "Linux" prefix
        for a version like "Ubuntu 22.04"). */
-    var osVersion = String(m.os_version || "-");
-    var osLabel = String(osType || "").trim().toLowerCase();
+    let osVersion = String(m.os_version || "-");
+    const osLabel = String(osType || "").trim().toLowerCase();
     if (osLabel && osLabel !== "unknown" && osVersion !== "-") {
-      var versionLower = osVersion.toLowerCase();
+      const versionLower = osVersion.toLowerCase();
       /* Only prepend the type if it is not already part of the version. */
       if (versionLower.indexOf(osLabel) === -1) {
-        var capitalized = osLabel.charAt(0).toUpperCase() + osLabel.slice(1);
+        const capitalized = osLabel.charAt(0).toUpperCase() + osLabel.slice(1);
         osVersion = capitalized + " \u2014 " + osVersion;
       }
     }
@@ -776,7 +767,7 @@
   A.setupEvidence = setupEvidence;
   A.setupArtifacts = setupArtifacts;
   A.loadArtifactProfiles = loadArtifactProfiles;
-  A.setPendingFiles = setPendingFiles;
+
   A.updateParseButton = updateParseButton;
   A.selectedArtifactOptions = selectedArtifactOptions;
   A.selectedArtifacts = selectedArtifacts;

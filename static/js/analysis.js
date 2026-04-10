@@ -70,10 +70,10 @@
     if (el.cancelAnalysis) el.cancelAnalysis.hidden = false;
 
     // Build the request body.
-    var body = { prompt: A.val(el.prompt) };
-    var isMulti = A.isMultiImage && A.isMultiImage();
+    const body = { prompt: A.val(el.prompt) };
+    const isMulti = A.isMultiImage && A.isMultiImage();
     if (isMulti) {
-      var selections = A.allImageArtifactSelections();
+      const selections = A.allImageArtifactSelections();
       if (selections && selections.length) {
         // Backend expects body.images as an array of {image_id: string,
         // artifacts: string[]} where each artifact entry is a key string
@@ -352,12 +352,12 @@
   function renderMultiImageAnalysis() {
     if (!el.analysisList) return;
     // Group artifacts by imageId.
-    var groups = {};
-    var groupOrder = [];
+    const groups = {};
+    const groupOrder = [];
     st.analysis.order.forEach(function(k) {
-      var r = st.analysis.byKey[k];
+      const r = st.analysis.byKey[k];
       if (!r) return;
-      var imgId = r.imageId || "__single__";
+      const imgId = r.imageId || "__single__";
       if (!groups[imgId]) {
         groups[imgId] = [];
         groupOrder.push(imgId);
@@ -366,14 +366,14 @@
     });
 
     groupOrder.forEach(function(imgId) {
-      var items = groups[imgId];
+      const items = groups[imgId];
       if (!items || !items.length) return;
-      var label = items[0].imageLabel || imgId;
+      const label = items[0].imageLabel || imgId;
 
-      var section = document.createElement("div");
+      const section = document.createElement("div");
       section.className = "analysis-image-group";
 
-      var header = document.createElement("h4");
+      const header = document.createElement("h4");
       header.className = "analysis-image-group-header";
       header.textContent = label;
       section.appendChild(header);
@@ -398,7 +398,7 @@
     h.textContent = r.name;
     const m = document.createElement("p");
     m.className = "mono";
-    var metaParts = [r.key];
+    const metaParts = [r.key];
     if (r.model) metaParts.push("model: " + r.model);
     if (r.imageLabel) metaParts.push("image: " + r.imageLabel);
     m.textContent = metaParts.join(" | ");
@@ -436,12 +436,12 @@
 
     // Remove any previously appended per-image summary containers so
     // repeated calls (e.g. SSE reconnects) do not create duplicates.
-    document.querySelectorAll(".per-image-summaries").forEach(function(el) { el.remove(); });
+    document.querySelectorAll(".per-image-summaries").forEach(function(node) { node.remove(); });
 
     // Cross-image summary section.
-    var crossSection = document.getElementById("cross-system-analysis");
+    const crossSection = document.getElementById("cross-system-analysis");
     if (crossSection) {
-      var crossContent = crossSection.querySelector(".cross-system-content");
+      const crossContent = crossSection.querySelector(".cross-system-content");
       if (crossContent) {
         A.renderMarkdownInto(crossContent, st.analysis.crossImageSummary, "No cross-system analysis available.");
       }
@@ -452,25 +452,25 @@
     A.renderMarkdownInto(el.summaryOut, st.analysis.summary, "Summary is generated after analysis completes.");
 
     // Per-image summaries below the main summary.
-    var imageResults = st.analysis.imageResults || {};
-    var imageIds = Object.keys(imageResults);
+    const imageResults = st.analysis.imageResults || {};
+    const imageIds = Object.keys(imageResults);
     if (imageIds.length > 0) {
-      var perImageContainer = document.createElement("div");
+      const perImageContainer = document.createElement("div");
       perImageContainer.className = "per-image-summaries";
 
       imageIds.forEach(function(imgId) {
-        var imgData = imageResults[imgId];
+        const imgData = imageResults[imgId];
         if (!imgData) return;
-        var label = String(imgData.label || imgId);
-        var summary = String(imgData.summary || "");
+        const label = String(imgData.label || imgId);
+        const summary = String(imgData.summary || "");
 
-        var details = document.createElement("details");
+        const details = document.createElement("details");
         details.className = "per-image-summary-section";
         details.open = true;
-        var summaryEl = document.createElement("summary");
+        const summaryEl = document.createElement("summary");
         summaryEl.className = "per-image-summary-header";
         summaryEl.textContent = label;
-        var bodyDiv = document.createElement("div");
+        const bodyDiv = document.createElement("div");
         bodyDiv.className = "markdown-output per-image-summary-body";
         A.renderMarkdownInto(bodyDiv, summary, "(No summary for this image.)");
         details.appendChild(summaryEl);
@@ -478,7 +478,7 @@
         perImageContainer.appendChild(details);
       });
 
-      el.summaryOut.parentNode.appendChild(perImageContainer);
+      el.summaryOut.appendChild(perImageContainer);
     }
   }
 
@@ -515,12 +515,12 @@
     if (!el.findings) return;
 
     // Group by image.
-    var groups = {};
-    var groupOrder = [];
+    const groups = {};
+    const groupOrder = [];
     st.analysis.order.forEach(function(k) {
-      var r = st.analysis.byKey[k];
+      const r = st.analysis.byKey[k];
       if (!r) return;
-      var imgId = r.imageId || "__single__";
+      const imgId = r.imageId || "__single__";
       if (!groups[imgId]) {
         groups[imgId] = [];
         groupOrder.push(imgId);
@@ -529,14 +529,14 @@
     });
 
     groupOrder.forEach(function(imgId, gi) {
-      var items = groups[imgId];
+      const items = groups[imgId];
       if (!items || !items.length) return;
-      var label = items[0].imageLabel || imgId;
+      const label = items[0].imageLabel || imgId;
 
-      var imageSection = document.createElement("details");
+      const imageSection = document.createElement("details");
       imageSection.className = "findings-image-group";
       imageSection.open = gi === 0;
-      var imageSummary = document.createElement("summary");
+      const imageSummary = document.createElement("summary");
       imageSummary.className = "findings-image-group-header";
       imageSummary.textContent = label;
       imageSection.appendChild(imageSummary);
@@ -657,15 +657,15 @@
 
     // Hide and clear cross-system analysis section so stale content from a
     // prior multi-image run does not persist into a subsequent single-image run.
-    var crossSection = document.getElementById("cross-system-analysis");
+    const crossSection = document.getElementById("cross-system-analysis");
     if (crossSection) {
       crossSection.hidden = true;
-      var crossContent = crossSection.querySelector(".cross-system-content");
+      const crossContent = crossSection.querySelector(".cross-system-content");
       if (crossContent) crossContent.innerHTML = "";
     }
 
     // Remove any per-image summary sections from previous runs.
-    document.querySelectorAll(".per-image-summaries").forEach(function(el) { el.remove(); });
+    document.querySelectorAll(".per-image-summaries").forEach(function(node) { node.remove(); });
 
     renderAnalysis();
     renderExecSummary();

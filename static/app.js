@@ -48,14 +48,6 @@
     el.evidenceForm = q("evidence-form");
     el.evidenceLoadedBanner = q("evidence-loaded-banner");
     el.caseName = q("case-name");
-    el.modeUpload = q("mode-upload");
-    el.modePath = q("mode-path");
-    el.uploadPanel = q("upload-mode-panel");
-    el.pathPanel = q("path-mode-panel");
-    el.drop = q("dropzone");
-    el.dropHelp = q("dropzone-help");
-    el.file = q("evidence-file");
-    el.path = q("evidence-path");
     el.submitEvidence = q("submit-evidence");
     el.evidenceProgWrap = q("evidence-intake-progress");
     el.evidenceProg = q("evidence-progress");
@@ -346,7 +338,6 @@
     st.artifactNames = {};
     st.selected = [];
     st.selectedAi = [];
-    st.pendingFiles = [];
     st.images = [];
 
     A.resetParseState();
@@ -355,7 +346,6 @@
 
     if (el.evidenceForm) el.evidenceForm.reset();
     A.syncMode();
-    A.setPendingFiles([]);
     if (el.analysisDateStart) el.analysisDateStart.value = "";
     if (el.analysisDateEnd) el.analysisDateEnd.value = "";
     if (el.profileName) el.profileName.value = "";

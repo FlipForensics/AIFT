@@ -37,7 +37,6 @@ window.AIFT = (() => {
     selected: [],
     selectedAi: [],
     profiles: [],
-    pendingFiles: [],
     settings: null,
     settingsTab: "basic",
     parse: { run: false, done: false, fail: false, es: null, retry: null, retryCount: 0, seq: -1, rows: {}, status: {}, timer: null, started: 0, abort: null, cancelPending: null },
