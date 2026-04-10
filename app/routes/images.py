@@ -21,7 +21,6 @@ from typing import Any
 
 from flask import Blueprint, Response, current_app, request
 
-from ..audit import AuditLogger
 from ..case_manager import CaseManager
 from .evidence_utils import (
     compute_evidence_hashes as _compute_evidence_hashes,
@@ -251,14 +250,8 @@ def delete_image(case_id: str, image_id: str) -> tuple[Response, int]:
         ANALYSIS_PROGRESS.pop(img_progress_key, None)
         CHAT_PROGRESS.pop(img_progress_key, None)
 
-    # Log the removal via the case's audit logger.
-    with STATE_LOCK:
-        audit_logger: AuditLogger | None = case.get("audit")
-    if audit_logger is not None:
-        audit_logger.log("image_deleted", {
-            "case_id": case_id,
-            "image_id": image_id,
-        })
+    # Note: CaseManager.delete_image() already writes an "image_deleted"
+    # audit entry, so we do not duplicate it here.
 
     return success_response({"image_id": image_id})
 
