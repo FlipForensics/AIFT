@@ -37,6 +37,7 @@ function setup() {
     "js/utils.js",
     "js/markdown.js",
     "js/evidence.js",
+    "js/evidence_multi.js",
     "js/parsing.js",
     "js/analysis.js",
     "js/chat.js",
@@ -104,23 +105,25 @@ describe("resetChatState", () => {
     }
   });
 
-  test("hides chat panel", () => {
+  test("shows chat panel after reset", () => {
     if (A.el.chatPanel) {
-      A.el.chatPanel.hidden = false;
+      A.el.chatPanel.hidden = true;
       A.resetChatState();
-      expect(A.el.chatPanel.hidden).toBe(true);
+      // resetChatState opens the chat panel (hidden = false).
+      expect(A.el.chatPanel.hidden).toBe(false);
     }
   });
 
-  test("resets chat toggle text and aria", () => {
+  test("resets chat toggle to open state", () => {
     if (A.el.chatToggle) {
-      A.el.chatToggle.textContent = "Hide Chat";
-      A.el.chatToggle.setAttribute("aria-expanded", "true");
+      A.el.chatToggle.textContent = "Show Chat";
+      A.el.chatToggle.setAttribute("aria-expanded", "false");
 
       A.resetChatState();
 
-      expect(A.el.chatToggle.textContent).toBe("Show Chat");
-      expect(A.el.chatToggle.getAttribute("aria-expanded")).toBe("false");
+      // resetChatState sets chat panel to open/visible.
+      expect(A.el.chatToggle.textContent).toBe("Hide Chat");
+      expect(A.el.chatToggle.getAttribute("aria-expanded")).toBe("true");
     }
   });
 
@@ -198,15 +201,17 @@ describe("closeChatSse", () => {
 // ── Chat panel initial state ────────────────────────────────────────────────
 
 describe("chat panel initial state", () => {
-  test("chat panel is hidden on initial load", () => {
+  test("chat panel is visible on initial load", () => {
     if (A.el.chatPanel) {
-      expect(A.el.chatPanel.hidden).toBe(true);
+      // The HTML template renders the chat panel open by default.
+      expect(A.el.chatPanel.hidden).toBe(false);
     }
   });
 
-  test("chat toggle shows 'Show Chat' initially", () => {
+  test("chat toggle shows 'Hide Chat' initially", () => {
     if (A.el.chatToggle) {
-      expect(A.el.chatToggle.textContent).toBe("Show Chat");
+      // The HTML template renders with aria-expanded="true" and "Hide Chat".
+      expect(A.el.chatToggle.textContent).toBe("Hide Chat");
     }
   });
 

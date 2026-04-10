@@ -43,6 +43,7 @@ function setup() {
     "js/utils.js",
     "js/markdown.js",
     "js/evidence.js",
+    "js/evidence_multi.js",
     "js/parsing.js",
     "js/analysis.js",
     "js/chat.js",
