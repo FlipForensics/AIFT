@@ -750,6 +750,10 @@ def stream_parse_progress(case_id: str) -> Response | tuple[Response, int]:
 def cancel_parse(case_id: str) -> tuple[Response, int]:
     """Cancel a running parse operation for a case.
 
+    Cancels both the case-level progress entry and any per-image
+    progress entries (keyed as ``<case_id>::<image_id>``), so that
+    multi-image parse threads also receive the cancel signal.
+
     Args:
         case_id: UUID of the case.
 
@@ -759,6 +763,19 @@ def cancel_parse(case_id: str) -> tuple[Response, int]:
     if get_case(case_id) is None:
         return error_response(f"Case not found: {case_id}", 404)
     cancelled = cancel_progress(PARSE_PROGRESS, case_id)
+
+    # Also cancel all per-image progress entries for this case.
+    # Per-image keys use the format "<case_id>::<image_id>".
+    prefix = f"{case_id}::"
+    with STATE_LOCK:
+        image_keys = [
+            key for key in PARSE_PROGRESS
+            if key.startswith(prefix)
+        ]
+    for img_key in image_keys:
+        cancel_progress(PARSE_PROGRESS, img_key)
+        cancelled = True
+
     if not cancelled:
         return error_response("No running parse to cancel.", 409)
     return success_response({"status": "cancelling", "case_id": case_id})

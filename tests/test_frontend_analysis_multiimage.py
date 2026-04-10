@@ -504,7 +504,7 @@ class TestMultiImageExecSummaryJSCleanup(unittest.TestCase):
         # The function should contain cleanup logic for .per-image-summaries.
         # Find the function body and verify the cleanup is before the append.
         idx_func = self.js_content.index("function renderMultiImageExecSummary")
-        idx_remove = self.js_content.index('querySelector(".per-image-summaries")', idx_func)
+        idx_remove = self.js_content.index('querySelectorAll(".per-image-summaries")', idx_func)
         idx_append = self.js_content.index("appendChild(perImageContainer)", idx_func)
         self.assertLess(idx_remove, idx_append,
                         "Cleanup of old per-image-summaries should happen before appending new ones")

@@ -338,10 +338,18 @@
     if (!images.length) return { hostname: "-", os_version: "-", domain: "-" };
     if (images.length === 1) return images[0].metadata;
     const hostnames = images.map((img) => String((img.metadata || {}).hostname || "Unknown")).join(", ");
+    /* Collect unique OS versions and domains across all images so
+       multi-image cases do not silently drop info from images 2+. */
+    const osVersions = Array.from(new Set(
+      images.map((img) => String((img.metadata || {}).os_version || "")).filter(Boolean)
+    ));
+    const domains = Array.from(new Set(
+      images.map((img) => String((img.metadata || {}).domain || "")).filter(Boolean)
+    ));
     return {
       hostname: hostnames,
-      os_version: String((images[0].metadata || {}).os_version || "-"),
-      domain: String((images[0].metadata || {}).domain || "-"),
+      os_version: osVersions.length ? osVersions.join(", ") : "-",
+      domain: domains.length ? domains.join(", ") : "-",
     };
   }
 

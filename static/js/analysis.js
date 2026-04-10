@@ -436,8 +436,7 @@
 
     // Remove any previously appended per-image summary containers so
     // repeated calls (e.g. SSE reconnects) do not create duplicates.
-    var oldPerImage = document.querySelector(".per-image-summaries");
-    if (oldPerImage) oldPerImage.remove();
+    document.querySelectorAll(".per-image-summaries").forEach(function(el) { el.remove(); });
 
     // Cross-image summary section.
     var crossSection = document.getElementById("cross-system-analysis");
@@ -666,8 +665,7 @@
     }
 
     // Remove any per-image summary sections from previous runs.
-    var oldPerImage = document.querySelector(".per-image-summaries");
-    if (oldPerImage) oldPerImage.remove();
+    document.querySelectorAll(".per-image-summaries").forEach(function(el) { el.remove(); });
 
     renderAnalysis();
     renderExecSummary();

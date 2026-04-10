@@ -390,24 +390,28 @@ def intake_image_evidence(case_id: str, image_id: str) -> Response | tuple[Respo
             # If so, we must not wipe case-level downstream state because
             # that would destroy results from those images.
             other_images_have_results = any(
-                img_id != image_id and bool(st.get("parse_results"))
-                for img_id, st in image_states.items()
+                img_id != image_id and bool(img_st.get("parse_results"))
+                for img_id, img_st in image_states.items()
             )
 
-            # Always set top-level evidence fields for backward
-            # compatibility with V1 code paths.
-            case["evidence_mode"] = evidence_payload["mode"]
-            case["source_path"] = evidence_payload["source_path"]
-            case["stored_path"] = evidence_payload["stored_path"]
-            case["uploaded_files"] = list(evidence_payload.get("uploaded_files", []))
-            case["evidence_path"] = str(dissect_path)
-            case["evidence_hashes"] = hashes
-            case["evidence_file_hashes"] = [
-                {"path": h["path"], "sha256": h["sha256"], "md5": h["md5"], "size_bytes": h["size_bytes"]}
-                for h in file_hashes
-            ]
-            case["image_metadata"] = metadata
-            case["os_type"] = detected_os_type
+            # Set top-level evidence fields for backward compatibility
+            # with V1 code paths.  Only overwrite when this is the first
+            # (or only) image so that multi-image cases do not silently
+            # replace the first image's metadata with the latest upload.
+            is_first_image = len(image_states) <= 1 or not case.get("evidence_path")
+            if is_first_image:
+                case["evidence_mode"] = evidence_payload["mode"]
+                case["source_path"] = evidence_payload["source_path"]
+                case["stored_path"] = evidence_payload["stored_path"]
+                case["uploaded_files"] = list(evidence_payload.get("uploaded_files", []))
+                case["evidence_path"] = str(dissect_path)
+                case["evidence_hashes"] = hashes
+                case["evidence_file_hashes"] = [
+                    {"path": h["path"], "sha256": h["sha256"], "md5": h["md5"], "size_bytes": h["size_bytes"]}
+                    for h in file_hashes
+                ]
+                case["image_metadata"] = metadata
+                case["os_type"] = detected_os_type
             case["available_artifacts"] = available_artifacts
 
             # Invalidate case-level downstream state only when no other
@@ -442,6 +446,12 @@ def intake_image_evidence(case_id: str, image_id: str) -> Response | tuple[Respo
                 ANALYSIS_PROGRESS.pop(case_id, None)
                 CHAT_PROGRESS.pop(case_id, None)
 
+            # Capture the flag while still under the lock so that the
+            # disk cleanup below uses a consistent snapshot.  This
+            # prevents a TOCTOU race where another thread adds parse
+            # results between the lock release and the cleanup check.
+            should_clean_case_level = not other_images_have_results
+
         # Remove stale on-disk artifacts so disk fallbacks cannot
         # resurrect results from prior evidence.
         case_dir_path = Path(str(case_dir))
@@ -459,7 +469,7 @@ def intake_image_evidence(case_id: str, image_id: str) -> Response | tuple[Respo
         # Only clean case-level legacy parsed dir and stale analysis
         # files when no other image retains parse results.  Otherwise
         # adding a new image would destroy on-disk state for prior images.
-        if not other_images_have_results:
+        if should_clean_case_level:
             parsed_dir_legacy = case_dir_path / "parsed"
             if parsed_dir_legacy.is_dir():
                 shutil.rmtree(parsed_dir_legacy, ignore_errors=True)
@@ -570,10 +580,15 @@ def start_image_parse(case_id: str, image_id: str) -> tuple[Response, int]:
         PARSE_PROGRESS[progress_key] = new_progress(status="running")
 
         # Also set the case-level progress for backward compat.
-        # Use copy.copy() to avoid a shared reference -- otherwise
-        # mutations to the per-image progress dict would silently
-        # affect the case-level progress (and vice-versa).
-        PARSE_PROGRESS[case_id] = copy.copy(PARSE_PROGRESS[progress_key])
+        # Build a fresh progress dict rather than sharing a reference
+        # with the per-image entry -- otherwise mutations to one would
+        # silently affect the other.  We cannot use deepcopy because
+        # the dict contains a threading.Event (unpicklable), so we
+        # create a new progress entry with the same status instead.
+        img_progress = PARSE_PROGRESS[progress_key]
+        PARSE_PROGRESS[case_id] = new_progress(
+            status=str(img_progress.get("status", "running")),
+        )
 
         case["status"] = "running"
         case["selected_artifacts"] = list(parse_artifacts)
@@ -768,13 +783,39 @@ def _run_image_parse(
             img_state["artifact_csv_paths"] = csv_map
             img_state["csv_output_dir"] = parsed_dir
 
-            # Also update case-level for backward compat.
-            case["selected_artifacts"] = list(parse_artifacts)
-            case["analysis_artifacts"] = list(analysis_artifacts)
-            case["artifact_options"] = list(artifact_options)
+            # Merge artifacts across images into case-level lists for
+            # backward compatibility, rather than overwriting with only
+            # this image's selections.
+            existing_selected = set(case.get("selected_artifacts", []))
+            existing_analysis = set(case.get("analysis_artifacts", []))
+            existing_options = {
+                str(opt.get("artifact_key", "")): opt
+                for opt in case.get("artifact_options", [])
+            }
+            existing_selected.update(parse_artifacts)
+            existing_analysis.update(analysis_artifacts)
+            for opt in artifact_options:
+                opt_key = str(opt.get("artifact_key", ""))
+                if opt_key:
+                    existing_options[opt_key] = opt
+
+            case["selected_artifacts"] = sorted(existing_selected)
+            case["analysis_artifacts"] = sorted(existing_analysis)
+            case["artifact_options"] = list(existing_options.values())
             case["parse_results"] = results
             case["artifact_csv_paths"] = csv_map
             case["csv_output_dir"] = parsed_dir
+
+            # Check if any other image is still parsing.  Only
+            # transition the case to "parsed" when all images are
+            # done, to avoid a race where one thread sets "parsed"
+            # while another image is still running.
+            any_image_still_running = any(
+                iid != image_id
+                and _progress_key(case_id, iid) in PARSE_PROGRESS
+                and PARSE_PROGRESS[_progress_key(case_id, iid)].get("status") == "running"
+                for iid in image_states
+            )
 
         completed = sum(1 for item in results if item.get("success"))
         failed = len(results) - completed
@@ -789,13 +830,24 @@ def _run_image_parse(
                 "failed_artifacts": failed,
             },
         )
-        mark_case_status(case_id, "parsed")
+        if not any_image_still_running:
+            mark_case_status(case_id, "parsed")
     except Exception:
         LOGGER.exception("Background parse failed for case %s image %s", case_id, image_id)
         user_message = (
             "Parsing failed due to an internal error. "
             "Check logs and retry after confirming the evidence file is readable."
         )
-        mark_case_status(case_id, "error")
+        # Only set case to "error" if no other image is still running.
+        with STATE_LOCK:
+            image_states = case.get("image_states", {})
+            any_still_running = any(
+                iid != image_id
+                and _progress_key(case_id, iid) in PARSE_PROGRESS
+                and PARSE_PROGRESS[_progress_key(case_id, iid)].get("status") == "running"
+                for iid in image_states
+            )
+        if not any_still_running:
+            mark_case_status(case_id, "error")
         set_progress_status(PARSE_PROGRESS, progress_key, "failed", user_message)
         emit_progress(PARSE_PROGRESS, progress_key, {"type": "parse_failed", "error": user_message})
