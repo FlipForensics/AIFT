@@ -157,6 +157,41 @@ class CaseManager:
         logger.info("Added image %s to case %s", image_id, case_id)
         return image_id
 
+    def delete_image(self, case_id: str, image_id: str) -> str:
+        """Remove an image and its directory from an existing case.
+
+        Deletes the image directory (``images/<image_id>/``) and all its
+        contents from disk, and logs the deletion to the audit trail.
+
+        Args:
+            case_id: UUID of the parent case.
+            image_id: UUID of the image to remove.
+
+        Returns:
+            The removed image UUID string.
+
+        Raises:
+            FileNotFoundError: If the case directory or image directory
+                does not exist.
+        """
+        case_dir = self._require_case_dir(case_id)
+        image_dir = case_dir / "images" / image_id
+        if not image_dir.is_dir():
+            raise FileNotFoundError(
+                f"Image directory not found: {image_dir}"
+            )
+
+        shutil.rmtree(str(image_dir), ignore_errors=False)
+
+        audit = AuditLogger(case_dir)
+        audit.log("image_deleted", {
+            "case_id": case_id,
+            "image_id": image_id,
+        })
+
+        logger.info("Deleted image %s from case %s", image_id, case_id)
+        return image_id
+
     # ------------------------------------------------------------------
     # Query helpers
     # ------------------------------------------------------------------

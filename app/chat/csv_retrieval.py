@@ -29,6 +29,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ._utils import stringify_chat_value as _stringify
+
 __all__ = [
     "retrieve_csv_data",
     "build_csv_aliases",
@@ -48,20 +50,6 @@ CSV_RETRIEVAL_KEYWORDS = (
 )
 
 CSV_ROW_LIMIT = 500
-
-
-def _stringify(value: Any, default: str = "") -> str:
-    """Convert *value* to a stripped string, returning *default* when empty.
-
-    Args:
-        value: Arbitrary value to stringify.
-        default: Fallback string when *value* is *None* or blank.
-
-    Returns:
-        The stripped string representation or *default*.
-    """
-    text = str(value).strip() if value is not None else ""
-    return text or default
 
 
 def retrieve_csv_data(

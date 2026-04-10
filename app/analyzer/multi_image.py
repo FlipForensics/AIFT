@@ -203,6 +203,12 @@ def run_multi_image_analysis(
         if cancel_check is not None and cancel_check():
             raise AnalysisCancelledError("Analysis cancelled by user.")
 
+        # Update the analyzer's os_type for the current image so that
+        # OS-specific analysis logic uses the correct operating system.
+        analyzer.os_type = str(
+            metadata.get("os_type", "unknown")
+        )
+
         # Clear stale CSV paths from prior image iterations so that
         # analyze_artifact() and citation validation always reference the
         # current image's data — not a leftover path from an earlier image

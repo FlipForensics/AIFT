@@ -7,8 +7,13 @@ as CSV retrieval utilities for injecting artifact data into chat prompts.
 Modules:
     manager: Core ChatManager class (history, context, token budgeting).
     csv_retrieval: Heuristic CSV matching and row formatting.
+    _utils: Shared helpers (stringify) used by sibling modules.
+
+Attributes:
+    stringify_chat_value: Re-exported shared string-coercion helper.
 """
 
+from ._utils import stringify_chat_value
 from .manager import ChatManager
 
-__all__ = ["ChatManager", "csv_retrieval", "manager"]
+__all__ = ["ChatManager", "csv_retrieval", "manager", "stringify_chat_value"]

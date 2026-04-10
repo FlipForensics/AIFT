@@ -7,12 +7,17 @@ task runners for the AIFT forensic triage wizard.
 Sub-modules:
 
 - ``state``: Constants, global state dicts, SSE streaming, case management.
-- ``evidence``: Archive extraction, file upload, evidence resolution, CSV/hash.
+- ``evidence``: CSV/hash helpers, route handlers, backward-compatible re-exports.
+- ``evidence_archive``: Archive extraction (ZIP, tar, 7z).
+- ``evidence_upload``: Upload handling and evidence path resolution.
+- ``evidence_utils``: Hashing and Dissect target opening utilities.
 - ``artifacts``: Artifact option normalisation, profile CRUD, date validation.
-- ``tasks``: Background parse/analysis/chat runners and prompt helpers.
+- ``tasks``: Background parse/analysis runners and prompt helpers.
+- ``tasks_chat``: Background chat runner and chat-specific prompt helpers.
 - ``handlers``: Core blueprint (UI, cases, settings) and route registration.
 - ``analysis``: AI analysis routes.
 - ``chat``: Chat routes.
+- ``images``: Multi-image management routes.
 """
 
 from __future__ import annotations

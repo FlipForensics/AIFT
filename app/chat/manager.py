@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..audit import _utc_now_iso8601_ms
+from ._utils import stringify_chat_value as _stringify
 from .csv_retrieval import retrieve_csv_data as _retrieve_csv_data
 
 __all__ = ["ChatManager"]
@@ -38,20 +39,6 @@ __all__ = ["ChatManager"]
 log = logging.getLogger(__name__)
 
 VALID_ROLES = frozenset({"user", "assistant"})
-
-
-def _stringify(value: Any, default: str = "") -> str:
-    """Convert *value* to a stripped string, returning *default* when empty.
-
-    Args:
-        value: Arbitrary value to stringify.
-        default: Fallback string when *value* is *None* or blank.
-
-    Returns:
-        The stripped string representation or *default*.
-    """
-    text = str(value).strip() if value is not None else ""
-    return text or default
 
 
 class ChatManager:
@@ -226,9 +213,17 @@ class ChatManager:
         single multi-section text string suitable for injection into an
         AI system prompt.
 
+        For multi-image results (containing an ``"images"`` dict), each
+        image's per-artifact findings are grouped under an
+        ``=== Image: <label> ===`` header with its summary, followed by
+        a ``=== Cross-Image Correlation ===`` section when a cross-image
+        summary is present.  Single-image (V1) results are handled with
+        the original flat layout.
+
         Args:
-            analysis_results: The full analysis results mapping (may
-                contain ``summary`` and ``per_artifact`` keys).
+            analysis_results: The full analysis results mapping.  May
+                contain V1 keys (``summary``, ``per_artifact``) or
+                multi-image keys (``images``, ``cross_image_summary``).
             investigation_context: Free-text investigation context
                 provided by the analyst.
             metadata: Evidence metadata mapping (hostname, os_version,
@@ -453,10 +448,17 @@ class ChatManager:
         """Assemble context sections shared by build and rebuild methods.
 
         Extracts metadata fields, formats the standard sections, and
-        appends the caller-provided findings section.  For multi-image
-        results (containing an ``images`` dict), each image's summary
-        is included with its label, and the cross-image summary is
-        appended if present.
+        appends the caller-provided findings section.
+
+        For **multi-image** results (presence of an ``images`` dict):
+
+        * Each image is delineated with an ``=== Image: <label> ===``
+          header followed by its per-artifact findings and summary.
+        * A ``=== Cross-Image Correlation ===`` section is appended when
+          a ``cross_image_summary`` is present.
+
+        For **single-image** (V1) results the original flat layout is
+        used: system metadata, executive summary, and findings.
 
         Args:
             analysis_results: The full analysis results mapping.
@@ -482,7 +484,7 @@ class ChatManager:
             default="No investigation context provided.",
         )
 
-        sections = [
+        sections: list[str] = [
             f"Investigation Context:\n{context_text}",
         ]
 
@@ -490,14 +492,11 @@ class ChatManager:
         images_data = analysis.get("images")
         if isinstance(images_data, Mapping) and images_data:
             system_lines: list[str] = []
-            per_image_summaries: list[str] = []
             for image_id, img_data in images_data.items():
                 if not isinstance(img_data, Mapping):
                     continue
                 label = _stringify(img_data.get("label"), default=image_id)
-                img_summary = _stringify(img_data.get("summary"), default="No summary.")
                 system_lines.append(f"- {label}")
-                per_image_summaries.append(f"### {label}\n{img_summary}")
 
             sections.append(
                 "Systems Under Analysis:\n" + "\n".join(system_lines)
@@ -510,15 +509,34 @@ class ChatManager:
                 )
             )
 
+            # Per-image sections: findings + summary grouped by image.
+            for image_id, img_data in images_data.items():
+                if not isinstance(img_data, Mapping):
+                    continue
+                label = _stringify(img_data.get("label"), default=image_id)
+                img_summary = _stringify(img_data.get("summary"), default="No summary.")
+
+                raw = img_data.get("per_artifact")
+                items = self._normalize_findings_items(raw)
+                findings_tuples = self._extract_findings_tuples(items)
+                if findings_tuples:
+                    artifact_lines = "\n".join(
+                        f"- {name}: {text}" for name, text in findings_tuples
+                    )
+                else:
+                    artifact_lines = "- No per-artifact findings available."
+
+                sections.append(
+                    f"=== Image: {label} ===\n"
+                    f"{artifact_lines}\n"
+                    f"Summary: {img_summary}"
+                )
+
             # Cross-image summary.
             cross_summary = _stringify(analysis.get("cross_image_summary"))
             if cross_summary:
-                sections.append(f"Cross-System Correlation:\n{cross_summary}")
-
-            # Per-image summaries.
-            if per_image_summaries:
                 sections.append(
-                    "Per-Image Summaries:\n" + "\n\n".join(per_image_summaries)
+                    f"=== Cross-Image Correlation ===\n{cross_summary}"
                 )
         else:
             # Single-image layout.
@@ -528,7 +546,10 @@ class ChatManager:
                 f"- OS: {os_value}\n"
                 f"- Domain: {domain}"
             )
-            summary = _stringify(analysis.get("summary"), default="No executive summary available.")
+            summary = _stringify(
+                analysis.get("summary") or analysis.get("executive_summary"),
+                default="No executive summary available.",
+            )
             sections.append(f"Executive Summary:\n{summary}")
 
         sections.append(findings_section)
@@ -574,15 +595,16 @@ class ChatManager:
     def _format_multi_image_findings(self, images_data: Mapping[str, Any]) -> str:
         """Format per-artifact findings from a multi-image analysis result.
 
-        Groups findings by image label, with each artifact prefixed by
-        the image label for clarity.
+        Groups findings by image label using ``=== Image: <label> ===``
+        headers for clear delineation in the AI prompt context.
 
         Args:
             images_data: The ``images`` dict from analysis results, keyed
                 by image ID with ``label`` and ``per_artifact`` values.
 
         Returns:
-            A formatted string with image-grouped findings.
+            A formatted string with image-grouped findings, each group
+            headed by an ``=== Image: ... ===`` line.
         """
         all_findings: list[str] = []
         for image_id, img_data in images_data.items():
@@ -593,11 +615,13 @@ class ChatManager:
             items = self._normalize_findings_items(raw)
             findings = self._extract_findings_tuples(items)
 
+            all_findings.append(f"=== Image: {label} ===")
             if findings:
-                all_findings.append(f"## {label}")
                 all_findings.extend(
                     f"- {name}: {text}" for name, text in findings
                 )
+            else:
+                all_findings.append("- No per-artifact findings available.")
 
         return "\n".join(all_findings) if all_findings else "- No per-artifact findings available."
 
