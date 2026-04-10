@@ -208,31 +208,33 @@ def delete_image(case_id: str, image_id: str) -> tuple[Response, int]:
         return error_response("Invalid image identifier.", 400)
 
     # Prevent deletion while parsing or analysis is running.
+    # Hold the lock through the disk deletion to prevent a race where
+    # another thread starts a parse between the status check and deletion.
     with STATE_LOCK:
         case_status = str(case.get("status", "")).strip().lower()
-    if case_status == "running":
-        return error_response(
-            "Cannot remove an image while parsing or analysis is running.", 409,
-        )
+        if case_status == "running":
+            return error_response(
+                "Cannot remove an image while parsing or analysis is running.", 409,
+            )
 
-    # Remove the image directory from disk.
-    try:
-        cm.delete_image(case_id, image_id)
-    except FileNotFoundError:
-        return error_response(f"Image not found: {image_id}", 404)
-    except ValueError:
-        return error_response("Invalid image identifier.", 400)
-    except OSError:
-        LOGGER.exception(
-            "Failed to delete image directory for case %s image %s",
-            case_id, image_id,
-        )
-        return error_response(
-            "Failed to remove the image directory from disk.", 500,
-        )
+        # Remove the image directory from disk while still holding the lock
+        # so that no concurrent operation can begin on this image.
+        try:
+            cm.delete_image(case_id, image_id)
+        except FileNotFoundError:
+            return error_response(f"Image not found: {image_id}", 404)
+        except ValueError:
+            return error_response("Invalid image identifier.", 400)
+        except OSError:
+            LOGGER.exception(
+                "Failed to delete image directory for case %s image %s",
+                case_id, image_id,
+            )
+            return error_response(
+                "Failed to remove the image directory from disk.", 500,
+            )
 
-    # Clear in-memory state for the image.
-    with STATE_LOCK:
+        # Clear in-memory state for the image (still under STATE_LOCK).
         # Remove from the images list.
         images_list = case.get("images", [])
         case["images"] = [
@@ -412,7 +414,7 @@ def intake_image_evidence(case_id: str, image_id: str) -> Response | tuple[Respo
                 ]
                 case["image_metadata"] = metadata
                 case["os_type"] = detected_os_type
-            case["available_artifacts"] = available_artifacts
+                case["available_artifacts"] = available_artifacts
 
             # Invalidate case-level downstream state only when no other
             # image has parse results.  This prevents adding Image 2 from
@@ -817,6 +819,12 @@ def _run_image_parse(
                 for iid in image_states
             )
 
+            # Mark case as "parsed" while still holding the lock so that no
+            # concurrent thread can start a new parse between the check and
+            # the status transition.
+            if not any_image_still_running:
+                mark_case_status(case_id, "parsed")
+
         completed = sum(1 for item in results if item.get("success"))
         failed = len(results) - completed
         set_progress_status(PARSE_PROGRESS, progress_key, "completed")
@@ -830,8 +838,6 @@ def _run_image_parse(
                 "failed_artifacts": failed,
             },
         )
-        if not any_image_still_running:
-            mark_case_status(case_id, "parsed")
     except Exception:
         LOGGER.exception("Background parse failed for case %s image %s", case_id, image_id)
         user_message = (

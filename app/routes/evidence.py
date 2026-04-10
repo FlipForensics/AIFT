@@ -285,19 +285,25 @@ def _cleanup_parsed_output(case_dir: Path, prev_csv_output_dir: str) -> None:
     except (TypeError, ValueError):
         return
 
-    # Safety: refuse to delete filesystem roots or very short paths that
-    # could indicate misconfiguration.
+    # Safety: refuse to delete filesystem roots or paths outside the
+    # known cases root.  The part-count heuristic is not reliable across
+    # platforms (e.g. ``C:\foo`` has 3 parts on Windows), so we anchor
+    # against the case directory's parent (i.e. the cases root) instead.
     if resolved_prev == resolved_prev.root or resolved_prev == resolved_prev.anchor:
         LOGGER.warning(
             "Refusing to remove parsed output at filesystem root: %s",
             resolved_prev,
         )
         return
-    if len(resolved_prev.parts) <= 2:
-        LOGGER.warning(
-            "Refusing to remove parsed output with suspiciously short path: %s",
-            resolved_prev,
-        )
+    cases_root = resolved_case.parent
+    try:
+        if not resolved_prev.is_relative_to(cases_root):
+            LOGGER.warning(
+                "Refusing to remove parsed output outside cases root: %s",
+                resolved_prev,
+            )
+            return
+    except (TypeError, ValueError):
         return
 
     LOGGER.info("Removing stale external parsed output: %s", resolved_prev)

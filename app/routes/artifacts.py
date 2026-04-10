@@ -602,12 +602,22 @@ def _purge_stale_parsed_data(case_dir: Path, prev_csv_output_dir: str) -> None:
     resolved_default = default_parsed.resolve()
     if resolved_prev == resolved_default:
         return  # Already handled above.
-    # Safety: refuse to delete filesystem roots or suspiciously short paths.
+    # Safety: refuse to delete filesystem roots or paths outside the
+    # known cases root.  The part-count heuristic is not reliable across
+    # platforms (e.g. ``C:\foo`` has 3 parts on Windows), so we anchor
+    # against the case directory's parent (i.e. the cases root) instead.
     if resolved_prev == resolved_prev.root or resolved_prev == resolved_prev.anchor:
         LOGGER.warning("Refusing to remove parsed output at filesystem root: %s", resolved_prev)
         return
-    if len(resolved_prev.parts) <= 2:
-        LOGGER.warning("Refusing to remove parsed output with suspiciously short path: %s", resolved_prev)
+    cases_root = case_dir.resolve().parent
+    try:
+        if not resolved_prev.is_relative_to(cases_root):
+            LOGGER.warning(
+                "Refusing to remove parsed output outside cases root: %s",
+                resolved_prev,
+            )
+            return
+    except (TypeError, ValueError):
         return
     LOGGER.info("Removing stale external parsed output: %s", resolved_prev)
     shutil.rmtree(resolved_prev, ignore_errors=True)

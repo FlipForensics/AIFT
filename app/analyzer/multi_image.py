@@ -203,6 +203,12 @@ def run_multi_image_analysis(
         if cancel_check is not None and cancel_check():
             raise AnalysisCancelledError("Analysis cancelled by user.")
 
+        # Save original analyzer state so we can restore it on failure,
+        # preventing a partially-mutated analyzer from leaking into the
+        # caller if an exception is caught externally.
+        saved_os_type = analyzer.os_type
+        saved_csv_paths = dict(analyzer.artifact_csv_paths)
+
         # Update the analyzer's os_type for the current image so that
         # OS-specific analysis logic uses the correct operating system.
         analyzer.os_type = str(
@@ -215,40 +221,47 @@ def run_multi_image_analysis(
         # that shares the same artifact key.
         analyzer.artifact_csv_paths.clear()
 
-        # Register the image's parsed CSV paths into the analyzer
-        _register_image_csv_paths(analyzer, artifact_keys, parsed_dir)
+        try:
+            # Register the image's parsed CSV paths into the analyzer
+            _register_image_csv_paths(analyzer, artifact_keys, parsed_dir)
 
-        # Build investigation context with image label prefix
-        image_context = (
-            f"System: {label}\n\n{investigation_context}"
-        )
-
-        per_artifact_results: list[dict[str, Any]] = []
-        for artifact_key in artifact_keys:
-            if cancel_check is not None and cancel_check():
-                raise AnalysisCancelledError("Analysis cancelled by user.")
-
-            result = analyzer.analyze_artifact(
-                artifact_key=str(artifact_key),
-                investigation_context=image_context,
-                progress_callback=progress_callback,
+            # Build investigation context with image label prefix
+            image_context = (
+                f"System: {label}\n\n{investigation_context}"
             )
-            per_artifact_results.append(result)
 
-            if progress_callback is not None:
-                emit_analysis_progress(
-                    progress_callback,
-                    str(artifact_key),
-                    "complete",
-                    {**result, "image_id": image_id, "image_label": label},
+            per_artifact_results: list[dict[str, Any]] = []
+            for artifact_key in artifact_keys:
+                if cancel_check is not None and cancel_check():
+                    raise AnalysisCancelledError("Analysis cancelled by user.")
+
+                result = analyzer.analyze_artifact(
+                    artifact_key=str(artifact_key),
+                    investigation_context=image_context,
+                    progress_callback=progress_callback,
                 )
+                per_artifact_results.append(result)
 
-        image_results[image_id] = {
-            "label": label,
-            "per_artifact": per_artifact_results,
-            "summary": "",
-            "metadata": metadata,
-        }
+                if progress_callback is not None:
+                    emit_analysis_progress(
+                        progress_callback,
+                        str(artifact_key),
+                        "complete",
+                        {**result, "image_id": image_id, "image_label": label},
+                    )
+
+            image_results[image_id] = {
+                "label": label,
+                "per_artifact": per_artifact_results,
+                "summary": "",
+                "metadata": metadata,
+            }
+        except Exception:
+            # Restore analyzer state so the caller does not inherit a
+            # partially-mutated object from this failed image iteration.
+            analyzer.os_type = saved_os_type
+            analyzer.artifact_csv_paths = saved_csv_paths
+            raise
 
     # ------------------------------------------------------------------
     # Phase 2: Per-image summary
@@ -457,6 +470,11 @@ def _run_cross_image_correlation(
             "status": "success",
         })
     except Exception as error:
+        # Re-raise cancellation so the caller can propagate it correctly
+        # instead of silently swallowing it into a summary string.
+        from .core import AnalysisCancelledError
+        if isinstance(error, AnalysisCancelledError):
+            raise
         duration_seconds = perf_counter() - start_time
         summary = f"Cross-image correlation failed: {error}"
         analyzer._audit_log("analysis_completed", {
