@@ -286,19 +286,22 @@ def run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> Non
                     compressed_findings=compressed,
                 )
 
-        # Collect additional parsed directories from multi-image state.
+        # Collect additional parsed directories from multi-image state,
+        # excluding the primary parsed dir to avoid searching it twice.
+        primary_parsed_dir = resolve_case_parsed_dir(case_snapshot)
         additional_parsed_dirs: list[str] = []
         image_states = case_snapshot.get("image_states", {})
         if isinstance(image_states, dict) and len(image_states) > 1:
+            primary_resolved = str(primary_parsed_dir.resolve())
             for img_state in image_states.values():
                 if isinstance(img_state, dict):
                     csv_dir = str(img_state.get("csv_output_dir", "")).strip()
-                    if csv_dir:
+                    if csv_dir and str(Path(csv_dir).resolve()) != primary_resolved:
                         additional_parsed_dirs.append(csv_dir)
 
         retrieved_payload = chat_manager.retrieve_csv_data(
             question=message,
-            parsed_dir=resolve_case_parsed_dir(case_snapshot),
+            parsed_dir=primary_parsed_dir,
             additional_parsed_dirs=additional_parsed_dirs if additional_parsed_dirs else None,
         )
         retrieved_artifacts: list[str] = []

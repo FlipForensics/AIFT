@@ -431,6 +431,11 @@
     if (!el.summaryOut) return;
     el.summaryOut.innerHTML = "";
 
+    // Remove any previously appended per-image summary containers so
+    // repeated calls (e.g. SSE reconnects) do not create duplicates.
+    var oldPerImage = document.querySelector(".per-image-summaries");
+    if (oldPerImage) oldPerImage.remove();
+
     // Cross-image summary section.
     var crossSection = document.getElementById("cross-system-analysis");
     if (crossSection) {

@@ -356,5 +356,159 @@ class TestMultiImageTaskFunction(unittest.TestCase):
         self.assertIn("config_snapshot", params)
 
 
+class TestChatManagerNormalizationHelpers(unittest.TestCase):
+    """Unit tests for ChatManager static helper methods used in multi-image flows."""
+
+    def test_normalize_findings_items_with_dict(self) -> None:
+        """_normalize_findings_items should convert a dict into a list of dicts."""
+        from app.chat.manager import ChatManager
+        raw = {"runkeys": "Persistence found.", "evtx": {"analysis": "Logins."}}
+        items = ChatManager._normalize_findings_items(raw)
+        self.assertEqual(len(items), 2)
+        names = [item.get("artifact_name") for item in items]
+        self.assertIn("runkeys", names)
+        self.assertIn("evtx", names)
+
+    def test_normalize_findings_items_with_list(self) -> None:
+        """_normalize_findings_items should pass through a list unchanged."""
+        from app.chat.manager import ChatManager
+        raw = [{"artifact_name": "runkeys", "analysis": "Clean."}]
+        items = ChatManager._normalize_findings_items(raw)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["artifact_name"], "runkeys")
+
+    def test_normalize_findings_items_with_none(self) -> None:
+        """_normalize_findings_items should return empty list for None."""
+        from app.chat.manager import ChatManager
+        self.assertEqual(ChatManager._normalize_findings_items(None), [])
+
+    def test_extract_findings_tuples(self) -> None:
+        """_extract_findings_tuples should produce (name, text) pairs."""
+        from app.chat.manager import ChatManager
+        items = [
+            {"artifact_name": "runkeys", "analysis": "Persistence found."},
+            {"artifact_name": "empty", "analysis": ""},
+            "raw string finding",
+        ]
+        tuples = ChatManager._extract_findings_tuples(items)
+        # Empty analysis text should be excluded.
+        self.assertEqual(len(tuples), 2)
+        self.assertEqual(tuples[0], ("runkeys", "Persistence found."))
+        self.assertEqual(tuples[1][0], "Unknown Artifact")
+        self.assertEqual(tuples[1][1], "raw string finding")
+
+    def test_extract_findings_tuples_empty_list(self) -> None:
+        """_extract_findings_tuples should return empty list for empty input."""
+        from app.chat.manager import ChatManager
+        self.assertEqual(ChatManager._extract_findings_tuples([]), [])
+
+
+class TestMultiImageChatContextEdgeCases(unittest.TestCase):
+    """Edge case tests for ChatManager multi-image context assembly."""
+
+    def setUp(self) -> None:
+        """Create a temporary case directory and ChatManager."""
+        self._tmpdir = TemporaryDirectory()
+        self.case_dir = self._tmpdir.name
+        from app.chat.manager import ChatManager
+        self.manager = ChatManager(self.case_dir)
+
+    def tearDown(self) -> None:
+        """Clean up the temporary directory."""
+        self._tmpdir.cleanup()
+
+    def test_empty_images_dict_falls_through_to_single_image(self) -> None:
+        """An empty images dict should use the single-image layout."""
+        results: dict[str, Any] = {
+            "images": {},
+            "summary": "Single-image summary.",
+            "per_artifact": [
+                {"artifact_name": "runkeys", "analysis": "Clean."},
+            ],
+        }
+        context = self.manager.build_chat_context(
+            analysis_results=results,
+            investigation_context="Test.",
+            metadata={"hostname": "HOST1"},
+        )
+        # Should use single-image layout (Executive Summary present).
+        self.assertIn("Executive Summary", context)
+        self.assertIn("Single-image summary.", context)
+
+    def test_image_with_no_per_artifact(self) -> None:
+        """An image with no per_artifact should still appear with a placeholder."""
+        results: dict[str, Any] = {
+            "images": {
+                "img1": {
+                    "label": "PC-Empty",
+                    "summary": "No artifacts parsed.",
+                },
+            },
+        }
+        context = self.manager.build_chat_context(
+            analysis_results=results,
+            investigation_context="Test.",
+            metadata={},
+        )
+        self.assertIn("PC-Empty", context)
+        self.assertIn("No per-artifact findings available", context)
+
+    def test_multi_image_findings_without_cross_summary(self) -> None:
+        """Multi-image results without cross_image_summary should not include correlation section."""
+        results: dict[str, Any] = {
+            "images": {
+                "img1": {
+                    "label": "PC01",
+                    "per_artifact": [
+                        {"artifact_name": "runkeys", "analysis": "Clean."},
+                    ],
+                    "summary": "Nothing found.",
+                },
+            },
+        }
+        context = self.manager.build_chat_context(
+            analysis_results=results,
+            investigation_context="Test.",
+            metadata={},
+        )
+        self.assertIn("PC01", context)
+        self.assertNotIn("Cross-Image Correlation", context)
+
+    def test_retrieve_csv_data_with_no_additional_dirs_returns_primary(self) -> None:
+        """retrieve_csv_data with no additional dirs should return the primary result."""
+        primary_dir = Path(self.case_dir) / "parsed"
+        primary_dir.mkdir(parents=True, exist_ok=True)
+        # Create a dummy CSV to ensure the primary dir has content.
+        (primary_dir / "runkeys.csv").write_text("header\nvalue", encoding="utf-8")
+
+        result = self.manager.retrieve_csv_data(
+            question="test question",
+            parsed_dir=str(primary_dir),
+            additional_parsed_dirs=None,
+        )
+        # Should return without error (may or may not match).
+        self.assertIn("retrieved", result)
+
+
+class TestMultiImageExecSummaryJSCleanup(unittest.TestCase):
+    """Verify the JS cleans up stale per-image summary containers."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Read the analysis.js source file."""
+        js_path = Path(__file__).resolve().parents[1] / "static" / "js" / "analysis.js"
+        cls.js_content = js_path.read_text(encoding="utf-8")
+
+    def test_renderMultiImageExecSummary_removes_old_containers(self) -> None:
+        """renderMultiImageExecSummary should remove old per-image-summaries before appending."""
+        # The function should contain cleanup logic for .per-image-summaries.
+        # Find the function body and verify the cleanup is before the append.
+        idx_func = self.js_content.index("function renderMultiImageExecSummary")
+        idx_remove = self.js_content.index('querySelector(".per-image-summaries")', idx_func)
+        idx_append = self.js_content.index("appendChild(perImageContainer)", idx_func)
+        self.assertLess(idx_remove, idx_append,
+                        "Cleanup of old per-image-summaries should happen before appending new ones")
+
+
 if __name__ == "__main__":
     unittest.main()
