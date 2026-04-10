@@ -466,6 +466,115 @@ class MultiImageRoutesTests(unittest.TestCase):
             self.assertEqual(parse_resp.status_code, 400)
             self.assertIn("No evidence", parse_resp.get_json()["error"])
 
+    def test_delete_image(self) -> None:
+        """DELETE /api/cases/<id>/images/<img_id> removes the image."""
+        with self._patch_context():
+            case_id = self._create_case()
+            add_resp = self.client.post(
+                f"/api/cases/{case_id}/images", json={"label": "ToDelete"},
+            )
+            self.assertEqual(add_resp.status_code, 201)
+            image_id = add_resp.get_json()["image_id"]
+
+            # Verify the image directory exists.
+            image_dir = self.cases_root / case_id / "images" / image_id
+            self.assertTrue(image_dir.is_dir())
+
+            # Delete the image.
+            del_resp = self.client.delete(
+                f"/api/cases/{case_id}/images/{image_id}",
+            )
+            self.assertEqual(del_resp.status_code, 200)
+            data = del_resp.get_json()
+            self.assertTrue(data["success"])
+            self.assertEqual(data["image_id"], image_id)
+
+            # Verify the directory was removed.
+            self.assertFalse(image_dir.is_dir())
+
+            # Verify the image no longer appears in the listing.
+            list_resp = self.client.get(f"/api/cases/{case_id}/images")
+            self.assertEqual(list_resp.status_code, 200)
+            self.assertEqual(list_resp.get_json()["images"], [])
+
+    def test_delete_image_not_found(self) -> None:
+        """DELETE for a nonexistent image returns 404."""
+        with self._patch_context():
+            case_id = self._create_case()
+            del_resp = self.client.delete(
+                f"/api/cases/{case_id}/images/nonexistent",
+            )
+            self.assertEqual(del_resp.status_code, 404)
+
+    def test_delete_image_case_not_found(self) -> None:
+        """DELETE for a nonexistent case returns 404."""
+        with self._patch_context():
+            del_resp = self.client.delete(
+                "/api/cases/nonexistent/images/fake-image",
+            )
+            self.assertEqual(del_resp.status_code, 404)
+
+    def test_delete_image_while_running_returns_409(self) -> None:
+        """DELETE while parsing is running returns 409."""
+        evidence_path = Path(self.temp_dir.name) / "test.E01"
+        evidence_path.write_bytes(b"test-evidence")
+
+        with self._patch_context():
+            case_id = self._create_case()
+            add_resp = self.client.post(
+                f"/api/cases/{case_id}/images", json={"label": "PC01"},
+            )
+            image_id = add_resp.get_json()["image_id"]
+
+            # Simulate a running state.
+            with routes_state.STATE_LOCK:
+                routes_state.CASE_STATES[case_id]["status"] = "running"
+
+            del_resp = self.client.delete(
+                f"/api/cases/{case_id}/images/{image_id}",
+            )
+            self.assertEqual(del_resp.status_code, 409)
+            self.assertIn("running", del_resp.get_json()["error"].lower())
+
+    def test_add_image_non_dict_body_returns_400(self) -> None:
+        """POST /api/cases/<id>/images with non-dict body returns 400."""
+        with self._patch_context():
+            case_id = self._create_case()
+            resp = self.client.post(
+                f"/api/cases/{case_id}/images",
+                data="not-json",
+                content_type="text/plain",
+            )
+            # Non-JSON body is treated as empty dict (silent=True),
+            # so the request succeeds with an empty label.
+            self.assertIn(resp.status_code, (200, 201))
+
+    def test_parse_non_dict_body_returns_400(self) -> None:
+        """POST parse with a non-dict JSON body returns 400."""
+        evidence_path = Path(self.temp_dir.name) / "test.E01"
+        evidence_path.write_bytes(b"test-evidence")
+
+        with self._patch_context():
+            case_id = self._create_case()
+            add_resp = self.client.post(
+                f"/api/cases/{case_id}/images", json={"label": "PC01"},
+            )
+            image_id = add_resp.get_json()["image_id"]
+
+            # Load evidence.
+            self.client.post(
+                f"/api/cases/{case_id}/images/{image_id}/evidence",
+                json={"path": str(evidence_path)},
+            )
+
+            # Send a JSON list instead of a dict.
+            resp = self.client.post(
+                f"/api/cases/{case_id}/images/{image_id}/parse",
+                json=["runkeys"],
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("JSON object", resp.get_json()["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

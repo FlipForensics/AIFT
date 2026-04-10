@@ -205,6 +205,8 @@ def delete_image(case_id: str, image_id: str) -> tuple[Response, int]:
         cm.get_image_dir(case_id, image_id)
     except FileNotFoundError:
         return error_response(f"Image not found: {image_id}", 404)
+    except ValueError:
+        return error_response("Invalid image identifier.", 400)
 
     # Prevent deletion while parsing or analysis is running.
     with STATE_LOCK:
@@ -219,6 +221,8 @@ def delete_image(case_id: str, image_id: str) -> tuple[Response, int]:
         cm.delete_image(case_id, image_id)
     except FileNotFoundError:
         return error_response(f"Image not found: {image_id}", 404)
+    except ValueError:
+        return error_response("Invalid image identifier.", 400)
     except OSError:
         LOGGER.exception(
             "Failed to delete image directory for case %s image %s",
@@ -251,7 +255,7 @@ def delete_image(case_id: str, image_id: str) -> tuple[Response, int]:
     with STATE_LOCK:
         audit_logger: AuditLogger | None = case.get("audit")
     if audit_logger is not None:
-        audit_logger.log("image_removed", {
+        audit_logger.log("image_deleted", {
             "case_id": case_id,
             "image_id": image_id,
         })
@@ -288,6 +292,8 @@ def intake_image_evidence(case_id: str, image_id: str) -> Response | tuple[Respo
         image_dir = cm.get_image_dir(case_id, image_id)
     except FileNotFoundError:
         return error_response(f"Image not found: {image_id}", 404)
+    except ValueError:
+        return error_response("Invalid image identifier.", 400)
 
     with STATE_LOCK:
         case_dir = case["case_dir"]
@@ -518,6 +524,8 @@ def start_image_parse(case_id: str, image_id: str) -> tuple[Response, int]:
         image_dir = cm.get_image_dir(case_id, image_id)
     except FileNotFoundError:
         return error_response(f"Image not found: {image_id}", 404)
+    except ValueError:
+        return error_response("Invalid image identifier.", 400)
 
     # Verify evidence is loaded for this image.
     with STATE_LOCK:

@@ -646,7 +646,7 @@ def start_parse(case_id: str) -> tuple[Response, int]:
         return error_response(f"Case not found: {case_id}", 404)
 
     # Delegate to image-specific parse if images exist.
-    from .images import _get_or_create_default_image, start_image_parse
+    from .images import start_image_parse
     with STATE_LOCK:
         image_states = case.get("image_states", {})
     if image_states:
