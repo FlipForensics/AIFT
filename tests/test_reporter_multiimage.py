@@ -584,5 +584,94 @@ class TestMultiImageHashDetail(unittest.TestCase):
             self.assertNotIn("Cross-System Analysis", html)
 
 
+class TestIsMultiDetection(unittest.TestCase):
+    """Regression tests for multi-image detection logic.
+
+    The ``is_multi`` flag in ``ReportGenerator.generate()`` must be True
+    whenever multiple metadata or hashes entries are present, even if the
+    analysis ``images`` dict only contains one entry.  This was fixed in
+    commit 943849a.
+    """
+
+    def test_multi_metadata_single_image_key(self) -> None:
+        """is_multi is True when metadata_list has 2 entries but images has 1."""
+        with TemporaryDirectory(prefix="aift-mi-test-") as temp_dir:
+            cases_root = Path(temp_dir) / "cases"
+            reporter = _create_report_generator(cases_root)
+
+            analysis = {
+                "case_id": "case-multi-meta",
+                "case_name": "Multi-Meta Test",
+                "images": {
+                    "img-only": {
+                        "label": "Only Image",
+                        "per_artifact": [],
+                        "summary": "Summary.",
+                    }
+                },
+                "cross_image_summary": None,
+                "model_info": {"provider": "openai", "model": "gpt-4o"},
+            }
+
+            # Two metadata entries but only one image key.
+            metadata = [
+                {"hostname": "HOST-A", "os_version": "Win 10"},
+                {"hostname": "HOST-B", "os_version": "Win 11"},
+            ]
+            hashes = [
+                {"filename": "a.E01", "sha256": "a" * 64, "md5": "b" * 32},
+                {"filename": "b.E01", "sha256": "c" * 64, "md5": "d" * 32},
+            ]
+
+            report_path = reporter.generate(
+                analysis_results=analysis,
+                image_metadata=metadata,
+                evidence_hashes=hashes,
+                investigation_context="Test multi-meta detection.",
+                audit_log_entries=[],
+            )
+
+            html = report_path.read_text(encoding="utf-8")
+            # Multi-image evidence table should be rendered.
+            self.assertIn("evidence-multi-table", html)
+
+    def test_multi_hashes_single_image_key(self) -> None:
+        """is_multi is True when hashes_list has 2 entries but images has 1."""
+        with TemporaryDirectory(prefix="aift-mi-test-") as temp_dir:
+            cases_root = Path(temp_dir) / "cases"
+            reporter = _create_report_generator(cases_root)
+
+            analysis = {
+                "case_id": "case-multi-hash",
+                "case_name": "Multi-Hash Test",
+                "images": {
+                    "img-only": {
+                        "label": "Only Image",
+                        "per_artifact": [],
+                        "summary": "Summary.",
+                    }
+                },
+                "cross_image_summary": None,
+                "model_info": {"provider": "openai", "model": "gpt-4o"},
+            }
+
+            metadata = {"hostname": "HOST-A"}
+            hashes = [
+                {"filename": "a.E01", "sha256": "a" * 64, "md5": "b" * 32},
+                {"filename": "b.E01", "sha256": "c" * 64, "md5": "d" * 32},
+            ]
+
+            report_path = reporter.generate(
+                analysis_results=analysis,
+                image_metadata=metadata,
+                evidence_hashes=hashes,
+                investigation_context="Test multi-hash detection.",
+                audit_log_entries=[],
+            )
+
+            html = report_path.read_text(encoding="utf-8")
+            self.assertIn("evidence-multi-table", html)
+
+
 if __name__ == "__main__":
     unittest.main()

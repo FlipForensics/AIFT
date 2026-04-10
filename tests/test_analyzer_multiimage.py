@@ -547,3 +547,63 @@ class TestBuildCrossImagePromptEdgeCases:
             image_summaries={},
         )
         assert "No investigation context provided" in result
+
+
+class TestArtifactCsvPathsClearedBetweenImages:
+    """Regression test for stale CSV paths leaking across image iterations.
+
+    Before the fix in commit 943849a, ``artifact_csv_paths`` was not cleared
+    between images in ``run_multi_image_analysis``.  If two images shared the
+    same artifact key, the second image's analysis would use CSV data from the
+    first image.
+    """
+
+    def test_csv_paths_are_not_shared_between_images(self, tmp_path: Path) -> None:
+        """Each image's artifact analysis uses its own CSV data, not stale paths."""
+        img1 = _make_image(tmp_path, "img1", "WS01", ["runkeys"])
+        img2 = _make_image(tmp_path, "img2", "SRV01", ["runkeys"])
+
+        # Write distinct data so we can verify which CSV was used.
+        parsed1 = Path(img1["parsed_dir"])
+        parsed2 = Path(img2["parsed_dir"])
+        (parsed1 / "runkeys.csv").write_text(
+            "ts,event\n2025-01-15T10:00:00Z,img1-specific-event\n", encoding="utf-8",
+        )
+        (parsed2 / "runkeys.csv").write_text(
+            "ts,event\n2025-01-15T10:00:00Z,img2-specific-event\n", encoding="utf-8",
+        )
+
+        calls_with_paths: list[Path | None] = []
+
+        class PathTrackingProvider(FakeProvider):
+            """Provider that records artifact_csv_paths at each call."""
+
+            def analyze(self, system_prompt: str, user_prompt: str, max_tokens: int = 4096) -> str:
+                """Track the CSV paths the analyzer has registered."""
+                calls_with_paths.append(
+                    analyzer.artifact_csv_paths.get("runkeys")
+                )
+                return super().analyze(system_prompt, user_prompt, max_tokens)
+
+        provider = PathTrackingProvider(responses=["resp"] * 10)
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.ai_provider = provider
+
+        analyzer.run_multi_image_analysis(
+            images=[img1, img2],
+            investigation_context="Test CSV path isolation",
+        )
+
+        # Calls: img1-artifact, img1-summary, img2-artifact, img2-summary, cross-image
+        assert calls_with_paths[0] is not None, "img1 should have registered runkeys path"
+        assert calls_with_paths[2] is not None, "img2 should have registered runkeys path"
+
+        path1 = calls_with_paths[0]
+        path2 = calls_with_paths[2]
+        if isinstance(path1, list):
+            path1 = path1[0]
+        if isinstance(path2, list):
+            path2 = path2[0]
+        assert str(path1) != str(path2), (
+            f"img2 used the same CSV path as img1: {path1}"
+        )
