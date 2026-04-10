@@ -177,8 +177,8 @@ class CaseManager:
         case_dir = self._require_case_dir(case_id)
         image_dir = (case_dir / "images" / image_id).resolve()
         # Guard against path traversal via crafted image_id.
-        expected_parent = str(case_dir / "images")
-        if not str(image_dir).startswith(expected_parent):
+        images_parent = (case_dir / "images").resolve()
+        if not image_dir.is_relative_to(images_parent):
             raise ValueError(
                 f"Invalid image_id: path traversal detected ({image_id!r})."
             )
@@ -254,8 +254,8 @@ class CaseManager:
         case_dir = self._require_case_dir(case_id)
         image_dir = (case_dir / "images" / image_id).resolve()
         # Guard against path traversal via crafted image_id.
-        expected_parent = str(case_dir / "images")
-        if not str(image_dir).startswith(expected_parent):
+        images_parent = (case_dir / "images").resolve()
+        if not image_dir.is_relative_to(images_parent):
             raise ValueError(
                 f"Invalid image_id: path traversal detected ({image_id!r})."
             )
@@ -381,7 +381,7 @@ class CaseManager:
         """
         case_dir = (self.cases_dir / case_id).resolve()
         # Guard against path traversal (e.g. case_id = "../../etc").
-        if not str(case_dir).startswith(str(self.cases_dir)):
+        if not case_dir.is_relative_to(self.cases_dir):
             raise ValueError(
                 f"Invalid case_id: path traversal detected ({case_id!r})."
             )

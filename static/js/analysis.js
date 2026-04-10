@@ -234,11 +234,14 @@
    * @returns {{key: string, name: string, model: string, current: Object, imageId: string, imageLabel: string}}
    */
   function extractAnalysisIdentifiers(r) {
-    const key = String(r.artifact_key || r.key || `artifact_${st.analysis.order.length + 1}`);
-    const name = String(r.artifact_name || A.artifactName(key));
+    const rawKey = String(r.artifact_key || r.key || `artifact_${st.analysis.order.length + 1}`);
+    const name = String(r.artifact_name || A.artifactName(rawKey));
     const model = String(r.model || "");
     const imageId = String(r.image_id || "");
     const imageLabel = String(r.image_label || "");
+    /* Use a composite key when image_id is present so that the same
+       artifact from different images does not collide in byKey/order. */
+    const key = imageId ? `${imageId}::${rawKey}` : rawKey;
     if (!st.analysis.byKey[key]) st.analysis.order.push(key);
     const current = st.analysis.byKey[key] || {};
     return { key, name, model, current, imageId, imageLabel };

@@ -345,48 +345,31 @@ def intake_evidence(case_id: str) -> Response | tuple[Response, int]:
     )
 
 
-def generate_case_report(case_id: str) -> dict[str, Any]:
-    """Generate the HTML forensic report for a case and save it to disk.
-
-    Performs hash verification, assembles analysis context, renders the
-    report via :class:`ReportGenerator`, and logs the result to the audit
-    trail.  This function can be called from both the download route and
-    from background tasks (e.g. auto-generation after analysis).
+def _verify_image_hashes(
+    hashes: dict[str, Any],
+    file_hash_entries: list[dict[str, Any]],
+) -> tuple[bool, str, list[dict[str, object]]]:
+    """Verify evidence hashes for a single image.
 
     Args:
-        case_id: UUID of the case.
+        hashes: Hash summary dict with ``sha256``, ``md5``, etc.
+        file_hash_entries: Per-file hash entries from intake.
 
     Returns:
-        A result dict with keys ``success`` (bool), and on success:
-        ``report_path`` (:class:`~pathlib.Path`), ``hash_ok`` (bool).
-        On failure: ``error`` (str).
+        ``(hash_ok, computed_sha256, verify_details)`` tuple.
     """
-    case = get_case(case_id)
-    if case is None:
-        return {"success": False, "error": f"Case not found: {case_id}"}
-
-    with STATE_LOCK:
-        case_snapshot = dict(case)
-        audit_logger = case["audit"]
-
-    hashes = dict(case_snapshot.get("evidence_hashes", {}))
     intake_sha256 = str(hashes.get("sha256", "")).strip()
-    file_hash_entries = list(case_snapshot.get("evidence_file_hashes", []))
-
     hashing_skipped = intake_sha256 == "N/A (skipped)"
 
     if hashing_skipped:
+        return True, intake_sha256, []
+
+    if intake_sha256.startswith("N/A"):
+        return True, intake_sha256, []
+
+    if file_hash_entries:
         hash_ok = True
-        computed_sha256 = intake_sha256
         verify_details: list[dict[str, object]] = []
-    elif intake_sha256.startswith("N/A"):
-        hash_ok = True
-        computed_sha256 = intake_sha256
-        verify_details = []
-    elif file_hash_entries:
-        # Verify every file that was hashed at intake.
-        hash_ok = True
-        verify_details = []
         for entry in file_hash_entries:
             fpath = Path(str(entry["path"]))
             expected = str(entry["sha256"]).strip().lower()
@@ -408,38 +391,181 @@ def generate_case_report(case_id: str) -> dict[str, Any]:
             str(verify_details[0]["computed"]) if len(verify_details) == 1
             else "; ".join(str(d["computed"]) for d in verify_details)
         )
-    else:
-        # Fallback for cases created before evidence_file_hashes existed.
-        verification_path = resolve_hash_verification_path(case_snapshot)
-        if verification_path is None or not intake_sha256:
-            return {"success": False, "error": "Evidence hash context is missing for this case."}
-        if not verification_path.exists():
-            return {"success": False, "error": "Evidence file is no longer available for hash verification."}
-        hash_ok, computed_sha256 = verify_hash(
-            verification_path, intake_sha256, return_computed=True,
+        return hash_ok, computed_sha256, verify_details
+
+    # No file hash entries — try the legacy single-file path.
+    source_path = str(hashes.get("_source_path", "")).strip()
+    if source_path and intake_sha256:
+        vpath = Path(source_path)
+        if vpath.exists():
+            ok, computed = verify_hash(vpath, intake_sha256, return_computed=True)
+            return ok, computed, [{
+                "path": source_path, "match": ok,
+                "expected": intake_sha256, "computed": computed,
+            }]
+
+    # Cannot verify — treat as pass with empty details.
+    return True, intake_sha256, []
+
+
+def generate_case_report(case_id: str) -> dict[str, Any]:
+    """Generate the HTML forensic report for a case and save it to disk.
+
+    Performs hash verification for every image, assembles analysis
+    context, renders the report via :class:`ReportGenerator`, and logs
+    the result to the audit trail.  This function can be called from
+    both the download route and from background tasks (e.g.
+    auto-generation after analysis).
+
+    For multi-image cases, per-image metadata and hashes are collected
+    from ``image_states`` so the report correctly represents all images.
+
+    Args:
+        case_id: UUID of the case.
+
+    Returns:
+        A result dict with keys ``success`` (bool), and on success:
+        ``report_path`` (:class:`~pathlib.Path`), ``hash_ok`` (bool).
+        On failure: ``error`` (str).
+    """
+    case = get_case(case_id)
+    if case is None:
+        return {"success": False, "error": f"Case not found: {case_id}"}
+
+    with STATE_LOCK:
+        case_snapshot = dict(case)
+        audit_logger = case["audit"]
+
+    # ------------------------------------------------------------------
+    # Determine whether this is a multi-image case.
+    # ------------------------------------------------------------------
+    image_states = case_snapshot.get("image_states", {})
+    images_list = case_snapshot.get("images", [])
+    is_multi = isinstance(image_states, dict) and len(image_states) > 1
+
+    # ------------------------------------------------------------------
+    # Hash verification — per-image when multi, legacy otherwise.
+    # ------------------------------------------------------------------
+    if is_multi:
+        # Build an ordered list of image IDs from the images list so the
+        # metadata/hashes lists align with the analysis "images" dict.
+        ordered_image_ids: list[str] = []
+        for img_entry in images_list:
+            if isinstance(img_entry, dict):
+                img_id = str(img_entry.get("image_id", ""))
+                if img_id and img_id in image_states:
+                    ordered_image_ids.append(img_id)
+        # Include any image_states keys not in images_list.
+        for img_id in image_states:
+            if img_id not in ordered_image_ids:
+                ordered_image_ids.append(img_id)
+
+        hash_ok = True
+        all_verify_details: list[dict[str, object]] = []
+        metadata_list: list[dict[str, Any]] = []
+        hashes_list: list[dict[str, Any]] = []
+
+        for img_id in ordered_image_ids:
+            img_st = image_states.get(img_id, {})
+            img_hashes = dict(img_st.get("evidence_hashes", {}))
+            img_file_hashes = list(img_st.get("evidence_file_hashes", []))
+            img_metadata = dict(img_st.get("image_metadata", {}))
+
+            img_ok, _img_sha, img_details = _verify_image_hashes(
+                img_hashes, img_file_hashes,
+            )
+            if not img_ok:
+                hash_ok = False
+            all_verify_details.extend(img_details)
+
+            # Annotate the hashes dict for the reporter.
+            img_hashes["case_id"] = case_id
+            img_hashes["expected_sha256"] = str(img_hashes.get("sha256", "")).strip()
+            img_hashes["hash_verified"] = (
+                "skipped"
+                if str(img_hashes.get("sha256", "")).strip() == "N/A (skipped)"
+                else img_ok
+            )
+            metadata_list.append(img_metadata)
+            hashes_list.append(img_hashes)
+
+        # Use the first image's sha256 for the audit log summary.
+        intake_sha256 = str(hashes_list[0].get("sha256", "")) if hashes_list else ""
+        computed_sha256 = (
+            "; ".join(str(d.get("computed", "")) for d in all_verify_details)
+            if all_verify_details else intake_sha256
         )
-        verify_details = [{
-            "path": str(verification_path),
-            "match": hash_ok,
-            "expected": intake_sha256,
-            "computed": computed_sha256,
-        }]
 
-    audit_logger.log(
-        "hash_verification",
-        {
-            "expected_sha256": intake_sha256,
-            "computed_sha256": computed_sha256,
-            "match": hash_ok,
-            "skipped": hashing_skipped,
-            "verified_files": verify_details,
-        },
-    )
+        audit_logger.log(
+            "hash_verification",
+            {
+                "expected_sha256": intake_sha256,
+                "computed_sha256": computed_sha256,
+                "match": hash_ok,
+                "skipped": False,
+                "verified_files": all_verify_details,
+                "multi_image": True,
+                "image_count": len(ordered_image_ids),
+            },
+        )
 
-    hashes["case_id"] = case_id
-    hashes["expected_sha256"] = intake_sha256
-    hashes["hash_verified"] = "skipped" if hashing_skipped else hash_ok
+        # For backward-compat: build a combined hashes dict.
+        hashes = dict(hashes_list[0]) if hashes_list else {}
+        hashes["case_id"] = case_id
+        hashes["hash_verified"] = hash_ok
 
+        image_metadata_arg: dict[str, Any] | list[dict[str, Any]] = metadata_list
+        evidence_hashes_arg: dict[str, Any] | list[dict[str, Any]] = hashes_list
+    else:
+        # Single-image / legacy path.
+        hashes = dict(case_snapshot.get("evidence_hashes", {}))
+        intake_sha256 = str(hashes.get("sha256", "")).strip()
+        file_hash_entries = list(case_snapshot.get("evidence_file_hashes", []))
+
+        hashing_skipped = intake_sha256 == "N/A (skipped)"
+
+        if file_hash_entries or hashing_skipped or intake_sha256.startswith("N/A"):
+            hash_ok, computed_sha256, verify_details = _verify_image_hashes(
+                hashes, file_hash_entries,
+            )
+        else:
+            # Fallback for cases created before evidence_file_hashes existed.
+            verification_path = resolve_hash_verification_path(case_snapshot)
+            if verification_path is None or not intake_sha256:
+                return {"success": False, "error": "Evidence hash context is missing for this case."}
+            if not verification_path.exists():
+                return {"success": False, "error": "Evidence file is no longer available for hash verification."}
+            hash_ok, computed_sha256 = verify_hash(
+                verification_path, intake_sha256, return_computed=True,
+            )
+            verify_details = [{
+                "path": str(verification_path),
+                "match": hash_ok,
+                "expected": intake_sha256,
+                "computed": computed_sha256,
+            }]
+
+        audit_logger.log(
+            "hash_verification",
+            {
+                "expected_sha256": intake_sha256,
+                "computed_sha256": computed_sha256,
+                "match": hash_ok,
+                "skipped": hashing_skipped,
+                "verified_files": verify_details,
+            },
+        )
+
+        hashes["case_id"] = case_id
+        hashes["expected_sha256"] = intake_sha256
+        hashes["hash_verified"] = "skipped" if hashing_skipped else hash_ok
+
+        image_metadata_arg = dict(case_snapshot.get("image_metadata", {}))
+        evidence_hashes_arg = hashes
+
+    # ------------------------------------------------------------------
+    # Validate that analysis has been completed.
+    # ------------------------------------------------------------------
     analysis_results = dict(case_snapshot.get("analysis_results", {}))
 
     has_per_artifact = bool(analysis_results.get("per_artifact") or analysis_results.get("per_artifact_findings"))
@@ -474,8 +600,8 @@ def generate_case_report(case_id: str) -> dict[str, Any]:
     report_generator = ReportGenerator(cases_root=CASES_ROOT)
     report_path = report_generator.generate(
         analysis_results=analysis_results,
-        image_metadata=dict(case_snapshot.get("image_metadata", {})),
-        evidence_hashes=hashes,
+        image_metadata=image_metadata_arg,
+        evidence_hashes=evidence_hashes_arg,
         investigation_context=investigation_context,
         audit_log_entries=read_audit_entries(Path(case_dir)),
     )

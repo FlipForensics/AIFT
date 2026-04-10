@@ -359,12 +359,15 @@ def intake_image_evidence(case_id: str, image_id: str) -> Response | tuple[Respo
         with STATE_LOCK:
             image_states = case.setdefault("image_states", {})
 
-            # Capture previous per-image csv_output_dir before overwriting
-            # so we can clean up external parsed output directories.
+            # Capture previous per-image state before updating so we can
+            # preserve parse results and clean up external parsed output.
             prev_img_state = image_states.get(image_id, {})
             prev_csv_output_dir = str(prev_img_state.get("csv_output_dir", "")).strip()
 
-            image_states[image_id] = {
+            # Update the image state, preserving any existing parse
+            # results and CSV paths from a previous parse run so that
+            # re-uploading evidence does not silently discard them.
+            new_img_state: dict[str, Any] = {
                 "evidence_path": str(dissect_path),
                 "evidence_hashes": hashes,
                 "evidence_file_hashes": [
@@ -378,6 +381,10 @@ def intake_image_evidence(case_id: str, image_id: str) -> Response | tuple[Respo
                 "stored_path": evidence_payload["stored_path"],
                 "uploaded_files": list(evidence_payload.get("uploaded_files", [])),
             }
+            for _keep_key in ("parse_results", "artifact_csv_paths", "csv_output_dir"):
+                if _keep_key in prev_img_state:
+                    new_img_state.setdefault(_keep_key, prev_img_state[_keep_key])
+            image_states[image_id] = new_img_state
 
             # Check whether any OTHER image already has parse results.
             # If so, we must not wipe case-level downstream state because
@@ -417,7 +424,11 @@ def intake_image_evidence(case_id: str, image_id: str) -> Response | tuple[Respo
                 case["analysis_date_range"] = None
                 case["investigation_context"] = ""
 
-            case["status"] = "evidence_loaded"
+            # Only reset to evidence_loaded when no other image has
+            # parse results; otherwise keep the current status so the
+            # UI does not lose track of prior parsing progress.
+            if not other_images_have_results:
+                case["status"] = "evidence_loaded"
 
             # Clear per-image progress keys so stale SSE streams are not
             # reused.  Only clear the case-level keys when this is the

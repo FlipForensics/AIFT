@@ -312,6 +312,7 @@ def run_multi_image_analysis(
             "label": img_data["label"],
             "per_artifact": img_data["per_artifact"],
             "summary": img_data["summary"],
+            "metadata": img_data.get("metadata", {}),
         }
 
     return {
