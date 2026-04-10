@@ -465,6 +465,124 @@ class TestReportGeneratorHelpers(unittest.TestCase):
         result = ReportGenerator._normalize_to_list(None)
         self.assertEqual(result, [{}])
 
+    def test_normalize_to_list_non_mapping_items(self) -> None:
+        """_normalize_to_list converts non-Mapping list items to empty dicts."""
+        result = ReportGenerator._normalize_to_list(["not_a_dict", 42])
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], {})
+        self.assertEqual(result[1], {})
+
+    def test_normalize_to_list_string_returns_empty_dict(self) -> None:
+        """_normalize_to_list returns [{}] for a bare string value."""
+        result = ReportGenerator._normalize_to_list("some_string")
+        self.assertEqual(result, [{}])
+
+    def test_build_evidence_rows_mismatched_lengths(self) -> None:
+        """_build_evidence_rows handles mismatched metadata and hashes lengths."""
+        with TemporaryDirectory(prefix="aift-mi-test-") as temp_dir:
+            cases_root = Path(temp_dir) / "cases"
+            reporter = _create_report_generator(cases_root)
+
+            metadata_list = [
+                {"hostname": "HOST-A", "os_version": "Win 10"},
+                {"hostname": "HOST-B", "os_version": "Win 11"},
+            ]
+            hashes_list = [
+                {"filename": "img-a.E01", "sha256": "a" * 64, "md5": "b" * 32},
+            ]
+            images_data = {
+                "img-a": {"label": "Image A"},
+                "img-b": {"label": "Image B"},
+            }
+
+            rows = reporter._build_evidence_rows(metadata_list, hashes_list, images_data)
+            self.assertEqual(len(rows), 2)
+            # First row has metadata + hashes
+            self.assertEqual(rows[0]["hostname"], "HOST-A")
+            self.assertEqual(rows[0]["sha256"], "a" * 64)
+            # Second row has metadata but no hashes
+            self.assertEqual(rows[1]["hostname"], "HOST-B")
+            self.assertEqual(rows[1]["sha256"], "N/A")
+
+    def test_build_image_sections_skips_non_mapping(self) -> None:
+        """_build_image_sections skips image entries that are not dicts."""
+        with TemporaryDirectory(prefix="aift-mi-test-") as temp_dir:
+            cases_root = Path(temp_dir) / "cases"
+            reporter = _create_report_generator(cases_root)
+
+            images_data = {
+                "img-good": {
+                    "label": "Good Image",
+                    "per_artifact": [],
+                    "summary": "All fine.",
+                },
+                "img-bad": "not a dict",
+            }
+            sections = reporter._build_image_sections(images_data)
+            self.assertEqual(len(sections), 1)
+            self.assertEqual(sections[0]["label"], "Good Image")
+
+
+class TestMultiImageHashDetail(unittest.TestCase):
+    """Verify that per-image hash details are rendered individually."""
+
+    def test_each_image_shows_own_hash_detail(self) -> None:
+        """Each image's hash verification detail is rendered in the report."""
+        with TemporaryDirectory(prefix="aift-mi-test-") as temp_dir:
+            cases_root = Path(temp_dir) / "cases"
+            reporter = _create_report_generator(cases_root)
+
+            hashes = [
+                {
+                    "filename": "img1.E01",
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "expected_sha256": "a" * 64,
+                    "reverified_sha256": "a" * 64,
+                },
+                {
+                    "filename": "img2.E01",
+                    "sha256": "c" * 64,
+                    "md5": "d" * 32,
+                    "expected_sha256": "c" * 64,
+                    "reverified_sha256": "e" * 64,  # mismatch
+                },
+            ]
+
+            report_path = reporter.generate(
+                analysis_results=_multi_image_analysis_results(),
+                image_metadata=_multi_image_metadata(),
+                evidence_hashes=hashes,
+                investigation_context="Hash detail test.",
+                audit_log_entries=[],
+            )
+
+            html = report_path.read_text(encoding="utf-8")
+
+            # Both detail messages should appear
+            self.assertIn("Re-verified SHA-256 matches intake hash", html)
+            self.assertIn("Re-verified SHA-256 does not match intake hash", html)
+
+    def test_empty_cross_image_summary_string_omitted(self) -> None:
+        """Cross-System Analysis is omitted when summary is an empty string."""
+        with TemporaryDirectory(prefix="aift-mi-test-") as temp_dir:
+            cases_root = Path(temp_dir) / "cases"
+            reporter = _create_report_generator(cases_root)
+
+            analysis = _multi_image_analysis_results()
+            analysis["cross_image_summary"] = ""
+
+            report_path = reporter.generate(
+                analysis_results=analysis,
+                image_metadata=_multi_image_metadata(),
+                evidence_hashes=_multi_image_hashes(),
+                investigation_context="Empty cross-system string.",
+                audit_log_entries=[],
+            )
+
+            html = report_path.read_text(encoding="utf-8")
+            self.assertNotIn("Cross-System Analysis", html)
+
 
 if __name__ == "__main__":
     unittest.main()

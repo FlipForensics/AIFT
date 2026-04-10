@@ -307,7 +307,7 @@ class ReportGenerator:
             value: A dict or list of dicts.
 
         Returns:
-            A list of dicts.  Returns an empty list if *value* is None.
+            A list of dicts.  Returns ``[{}]`` if *value* is ``None``.
         """
         if value is None:
             return [{}]
