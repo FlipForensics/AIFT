@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
 import app.routes.tasks as routes_tasks
+import app.routes.tasks_chat as routes_tasks_chat
 
 
 class RenderChatMessagesForProviderTests(unittest.TestCase):
@@ -20,7 +21,7 @@ class RenderChatMessagesForProviderTests(unittest.TestCase):
             {"role": "assistant", "content": "   "},
         ]
 
-        rendered = routes_tasks._render_chat_messages_for_provider(messages)
+        rendered = routes_tasks_chat.render_chat_messages_for_provider(messages)
 
         self.assertEqual(
             rendered,
@@ -36,7 +37,7 @@ class RenderChatMessagesForProviderTests(unittest.TestCase):
         )
 
     def test_returns_empty_string_when_no_non_system_content_exists(self) -> None:
-        rendered = routes_tasks._render_chat_messages_for_provider(
+        rendered = routes_tasks_chat.render_chat_messages_for_provider(
             [
                 {"role": "system", "content": "ignored"},
                 {"role": "user", "content": "   "},
@@ -49,16 +50,16 @@ class RenderChatMessagesForProviderTests(unittest.TestCase):
 
 class ResolveChatMaxTokensTests(unittest.TestCase):
     def test_returns_positive_integer(self) -> None:
-        result = routes_tasks._resolve_chat_max_tokens({"analysis": {"ai_max_tokens": "4096"}})
+        result = routes_tasks_chat.resolve_chat_max_tokens({"analysis": {"ai_max_tokens": "4096"}})
         self.assertEqual(result, 4096)
 
     def test_rejects_missing_analysis_mapping(self) -> None:
         with self.assertRaisesRegex(ValueError, "analysis.ai_max_tokens"):
-            routes_tasks._resolve_chat_max_tokens({"analysis": "invalid"})
+            routes_tasks_chat.resolve_chat_max_tokens({"analysis": "invalid"})
 
     def test_rejects_missing_setting(self) -> None:
         with self.assertRaisesRegex(ValueError, "analysis.ai_max_tokens"):
-            routes_tasks._resolve_chat_max_tokens({"analysis": {}})
+            routes_tasks_chat.resolve_chat_max_tokens({"analysis": {}})
 
     def test_rejects_invalid_or_non_positive_values(self) -> None:
         invalid_configs = [
@@ -70,24 +71,24 @@ class ResolveChatMaxTokensTests(unittest.TestCase):
         for config in invalid_configs:
             with self.subTest(config=config):
                 with self.assertRaisesRegex(ValueError, "positive integer"):
-                    routes_tasks._resolve_chat_max_tokens(config)
+                    routes_tasks_chat.resolve_chat_max_tokens(config)
 
 
 class CompressFindingsWithAiTests(unittest.TestCase):
     def test_returns_none_for_blank_findings(self) -> None:
         provider = MagicMock()
 
-        result = routes_tasks._compress_findings_with_ai(provider, "   ", 1200)
+        result = routes_tasks_chat.compress_findings_with_ai(provider, "   ", 1200)
 
         self.assertIsNone(result)
         provider.analyze.assert_not_called()
 
-    @patch.object(routes_tasks, "_load_compress_findings_prompt", return_value="compress prompt")
+    @patch.object(routes_tasks_chat, "load_compress_findings_prompt", return_value="compress prompt")
     def test_uses_quarter_token_budget_and_strips_result(self, _mock_prompt: MagicMock) -> None:
         provider = MagicMock()
         provider.analyze.return_value = "  compressed findings  "
 
-        result = routes_tasks._compress_findings_with_ai(provider, "- runkeys: suspicious entry", 1600)
+        result = routes_tasks_chat.compress_findings_with_ai(provider, "- runkeys: suspicious entry", 1600)
 
         self.assertEqual(result, "compressed findings")
         provider.analyze.assert_called_once()
@@ -96,12 +97,12 @@ class CompressFindingsWithAiTests(unittest.TestCase):
         self.assertIn("roughly 400 tokens", provider.analyze.call_args.kwargs["user_prompt"])
         self.assertIn("- runkeys: suspicious entry", provider.analyze.call_args.kwargs["user_prompt"])
 
-    @patch.object(routes_tasks, "_load_compress_findings_prompt", return_value="compress prompt")
+    @patch.object(routes_tasks_chat, "load_compress_findings_prompt", return_value="compress prompt")
     def test_enforces_minimum_compression_budget(self, _mock_prompt: MagicMock) -> None:
         provider = MagicMock()
         provider.analyze.return_value = "compressed"
 
-        routes_tasks._compress_findings_with_ai(provider, "- artifact: finding", 600)
+        routes_tasks_chat.compress_findings_with_ai(provider, "- artifact: finding", 600)
 
         self.assertEqual(provider.analyze.call_args.kwargs["max_tokens"], 200)
 
@@ -109,15 +110,16 @@ class CompressFindingsWithAiTests(unittest.TestCase):
         provider = MagicMock()
         provider.analyze.return_value = "   "
 
-        result = routes_tasks._compress_findings_with_ai(provider, "- artifact: finding", 1200)
+        result = routes_tasks_chat.compress_findings_with_ai(provider, "- artifact: finding", 1200)
 
         self.assertIsNone(result)
 
     def test_returns_none_when_provider_raises_ai_provider_error(self) -> None:
+        from app.ai_providers import AIProviderError
         provider = MagicMock()
-        provider.analyze.side_effect = routes_tasks.AIProviderError("provider failed")
+        provider.analyze.side_effect = AIProviderError("provider failed")
 
-        result = routes_tasks._compress_findings_with_ai(provider, "- artifact: finding", 1200)
+        result = routes_tasks_chat.compress_findings_with_ai(provider, "- artifact: finding", 1200)
 
         self.assertIsNone(result)
 

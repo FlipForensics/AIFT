@@ -26,6 +26,7 @@ import app.routes.artifacts as routes_artifacts
 import app.routes.analysis as routes_analysis
 import app.routes.evidence as routes_evidence
 import app.routes.handlers as routes_handlers
+import app.routes.images as routes_images
 import app.routes.tasks as routes_tasks
 import app.routes.state as routes_state
 
@@ -192,10 +193,12 @@ def _common_patches(cases_root: Path):
         patch.object(routes, "CASES_ROOT", cases_root),
         patch.object(routes_handlers, "CASES_ROOT", cases_root),
         patch.object(routes_evidence, "CASES_ROOT", cases_root),
+        patch.object(routes_images, "CASES_ROOT", cases_root),
         patch.object(routes, "ForensicParser", FakeParser),
         patch.object(routes_handlers, "ForensicParser", FakeParser),
         patch.object(routes_tasks, "ForensicParser", FakeParser),
         patch.object(routes_evidence, "ForensicParser", FakeParser),
+        patch("app.parser.ForensicParser", FakeParser),
         patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
         patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
         patch.object(routes, "ReportGenerator", FakeReportGenerator),

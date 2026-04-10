@@ -246,37 +246,38 @@ class TestMultiImageArtifactTabsJsExports(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Read the evidence.js file content."""
-        js_path = Path(__file__).resolve().parent.parent / "static" / "js" / "evidence.js"
-        cls.js_content = js_path.read_text(encoding="utf-8")
+        """Read the evidence JS files content."""
+        js_dir = Path(__file__).resolve().parent.parent / "static" / "js"
+        cls.js_content = (js_dir / "evidence.js").read_text(encoding="utf-8")
+        cls.js_multi_content = (js_dir / "evidence_multi.js").read_text(encoding="utf-8")
 
     def test_build_multi_image_artifact_tabs_exported(self) -> None:
         """The buildMultiImageArtifactTabs function should be exported."""
-        self.assertIn("A.buildMultiImageArtifactTabs", self.js_content)
+        self.assertIn("A.buildMultiImageArtifactTabs", self.js_multi_content)
 
     def test_switch_artifact_tab_exported(self) -> None:
         """The switchArtifactTab function should be exported."""
-        self.assertIn("A.switchArtifactTab", self.js_content)
+        self.assertIn("A.switchArtifactTab", self.js_multi_content)
 
     def test_active_artifact_tab_image_id_exported(self) -> None:
         """The activeArtifactTabImageId function should be exported."""
-        self.assertIn("A.activeArtifactTabImageId", self.js_content)
+        self.assertIn("A.activeArtifactTabImageId", self.js_multi_content)
 
     def test_selected_artifact_options_for_image_exported(self) -> None:
         """The selectedArtifactOptionsForImage function should be exported."""
-        self.assertIn("A.selectedArtifactOptionsForImage", self.js_content)
+        self.assertIn("A.selectedArtifactOptionsForImage", self.js_multi_content)
 
     def test_all_image_artifact_selections_exported(self) -> None:
         """The allImageArtifactSelections function should be exported."""
-        self.assertIn("A.allImageArtifactSelections", self.js_content)
+        self.assertIn("A.allImageArtifactSelections", self.js_multi_content)
 
     def test_is_multi_image_exported(self) -> None:
         """The isMultiImage function should be exported."""
-        self.assertIn("A.isMultiImage", self.js_content)
+        self.assertIn("A.isMultiImage", self.js_multi_content)
 
     def test_apply_preset_multi_aware_exported(self) -> None:
         """The applyPresetMultiAware function should be exported."""
-        self.assertIn("A.applyPresetMultiAware", self.js_content)
+        self.assertIn("A.applyPresetMultiAware", self.js_multi_content)
 
     def test_preset_applies_to_active_tab(self) -> None:
         """The preset logic should call applyPresetMultiAware for multi-image mode."""
@@ -286,11 +287,11 @@ class TestMultiImageArtifactTabsJsExports(unittest.TestCase):
 
     def test_active_tab_panel_selection_uses_image_id(self) -> None:
         """The artifact selection should use image_id to scope to the right panel."""
-        self.assertIn("data-image-id", self.js_content)
+        self.assertIn("data-image-id", self.js_multi_content)
 
     def test_clone_fieldsets_for_per_image_panels(self) -> None:
         """The tab builder should clone fieldsets from the main form."""
-        self.assertIn("cloneNode", self.js_content)
+        self.assertIn("cloneNode", self.js_multi_content)
 
 
 class TestMultiImageParsingCss(unittest.TestCase):

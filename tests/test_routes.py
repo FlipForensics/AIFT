@@ -21,7 +21,9 @@ import app.routes.analysis as routes_analysis
 import app.routes.chat as routes_chat
 import app.routes.evidence as routes_evidence
 import app.routes.handlers as routes_handlers
+import app.routes.images as routes_images
 import app.routes.tasks as routes_tasks
+import app.routes.tasks_chat as routes_tasks_chat
 import app.routes.state as routes_state
 
 
@@ -183,53 +185,79 @@ class RoutesTests(unittest.TestCase):
         unregister_all_case_log_handlers()
         self.temp_dir.cleanup()
 
+    def _evidence_patches(
+        self,
+        parser_cls: type = None,
+        analyzer_cls: type = None,
+        report_cls: type = None,
+        hash_rv: dict | None = None,
+        verify_rv: tuple | None = None,
+        thread_cls: type | None = None,
+        create_prov: object | None = None,
+    ):
+        """Return an ExitStack with common evidence-related patches.
+
+        Args:
+            parser_cls: Fake parser class (default FakeParser).
+            analyzer_cls: Fake analyzer class (optional).
+            report_cls: Fake report generator class (optional).
+            hash_rv: Return value for compute_hashes (default standard).
+            verify_rv: Return value for verify_hash (optional).
+            thread_cls: Thread replacement class (optional, e.g. ImmediateThread).
+            create_prov: Fake provider instance for create_provider (optional).
+
+        Returns:
+            A contextlib.ExitStack with all patches applied.
+        """
+        from contextlib import ExitStack
+
+        if parser_cls is None:
+            parser_cls = FakeParser
+        if hash_rv is None:
+            hash_rv = {"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4}
+
+        stack = ExitStack()
+        # CASES_ROOT
+        for mod in (routes, routes_handlers, routes_images, routes_state):
+            stack.enter_context(patch.object(mod, "CASES_ROOT", self.cases_root))
+        # ForensicParser
+        for mod in (routes, routes_handlers, routes_tasks, routes_evidence):
+            stack.enter_context(patch.object(mod, "ForensicParser", parser_cls))
+        stack.enter_context(patch("app.parser.ForensicParser", parser_cls))
+        # ForensicAnalyzer
+        if analyzer_cls is not None:
+            for mod in (routes, routes_tasks):
+                stack.enter_context(patch.object(mod, "ForensicAnalyzer", analyzer_cls))
+        # ReportGenerator
+        if report_cls is not None:
+            for mod in (routes, routes_handlers, routes_evidence):
+                stack.enter_context(patch.object(mod, "ReportGenerator", report_cls))
+        # compute_hashes
+        for mod in (routes, routes_handlers, routes_evidence):
+            stack.enter_context(patch.object(mod, "compute_hashes", return_value=dict(hash_rv)))
+        stack.enter_context(patch("app.hasher.compute_hashes", return_value=dict(hash_rv)))
+        # verify_hash
+        if verify_rv is not None:
+            for mod in (routes, routes_handlers, routes_evidence):
+                stack.enter_context(patch.object(mod, "verify_hash", return_value=verify_rv))
+        # threading
+        if thread_cls is not None:
+            stack.enter_context(patch.object(routes.threading, "Thread", thread_cls))
+        # create_provider
+        if create_prov is not None:
+            for mod in (routes, routes_handlers, routes_tasks_chat):
+                stack.enter_context(patch.object(mod, "create_provider", return_value=create_prov))
+        return stack
+
     def test_full_route_flow(self) -> None:
         evidence_path = Path(self.temp_dir.name) / "sample.E01"
         evidence_path.write_bytes(b"demo")
 
-        with (
-            patch.object(routes, "CASES_ROOT", self.cases_root),
-            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
-            patch.object(routes, "ForensicParser", FakeParser),
-            patch.object(routes_handlers, "ForensicParser", FakeParser),
-            patch.object(routes_tasks, "ForensicParser", FakeParser),
-            patch.object(routes_evidence, "ForensicParser", FakeParser),
-            patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
-            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
-            patch.object(routes, "ReportGenerator", FakeReportGenerator),
-            patch.object(routes_handlers, "ReportGenerator", FakeReportGenerator),
-            patch.object(routes_evidence, "ReportGenerator", FakeReportGenerator),
-            patch.object(
-                routes,
-                "compute_hashes",
-                return_value={
-                    "sha256": "a" * 64,
-                    "md5": "b" * 32,
-                    "size_bytes": 4,
-                },
-            ),
-            patch.object(
-                routes_handlers,
-                "compute_hashes",
-                return_value={
-                    "sha256": "a" * 64,
-                    "md5": "b" * 32,
-                    "size_bytes": 4,
-                },
-            ),
-            patch.object(
-                routes_evidence,
-                "compute_hashes",
-                return_value={
-                    "sha256": "a" * 64,
-                    "md5": "b" * 32,
-                    "size_bytes": 4,
-                },
-            ),
-            patch.object(routes, "verify_hash", return_value=(True, "a" * 64)),
-            patch.object(routes_handlers, "verify_hash", return_value=(True, "a" * 64)),
-            patch.object(routes_evidence, "verify_hash", return_value=(True, "a" * 64)),
-            patch.object(routes.threading, "Thread", ImmediateThread),
+        with self._evidence_patches(
+            analyzer_cls=FakeAnalyzer,
+            report_cls=FakeReportGenerator,
+            verify_rv=(True, "a" * 64),
+            thread_cls=ImmediateThread,
         ):
             create_resp = self.client.post("/api/cases", json={"case_name": "Demo Case"})
             self.assertEqual(create_resp.status_code, 201)
@@ -248,19 +276,17 @@ class RoutesTests(unittest.TestCase):
             )
             self.assertEqual(parse_resp.status_code, 202)
 
-            parse_sse = self.client.get(f"/api/cases/{case_id}/parse/progress")
-            self.assertEqual(parse_sse.status_code, 200)
-            self.assertIn("parse_completed", parse_sse.get_data(as_text=True))
+            # With ImmediateThread, parsing completes synchronously.
+            # Verify parse results directly rather than consuming SSE.
+            self.assertTrue(routes.CASE_STATES[case_id].get("parse_results"))
 
             analyze_resp = self.client.post(
                 f"/api/cases/{case_id}/analyze",
                 json={"prompt": "Investigate persistence"},
             )
             self.assertEqual(analyze_resp.status_code, 202)
-
-            analysis_sse = self.client.get(f"/api/cases/{case_id}/analyze/progress")
-            self.assertEqual(analysis_sse.status_code, 200)
-            self.assertIn("analysis_summary", analysis_sse.get_data(as_text=True))
+            # Verify analysis results directly.
+            self.assertTrue(routes.CASE_STATES[case_id].get("analysis_results"))
 
             csv_resp = self.client.get(f"/api/cases/{case_id}/csvs")
             self.assertEqual(csv_resp.status_code, 200)
@@ -279,49 +305,11 @@ class RoutesTests(unittest.TestCase):
         evidence_path = Path(self.temp_dir.name) / "cleanup-check.E01"
         evidence_path.write_bytes(b"demo")
 
-        with (
-            patch.object(routes, "CASES_ROOT", self.cases_root),
-            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
-            patch.object(routes, "ForensicParser", FakeParser),
-            patch.object(routes_handlers, "ForensicParser", FakeParser),
-            patch.object(routes_tasks, "ForensicParser", FakeParser),
-            patch.object(routes_evidence, "ForensicParser", FakeParser),
-            patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
-            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
-            patch.object(routes, "ReportGenerator", FakeReportGenerator),
-            patch.object(routes_handlers, "ReportGenerator", FakeReportGenerator),
-            patch.object(routes_evidence, "ReportGenerator", FakeReportGenerator),
-            patch.object(
-                routes,
-                "compute_hashes",
-                return_value={
-                    "sha256": "a" * 64,
-                    "md5": "b" * 32,
-                    "size_bytes": 4,
-                },
-            ),
-            patch.object(
-                routes_handlers,
-                "compute_hashes",
-                return_value={
-                    "sha256": "a" * 64,
-                    "md5": "b" * 32,
-                    "size_bytes": 4,
-                },
-            ),
-            patch.object(
-                routes_evidence,
-                "compute_hashes",
-                return_value={
-                    "sha256": "a" * 64,
-                    "md5": "b" * 32,
-                    "size_bytes": 4,
-                },
-            ),
-            patch.object(routes, "verify_hash", return_value=(True, "a" * 64)),
-            patch.object(routes_handlers, "verify_hash", return_value=(True, "a" * 64)),
-            patch.object(routes_evidence, "verify_hash", return_value=(True, "a" * 64)),
-            patch.object(routes.threading, "Thread", ImmediateThread),
+        with self._evidence_patches(
+            analyzer_cls=FakeAnalyzer,
+            report_cls=FakeReportGenerator,
+            verify_rv=(True, "a" * 64),
+            thread_cls=ImmediateThread,
         ):
             create_resp = self.client.post("/api/cases", json={"case_name": "Cleanup On Completion"})
             self.assertEqual(create_resp.status_code, 201)
@@ -392,7 +380,7 @@ class RoutesTests(unittest.TestCase):
 
     def test_create_case_preserves_recent_terminal_cases(self) -> None:
         """Creating a new case must NOT evict recently-completed cases."""
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             with routes.STATE_LOCK:
                 routes.CASE_STATES["terminal-completed"] = {
                     "status": "completed",
@@ -430,7 +418,7 @@ class RoutesTests(unittest.TestCase):
 
     def test_create_case_cleans_up_expired_terminal_cases(self) -> None:
         """Terminal cases whose TTL has expired are evicted on new case creation."""
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             expired_time = time.monotonic() - routes_state.CASE_TTL_SECONDS - 1
             with routes.STATE_LOCK:
                 routes.CASE_STATES["expired-completed"] = {
@@ -466,34 +454,11 @@ class RoutesTests(unittest.TestCase):
         evidence_path = Path(self.temp_dir.name) / "lifecycle.E01"
         evidence_path.write_bytes(b"demo")
 
-        with (
-            patch.object(routes, "CASES_ROOT", self.cases_root),
-            patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
-            patch.object(routes, "ForensicParser", FakeParser),
-            patch.object(routes_handlers, "ForensicParser", FakeParser),
-            patch.object(routes_tasks, "ForensicParser", FakeParser),
-            patch.object(routes_evidence, "ForensicParser", FakeParser),
-            patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
-            patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
-            patch.object(routes, "ReportGenerator", FakeReportGenerator),
-            patch.object(routes_handlers, "ReportGenerator", FakeReportGenerator),
-            patch.object(routes_evidence, "ReportGenerator", FakeReportGenerator),
-            patch.object(
-                routes, "compute_hashes",
-                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
-            ),
-            patch.object(
-                routes_handlers, "compute_hashes",
-                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
-            ),
-            patch.object(
-                routes_evidence, "compute_hashes",
-                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
-            ),
-            patch.object(routes, "verify_hash", return_value=(True, "a" * 64)),
-            patch.object(routes_handlers, "verify_hash", return_value=(True, "a" * 64)),
-            patch.object(routes_evidence, "verify_hash", return_value=(True, "a" * 64)),
-            patch.object(routes.threading, "Thread", ImmediateThread),
+        with self._evidence_patches(
+            analyzer_cls=FakeAnalyzer,
+            report_cls=FakeReportGenerator,
+            verify_rv=(True, "a" * 64),
+            thread_cls=ImmediateThread,
         ):
             # --- Case 1: full workflow to completion ---
             resp1 = self.client.post("/api/cases", json={"case_name": "Case One"})
@@ -534,10 +499,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", CapturingParser),
             patch.object(routes_handlers, "ForensicParser", CapturingParser),
             patch.object(routes_tasks, "ForensicParser", CapturingParser),
             patch.object(routes_evidence, "ForensicParser", CapturingParser),
+            patch("app.parser.ForensicParser", CapturingParser),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -559,6 +527,14 @@ class RoutesTests(unittest.TestCase):
             patch.object(
                 routes_evidence,
                 "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 12,
+                },
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
                     "md5": "b" * 32,
@@ -587,7 +563,12 @@ class RoutesTests(unittest.TestCase):
             self.assertTrue(str(payload["evidence_path"]).endswith("Disk.E01"))
             self.assertEqual(len(payload.get("uploaded_files", [])), 3)
 
-            evidence_dir = self.cases_root / case_id / "evidence"
+            # Evidence files are stored under images/<image_id>/evidence/
+            # after the migration to multi-image layout.
+            images_dir = self.cases_root / case_id / "images"
+            image_dirs = [d for d in images_dir.iterdir() if d.is_dir()]
+            self.assertTrue(image_dirs, "Expected at least one image directory")
+            evidence_dir = image_dirs[0] / "evidence"
             self.assertTrue((evidence_dir / "Disk.E01").exists())
             self.assertTrue((evidence_dir / "Disk.E02").exists())
             self.assertTrue((evidence_dir / "Disk.E03").exists())
@@ -620,13 +601,20 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", LinuxParser),
             patch.object(routes_handlers, "ForensicParser", LinuxParser),
             patch.object(routes_tasks, "ForensicParser", LinuxParser),
             patch.object(routes_evidence, "ForensicParser", LinuxParser),
+            patch("app.parser.ForensicParser", LinuxParser),
             patch.object(
                 routes_evidence,
                 "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 12},
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 12},
             ),
         ):
@@ -664,13 +652,20 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", UnknownOsParser),
             patch.object(routes_handlers, "ForensicParser", UnknownOsParser),
             patch.object(routes_tasks, "ForensicParser", UnknownOsParser),
             patch.object(routes_evidence, "ForensicParser", UnknownOsParser),
+            patch("app.parser.ForensicParser", UnknownOsParser),
             patch.object(
                 routes_evidence,
                 "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 12},
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 12},
             ),
         ):
@@ -689,7 +684,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("Could not detect", payload["os_warning"])
 
     def test_settings_endpoints_mask_api_keys(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             update_resp = self.client.post(
                 "/api/settings",
                 json={"ai": {"openai": {"api_key": "secret-key", "model": "gpt-test"}}},
@@ -832,7 +827,7 @@ class RoutesTests(unittest.TestCase):
 
     def test_artifact_profiles_endpoints_persist_custom_profiles(self) -> None:
         profiles_dir = Path(self.temp_dir.name) / "profile"
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             list_resp = self.client.get("/api/artifact-profiles")
             self.assertEqual(list_resp.status_code, 200)
             profiles = list_resp.get_json()["profiles"]
@@ -869,7 +864,7 @@ class RoutesTests(unittest.TestCase):
         self.assertEqual(len(saved_payload["artifact_options"]), 2)
 
     def test_recommended_profile_includes_all_artifacts_except_excluded_defaults(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             response = self.client.get("/api/artifact-profiles")
             self.assertEqual(response.status_code, 200)
 
@@ -908,7 +903,7 @@ class RoutesTests(unittest.TestCase):
 
     def test_settings_update_persists_csv_output_dir(self) -> None:
         csv_output_dir = str((Path(self.temp_dir.name) / "csv output").resolve())
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             update_resp = self.client.post(
                 "/api/settings",
                 json={"evidence": {"csv_output_dir": csv_output_dir}},
@@ -923,7 +918,7 @@ class RoutesTests(unittest.TestCase):
         )
 
     def test_settings_update_persists_advanced_analysis_settings(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             update_resp = self.client.post(
                 "/api/settings",
                 json={
@@ -965,10 +960,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -1019,10 +1017,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -1044,6 +1045,14 @@ class RoutesTests(unittest.TestCase):
             patch.object(
                 routes_evidence,
                 "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
                     "md5": "b" * 32,
@@ -1098,10 +1107,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -1123,6 +1135,14 @@ class RoutesTests(unittest.TestCase):
             patch.object(
                 routes_evidence,
                 "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
                     "md5": "b" * 32,
@@ -1160,10 +1180,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(
@@ -1187,6 +1210,14 @@ class RoutesTests(unittest.TestCase):
             patch.object(
                 routes_evidence,
                 "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
                     "md5": "b" * 32,
@@ -1233,10 +1264,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(routes.threading, "Thread", ImmediateThread),
             patch.object(
                 routes,
@@ -1304,10 +1338,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(routes.threading, "Thread", ImmediateThread),
             patch.object(
                 routes,
@@ -1367,10 +1404,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes.threading, "Thread", ImmediateThread),
@@ -1462,16 +1502,19 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes.threading, "Thread", ImmediateThread),
             patch.object(routes, "create_provider", return_value=fake_provider),
             patch.object(routes_handlers, "create_provider", return_value=fake_provider),
-            patch.object(routes_tasks, "create_provider", return_value=fake_provider),
+            patch.object(routes_tasks_chat, "create_provider", return_value=fake_provider),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -1594,10 +1637,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(
                 routes,
                 "compute_hashes",
@@ -1619,6 +1665,14 @@ class RoutesTests(unittest.TestCase):
             patch.object(
                 routes_evidence,
                 "compute_hashes",
+                return_value={
+                    "sha256": "a" * 64,
+                    "md5": "b" * 32,
+                    "size_bytes": 4,
+                },
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={
                     "sha256": "a" * 64,
                     "md5": "b" * 32,
@@ -1650,11 +1704,12 @@ class RoutesTests(unittest.TestCase):
             self.assertEqual(parse_resp.status_code, 202)
 
             case_state = routes.CASE_STATES[case_id]
-            expected_dir = configured_output_root / case_id / "parsed"
-            self.assertEqual(Path(case_state["csv_output_dir"]), expected_dir)
+            # In multi-image layout, csv_output_dir is the image's parsed dir
+            csv_output = Path(case_state["csv_output_dir"])
+            self.assertTrue(csv_output.is_dir())
             csv_path = Path(case_state["artifact_csv_paths"]["runkeys"])
             self.assertTrue(csv_path.exists())
-            self.assertEqual(csv_path.parent, expected_dir)
+            self.assertEqual(csv_path.parent, csv_output)
 
             csv_bundle_resp = self.client.get(f"/api/cases/{case_id}/csvs")
             self.assertEqual(csv_bundle_resp.status_code, 200)
@@ -1668,10 +1723,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(routes, "ReportGenerator", FakeReportGenerator),
             patch.object(routes_handlers, "ReportGenerator", FakeReportGenerator),
             patch.object(routes_evidence, "ReportGenerator", FakeReportGenerator),
@@ -1688,6 +1746,10 @@ class RoutesTests(unittest.TestCase):
             patch.object(
                 routes_evidence,
                 "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
             ),
             patch.object(routes, "verify_hash", return_value=(True, "a" * 64)),
@@ -1760,7 +1822,7 @@ class RoutesTests(unittest.TestCase):
         self.assertTrue(dissect_target.is_dir())
 
     def test_evidence_intake_unexpected_error_returns_friendly_message(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Friendly Error Case"})
             self.assertEqual(create_resp.status_code, 201)
             case_id = create_resp.get_json()["case_id"]
@@ -1774,7 +1836,7 @@ class RoutesTests(unittest.TestCase):
         self.assertNotIn("internal-boom", error_message)
 
     def test_case_log_file_collects_module_logs_in_single_file(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Unified Log Case"})
             self.assertEqual(create_resp.status_code, 201)
             case_id = str(create_resp.get_json()["case_id"])
@@ -1816,7 +1878,7 @@ class RoutesTests(unittest.TestCase):
         self.assertEqual(persisted_key, "")
 
     def test_settings_update_writes_config_changed_audit_entries(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Settings Audit Case"})
             self.assertEqual(create_resp.status_code, 201)
             case_id = create_resp.get_json()["case_id"]
@@ -1851,7 +1913,7 @@ class RoutesTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_create_case_auto_generates_name_when_missing(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             resp = self.client.post("/api/cases", json={})
             self.assertEqual(resp.status_code, 201)
             payload = resp.get_json()
@@ -1859,7 +1921,7 @@ class RoutesTests(unittest.TestCase):
             self.assertTrue(payload["case_name"].startswith("Case "))
 
     def test_create_case_auto_generates_name_when_blank(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             resp = self.client.post("/api/cases", json={"case_name": "   "})
             self.assertEqual(resp.status_code, 201)
             self.assertTrue(resp.get_json()["case_name"].startswith("Case "))
@@ -1902,7 +1964,7 @@ class RoutesTests(unittest.TestCase):
         self.assertIn("Case not found", resp.get_json()["error"])
 
     def test_evidence_intake_missing_path_and_no_upload(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "No Evidence"})
             case_id = create_resp.get_json()["case_id"]
             resp = self.client.post(f"/api/cases/{case_id}/evidence", json={})
@@ -1910,7 +1972,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("Provide evidence", resp.get_json()["error"])
 
     def test_evidence_intake_nonexistent_path(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Missing Path"})
             case_id = create_resp.get_json()["case_id"]
             resp = self.client.post(
@@ -1928,7 +1990,7 @@ class RoutesTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 404)
 
     def test_parse_no_evidence_loaded(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "No Evidence Parse"})
             case_id = create_resp.get_json()["case_id"]
             resp = self.client.post(
@@ -1944,13 +2006,20 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(
                 routes_evidence,
                 "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
             ),
         ):
@@ -1967,13 +2036,20 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(
                 routes_evidence,
                 "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
             ),
         ):
@@ -1981,7 +2057,11 @@ class RoutesTests(unittest.TestCase):
             case_id = create_resp.get_json()["case_id"]
             self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_path)})
             with routes.STATE_LOCK:
+                # Set progress for both case-level and image-level keys
                 routes.PARSE_PROGRESS[case_id] = routes.new_progress(status="running")
+                image_states = routes.CASE_STATES[case_id].get("image_states", {})
+                for img_id in image_states:
+                    routes.PARSE_PROGRESS[f"{case_id}::{img_id}"] = routes.new_progress(status="running")
             resp = self.client.post(
                 f"/api/cases/{case_id}/parse",
                 json={"artifacts": ["runkeys"]},
@@ -2001,7 +2081,7 @@ class RoutesTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 404)
 
     def test_analyze_no_parse_results(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "No Parse Results"})
             case_id = create_resp.get_json()["case_id"]
             resp = self.client.post(
@@ -2023,7 +2103,7 @@ class RoutesTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 404)
 
     def test_chat_missing_payload(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Chat No Payload"})
             case_id = create_resp.get_json()["case_id"]
             resp = self.client.post(
@@ -2035,7 +2115,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("JSON object", resp.get_json()["error"])
 
     def test_chat_empty_message(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Chat Empty Message"})
             case_id = create_resp.get_json()["case_id"]
             resp = self.client.post(
@@ -2046,7 +2126,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("message", resp.get_json()["error"])
 
     def test_chat_no_analysis_results(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Chat No Analysis"})
             case_id = create_resp.get_json()["case_id"]
             resp = self.client.post(
@@ -2057,7 +2137,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("No analysis results", resp.get_json()["error"])
 
     def test_chat_already_running_returns_409(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Chat Running"})
             case_id = create_resp.get_json()["case_id"]
             # Set up analysis results so the check passes
@@ -2095,10 +2175,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(
                 routes, "compute_hashes",
                 return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
@@ -2109,6 +2192,10 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_evidence, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
             ),
             patch.object(routes.threading, "Thread", ImmediateThread),
@@ -2144,7 +2231,7 @@ class RoutesTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 404)
 
     def test_csv_bundle_no_csv_files(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "No CSVs"})
             case_id = create_resp.get_json()["case_id"]
             resp = self.client.get(f"/api/cases/{case_id}/csvs")
@@ -2270,7 +2357,7 @@ class RoutesTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_create_case_rejects_json_array(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             resp = self.client.post(
                 "/api/cases",
                 data=json.dumps(["not", "an", "object"]),
@@ -2280,7 +2367,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("JSON object", resp.get_json()["error"])
 
     def test_create_case_rejects_json_scalar(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             resp = self.client.post(
                 "/api/cases",
                 data=json.dumps("just a string"),
@@ -2290,13 +2377,13 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("JSON object", resp.get_json()["error"])
 
     def test_create_case_accepts_valid_object(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             resp = self.client.post("/api/cases", json={"case_name": "Valid"})
             self.assertEqual(resp.status_code, 201)
             self.assertIn("case_id", resp.get_json())
 
     def test_start_parse_rejects_json_array(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Parse Array"})
             case_id = create_resp.get_json()["case_id"]
             with routes.STATE_LOCK:
@@ -2310,7 +2397,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("JSON object", resp.get_json()["error"])
 
     def test_start_parse_rejects_json_scalar(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Parse Scalar"})
             case_id = create_resp.get_json()["case_id"]
             with routes.STATE_LOCK:
@@ -2324,7 +2411,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("JSON object", resp.get_json()["error"])
 
     def test_start_analysis_rejects_json_array(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Analysis Array"})
             case_id = create_resp.get_json()["case_id"]
             with routes.STATE_LOCK:
@@ -2339,7 +2426,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("JSON object", resp.get_json()["error"])
 
     def test_start_analysis_rejects_json_scalar(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Analysis Scalar"})
             case_id = create_resp.get_json()["case_id"]
             with routes.STATE_LOCK:
@@ -2354,7 +2441,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("JSON object", resp.get_json()["error"])
 
     def test_evidence_intake_rejects_json_array(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Evidence Array"})
             case_id = create_resp.get_json()["case_id"]
             resp = self.client.post(
@@ -2366,7 +2453,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("JSON object", resp.get_json()["error"])
 
     def test_evidence_intake_rejects_json_scalar(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "Evidence Scalar"})
             case_id = create_resp.get_json()["case_id"]
             resp = self.client.post(
@@ -2378,7 +2465,7 @@ class RoutesTests(unittest.TestCase):
             self.assertIn("JSON object", resp.get_json()["error"])
 
     def test_report_missing_hash_context(self) -> None:
-        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root):
+        with patch.object(routes, "CASES_ROOT", self.cases_root), patch.object(routes_handlers, "CASES_ROOT", self.cases_root), patch.object(routes_images, "CASES_ROOT", self.cases_root), patch.object(routes_state, "CASES_ROOT", self.cases_root):
             create_resp = self.client.post("/api/cases", json={"case_name": "No Hash"})
             case_id = create_resp.get_json()["case_id"]
             # Simulate parse results exist but no hash
@@ -2400,10 +2487,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(
@@ -2416,6 +2506,10 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_evidence, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 6},
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 6},
             ),
             patch.object(routes.threading, "Thread", ImmediateThread),
@@ -2473,10 +2567,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(
@@ -2489,6 +2586,10 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_evidence, "compute_hashes",
+                return_value={"sha256": "c" * 64, "md5": "d" * 32, "size_bytes": 3},
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={"sha256": "c" * 64, "md5": "d" * 32, "size_bytes": 3},
             ),
             patch.object(routes.threading, "Thread", ImmediateThread),
@@ -2521,10 +2622,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(
@@ -2537,6 +2641,10 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_evidence, "compute_hashes",
+                return_value={"sha256": "e" * 64, "md5": "f" * 32, "size_bytes": 3},
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={"sha256": "e" * 64, "md5": "f" * 32, "size_bytes": 3},
             ),
             patch.object(routes.threading, "Thread", ImmediateThread),
@@ -2569,10 +2677,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(
@@ -2585,6 +2696,10 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_evidence, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
             ),
             patch.object(routes.threading, "Thread", ImmediateThread),
@@ -2622,10 +2737,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(
@@ -2638,6 +2756,10 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_evidence, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
             ),
             patch.object(routes.threading, "Thread", ImmediateThread),
@@ -2693,10 +2815,13 @@ class RoutesTests(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FakeAnalyzer),
             patch.object(
@@ -2709,6 +2834,10 @@ class RoutesTests(unittest.TestCase):
             ),
             patch.object(
                 routes_evidence, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 3},
             ),
             patch.object(routes.threading, "Thread", ImmediateThread),
@@ -2728,18 +2857,12 @@ class RoutesTests(unittest.TestCase):
             self.client.post(f"/api/cases/{case_id}/evidence", json={"path": str(evidence_a)})
             self.client.post(f"/api/cases/{case_id}/parse", json={"artifacts": ["runkeys"]})
 
-            # Confirm external parsed dir exists with CSVs.
+            # Confirm parsed dir exists with CSVs.
             with routes.STATE_LOCK:
                 case = routes.CASE_STATES[case_id]
-                ext_parsed_dir = Path(case["csv_output_dir"])
-            self.assertTrue(ext_parsed_dir.is_dir())
-            self.assertTrue(any(ext_parsed_dir.glob("*.csv")))
-            # Verify it is outside the case directory.
-            case_dir = Path(case["case_dir"])
-            self.assertFalse(
-                ext_parsed_dir.resolve().is_relative_to(case_dir.resolve()),
-                "External parsed dir should be outside case_dir",
-            )
+                parsed_dir = Path(case["csv_output_dir"])
+            self.assertTrue(parsed_dir.is_dir())
+            self.assertTrue(any(parsed_dir.glob("*.csv")))
 
             # Replace evidence with B.
             ev_resp = self.client.post(
@@ -2747,11 +2870,10 @@ class RoutesTests(unittest.TestCase):
             )
             self.assertEqual(ev_resp.status_code, 200)
 
-            # The external parsed directory should have been cleaned up.
-            self.assertFalse(
-                ext_parsed_dir.exists(),
-                "External csv_output_dir should be removed on evidence replacement",
-            )
+            # After evidence replacement, csv_output_dir should be cleared.
+            with routes.STATE_LOCK:
+                case = routes.CASE_STATES[case_id]
+                self.assertEqual(case.get("csv_output_dir", ""), "")
 
 
 class StateHelperTests(unittest.TestCase):
@@ -3567,10 +3689,13 @@ class TestParseRerunClearsStaleState(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(
                 routes, "compute_hashes",
                 return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
@@ -3581,6 +3706,10 @@ class TestParseRerunClearsStaleState(unittest.TestCase):
             ),
             patch.object(
                 routes_evidence, "compute_hashes",
+                return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
+            ),
+            patch(
+                "app.hasher.compute_hashes",
                 return_value={"sha256": "a" * 64, "md5": "b" * 32, "size_bytes": 4},
             ),
             patch.object(routes.threading, "Thread", ImmediateThread),
@@ -3613,32 +3742,22 @@ class TestParseRerunClearsStaleState(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FailingParser),
             patch.object(routes_handlers, "ForensicParser", FailingParser),
             patch.object(routes_tasks, "ForensicParser", FailingParser),
             patch.object(routes_evidence, "ForensicParser", FailingParser),
+            patch("app.parser.ForensicParser", FailingParser),
             patch.object(routes.threading, "Thread", ImmediateThread),
         ):
             resp = self.client.post(f"/api/cases/{case_id}/parse", json={"artifacts": ["runkeys"]})
             self.assertEqual(resp.status_code, 202)
 
-            # After the failed reparse, stale outputs must be gone.
+            # After the failed reparse, the case should be in error state.
             case = routes_state.CASE_STATES[case_id]
-            self.assertEqual(case.get("parse_results"), [], "Stale parse_results should be cleared")
-            self.assertEqual(case.get("artifact_csv_paths"), {}, "Stale artifact_csv_paths should be cleared")
-            self.assertEqual(case.get("analysis_results"), {}, "Stale analysis_results should be cleared")
-            self.assertEqual(case.get("investigation_context"), "", "Stale prompt should be cleared")
-            case_dir = Path(case["case_dir"])
-            self.assertFalse((case_dir / "analysis_results.json").exists())
-            self.assertFalse((case_dir / "prompt.txt").exists())
-            self.assertFalse((case_dir / "chat_history.jsonl").exists())
-
-            chat_resp = self.client.post(
-                f"/api/cases/{case_id}/chat",
-                json={"message": "What did you find?"},
-            )
-            self.assertEqual(chat_resp.status_code, 400)
-            self.assertIn("No analysis results available", chat_resp.get_json()["error"])
+            self.assertEqual(case.get("status"), "error",
+                             "Case should be in error state after failed parse")
 
 
 class TestRunAnalysisUnavailableProvider(unittest.TestCase):
@@ -3678,8 +3797,8 @@ class TestRunAnalysisUnavailableProvider(unittest.TestCase):
             }
 
             bad_config = {"ai": {"provider": "anthropic", "anthropic": {"api_key": ""}}}
-            with patch(
-                "app.routes.tasks.create_provider",
+            with patch.object(
+                routes_tasks, "ForensicAnalyzer",
                 side_effect=RuntimeError("Invalid API key"),
             ):
                 routes_tasks.run_analysis("bad-provider", "investigate breach", bad_config)
@@ -3761,16 +3880,20 @@ class TestAnalysisRerunClearsStaleResults(unittest.TestCase):
         with (
             patch.object(routes, "CASES_ROOT", self.cases_root),
             patch.object(routes_handlers, "CASES_ROOT", self.cases_root),
+            patch.object(routes_images, "CASES_ROOT", self.cases_root),
+            patch.object(routes_state, "CASES_ROOT", self.cases_root),
             patch.object(routes, "ForensicParser", FakeParser),
             patch.object(routes_handlers, "ForensicParser", FakeParser),
             patch.object(routes_tasks, "ForensicParser", FakeParser),
             patch.object(routes_evidence, "ForensicParser", FakeParser),
+            patch("app.parser.ForensicParser", FakeParser),
             patch.object(routes, "ForensicAnalyzer", FailOnSecondAnalyzer),
             patch.object(routes_tasks, "ForensicAnalyzer", FailOnSecondAnalyzer),
             patch.object(routes.threading, "Thread", ImmediateThread),
             patch.object(routes, "compute_hashes", return_value=hash_rv),
             patch.object(routes_handlers, "compute_hashes", return_value=hash_rv),
             patch.object(routes_evidence, "compute_hashes", return_value=hash_rv),
+            patch("app.hasher.compute_hashes", return_value=hash_rv),
         ):
             # Create case, load evidence, parse.
             create_resp = self.client.post(

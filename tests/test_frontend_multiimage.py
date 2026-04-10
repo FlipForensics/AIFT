@@ -140,9 +140,10 @@ class TestMultiImageJsExports(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Read the evidence.js file content."""
-        js_path = Path(__file__).resolve().parent.parent / "static" / "js" / "evidence.js"
-        cls.js_content = js_path.read_text(encoding="utf-8")
+        """Read the evidence JS files content."""
+        js_dir = Path(__file__).resolve().parent.parent / "static" / "js"
+        cls.js_content = (js_dir / "evidence.js").read_text(encoding="utf-8")
+        cls.js_multi_content = (js_dir / "evidence_multi.js").read_text(encoding="utf-8")
 
     def test_get_image_forms_exported(self) -> None:
         """The getImageForms function should be exported on the AIFT namespace."""
@@ -150,15 +151,15 @@ class TestMultiImageJsExports(unittest.TestCase):
 
     def test_add_image_form_exported(self) -> None:
         """The addImageForm function should be exported."""
-        self.assertIn("A.addImageForm", self.js_content)
+        self.assertIn("A.addImageForm", self.js_multi_content)
 
     def test_remove_image_form_exported(self) -> None:
         """The removeImageForm function should be exported."""
-        self.assertIn("A.removeImageForm", self.js_content)
+        self.assertIn("A.removeImageForm", self.js_multi_content)
 
     def test_render_image_summaries_exported(self) -> None:
         """The renderImageSummaries function should be exported."""
-        self.assertIn("A.renderImageSummaries", self.js_content)
+        self.assertIn("A.renderImageSummaries", self.js_multi_content)
 
     def test_images_state_initialized(self) -> None:
         """The st.images array should be initialized."""
@@ -166,8 +167,8 @@ class TestMultiImageJsExports(unittest.TestCase):
 
     def test_multi_image_api_endpoints_used(self) -> None:
         """The JS should call the multi-image API endpoints."""
-        self.assertIn("/images", self.js_content)
-        self.assertIn("/evidence", self.js_content)
+        self.assertIn("/images", self.js_multi_content)
+        self.assertIn("/evidence", self.js_multi_content)
 
 
 class TestMultiImageCss(unittest.TestCase):

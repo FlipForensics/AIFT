@@ -148,9 +148,11 @@ class MultiImageRoutesTests(unittest.TestCase):
         # Patch ForensicParser (images.py uses deferred import from evidence).
         for mod in (routes, routes_handlers, routes_tasks, routes_evidence):
             stack.enter_context(patch.object(mod, "ForensicParser", FakeParser))
+        stack.enter_context(patch("app.parser.ForensicParser", FakeParser))
         # Patch compute_hashes (images.py uses deferred import from evidence).
         for mod in (routes, routes_handlers, routes_evidence):
             stack.enter_context(patch.object(mod, "compute_hashes", return_value=dict(FAKE_HASHES)))
+        stack.enter_context(patch("app.hasher.compute_hashes", return_value=dict(FAKE_HASHES)))
         # Patch threading.
         stack.enter_context(patch.object(routes.threading, "Thread", ImmediateThread))
         return stack

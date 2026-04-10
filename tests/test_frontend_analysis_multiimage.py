@@ -281,7 +281,7 @@ class TestMultiImageChatContext(unittest.TestCase):
         self.assertIn("DC01 shows lateral movement indicators", context)
 
         # Should include cross-image summary.
-        self.assertIn("Cross-System Correlation", context)
+        self.assertIn("Cross-Image Correlation", context)
         self.assertIn("attacker pivoted from PC01 to DC01", context)
 
     def test_build_context_with_single_image_results(self) -> None:

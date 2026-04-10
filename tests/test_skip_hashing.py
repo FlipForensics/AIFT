@@ -29,6 +29,8 @@ from app.reporter import ReportGenerator
 import app.routes as routes
 import app.routes.evidence as routes_evidence
 import app.routes.handlers as routes_handlers
+import app.routes.images as routes_images
+import app.routes.state as routes_state
 import app.routes.tasks as routes_tasks
 
 FAKE_SHA256 = "a" * 64
@@ -101,10 +103,11 @@ def _standard_patches(cases_root: Path):
     from contextlib import ExitStack
 
     stack = ExitStack()
-    for mod in (routes, routes_handlers):
+    for mod in (routes, routes_handlers, routes_images, routes_state):
         stack.enter_context(patch.object(mod, "CASES_ROOT", cases_root))
     for mod in (routes, routes_handlers, routes_tasks, routes_evidence):
         stack.enter_context(patch.object(mod, "ForensicParser", FakeParser))
+    stack.enter_context(patch("app.parser.ForensicParser", FakeParser))
     for mod in (routes, routes_handlers, routes_evidence):
         stack.enter_context(patch.object(mod, "ReportGenerator", FakeReportGenerator))
     for mod in (routes, routes_handlers, routes_evidence):
@@ -112,6 +115,10 @@ def _standard_patches(cases_root: Path):
             mod, "compute_hashes",
             return_value={"sha256": FAKE_SHA256, "md5": FAKE_MD5, "size_bytes": 4},
         ))
+    stack.enter_context(patch(
+        "app.hasher.compute_hashes",
+        return_value={"sha256": FAKE_SHA256, "md5": FAKE_MD5, "size_bytes": 4},
+    ))
     for mod in (routes, routes_handlers, routes_evidence):
         stack.enter_context(patch.object(
             mod, "verify_hash", return_value=(True, FAKE_SHA256),
