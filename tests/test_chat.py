@@ -785,7 +785,7 @@ class ChatManagerTests(unittest.TestCase):
     # NEW TESTS: fit_history with unpaired messages
     # ==================================================================
 
-    def test_fit_history_ignores_unpaired_user_message(self) -> None:
+    def test_fit_history_preserves_trailing_unpaired_user_message(self) -> None:
         with TemporaryDirectory(prefix="aift-chat-") as tmp:
             mgr = ChatManager(tmp)
             history = [
@@ -794,10 +794,11 @@ class ChatManagerTests(unittest.TestCase):
                 {"role": "user", "content": "Q2_orphan"},
             ]
             fitted = mgr.fit_history(history, max_tokens=100000)
-            # Only the complete pair should be returned
-            self.assertEqual(len(fitted), 2)
+            # The complete pair plus trailing user message should be returned
+            self.assertEqual(len(fitted), 3)
             self.assertEqual(fitted[0]["content"], "Q1")
             self.assertEqual(fitted[1]["content"], "A1")
+            self.assertEqual(fitted[2]["content"], "Q2_orphan")
 
 
 class CsvRetrievalStringifyTests(unittest.TestCase):

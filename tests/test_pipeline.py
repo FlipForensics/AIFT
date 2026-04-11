@@ -52,28 +52,7 @@ class FakeTarget:
         self.closed = True
 
 
-class FakeProvider:
-    def __init__(self, responses: list[str]) -> None:
-        self.responses = list(responses)
-        self.calls: list[dict[str, str]] = []
-        self._index = 0
-
-    def analyze(self, system_prompt: str, user_prompt: str, max_tokens: int = 4096) -> str:
-        self.calls.append(
-            {
-                "system_prompt": system_prompt,
-                "user_prompt": user_prompt,
-                "max_tokens": str(max_tokens),
-            }
-        )
-        if self._index < len(self.responses):
-            response = self.responses[self._index]
-            self._index += 1
-            return response
-        return self.responses[-1]
-
-    def get_model_info(self) -> dict[str, str]:
-        return {"provider": "fake", "model": "fake-model-1"}
+from conftest import FakeProvider
 
 
 class PipelineTests(unittest.TestCase):

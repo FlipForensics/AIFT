@@ -462,11 +462,12 @@ class TestResolveHashVerificationSkipped(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertEqual(result["label"], "FAIL")
 
-    def test_empty_dict_still_returns_fail(self) -> None:
-        """An empty dict still returns FAIL (unchanged behaviour)."""
+    def test_empty_dict_returns_unavailable(self) -> None:
+        """An empty dict returns UNAVAILABLE (no data, not a failure)."""
         result = self.gen._resolve_hash_verification({})
-        self.assertFalse(result["passed"])
-        self.assertEqual(result["label"], "FAIL")
+        self.assertTrue(result["passed"])
+        self.assertTrue(result.get("skipped"))
+        self.assertEqual(result["label"], "UNAVAILABLE")
 
 
 if __name__ == "__main__":

@@ -28,41 +28,7 @@ from app.analyzer.multi_image import (
 # Test helpers
 # ---------------------------------------------------------------------------
 
-class FakeAuditLogger:
-    """Collects audit log entries for assertions."""
-
-    def __init__(self) -> None:
-        self.entries: list[tuple[str, dict]] = []
-
-    def log(self, action: str, details: dict) -> None:
-        """Record an audit entry."""
-        self.entries.append((action, details))
-
-
-class FakeProvider:
-    """Mock AI provider that returns canned responses."""
-
-    def __init__(self, responses: list[str] | None = None) -> None:
-        self.responses = list(responses or ["stub-response"])
-        self.calls: list[dict[str, str]] = []
-        self.call_count = 0
-
-    def analyze(self, system_prompt: str, user_prompt: str, max_tokens: int = 4096) -> str:
-        """Return the next canned response."""
-        idx = self.call_count
-        self.call_count += 1
-        self.calls.append({
-            "system_prompt": system_prompt,
-            "user_prompt": user_prompt,
-            "max_tokens": str(max_tokens),
-        })
-        if idx < len(self.responses):
-            return self.responses[idx]
-        return self.responses[-1]
-
-    def get_model_info(self) -> dict[str, str]:
-        """Return fake model info."""
-        return {"provider": "fake", "model": "fake-model-1"}
+from conftest import FakeAuditLogger, FakeProvider
 
 
 def _write_artifact_csv(parsed_dir: Path, artifact_key: str, rows: list[dict[str, str]]) -> Path:

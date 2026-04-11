@@ -110,11 +110,11 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config["server"]["host"], "127.0.0.1")
 
     def test_load_config_raises_on_non_dict_yaml(self) -> None:
-        """A YAML file whose root is not a dict must raise ValueError."""
+        """A YAML file whose root is not a dict must raise ConfigurationError."""
         with TemporaryDirectory(prefix="aift-config-test-") as temp_dir:
             config_path = Path(temp_dir) / "config.yaml"
             config_path.write_text("- item1\n- item2\n", encoding="utf-8")
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ConfigurationError):
                 load_config(config_path)
 
     def test_load_config_handles_empty_yaml_file(self) -> None:

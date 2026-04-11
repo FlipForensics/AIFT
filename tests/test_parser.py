@@ -21,13 +21,7 @@ _PATCH_TARGET_OPEN = "app.parser.core.Target.open"
 _PATCH_EVTX_CAP = "app.parser.core.EVTX_MAX_RECORDS_PER_FILE"
 _PATCH_MAX_RECORDS = "app.parser.core.MAX_RECORDS_PER_ARTIFACT"
 
-
-class FakeAuditLogger:
-    def __init__(self) -> None:
-        self.entries: list[tuple[str, dict]] = []
-
-    def log(self, action: str, details: dict) -> None:
-        self.entries.append((action, details))
+from conftest import FakeAuditLogger
 
 
 class FakeRecord:

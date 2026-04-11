@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.ai_providers import AIProviderError
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -23,6 +25,107 @@ FAKE_HASHES: dict[str, object] = {
     "size_bytes": 4,
 }
 """Standard fake hash result used by most test suites."""
+
+
+# ---------------------------------------------------------------------------
+# FakeAuditLogger
+# ---------------------------------------------------------------------------
+
+class FakeAuditLogger:
+    """Collects audit log entries in memory for test assertions.
+
+    Attributes:
+        entries: List of ``(action, details)`` tuples recorded by ``log()``.
+    """
+
+    def __init__(self) -> None:
+        """Initialise with an empty entry list."""
+        self.entries: list[tuple[str, dict]] = []
+
+    def log(self, action: str, details: dict) -> None:
+        """Record an audit entry.
+
+        Args:
+            action: The audit action name.
+            details: Associated detail dict.
+        """
+        self.entries.append((action, details))
+
+
+# ---------------------------------------------------------------------------
+# FakeProvider
+# ---------------------------------------------------------------------------
+
+class FakeProvider:
+    """Mock AI provider that returns canned responses.
+
+    Supports optional ``fail_calls`` to simulate provider failures on
+    specific call indices.
+
+    Attributes:
+        responses: Ordered list of canned response strings.
+        fail_calls: Set of call indices that should raise ``AIProviderError``.
+        calls: List of dicts recording each ``analyze()`` invocation.
+        call_count: Total number of ``analyze()`` calls made.
+    """
+
+    def __init__(
+        self,
+        responses: list[str] | None = None,
+        fail_calls: set[int] | None = None,
+    ) -> None:
+        """Initialise with optional responses and failure indices.
+
+        Args:
+            responses: Canned response strings returned in order.
+                Defaults to ``["stub-response"]``.
+            fail_calls: Set of zero-based call indices that should raise
+                ``AIProviderError`` instead of returning a response.
+        """
+        self.responses = list(responses or ["stub-response"])
+        self.fail_calls = set(fail_calls or set())
+        self.calls: list[dict[str, str]] = []
+        self.call_count = 0
+
+    def analyze(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 4096,
+    ) -> str:
+        """Return the next canned response or raise on configured failures.
+
+        Args:
+            system_prompt: The system prompt text.
+            user_prompt: The user prompt text.
+            max_tokens: Maximum tokens parameter (recorded but unused).
+
+        Returns:
+            The next canned response string.
+
+        Raises:
+            AIProviderError: If the current call index is in ``fail_calls``.
+        """
+        call_index = self.call_count
+        self.call_count += 1
+        self.calls.append({
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "max_tokens": str(max_tokens),
+        })
+        if call_index in self.fail_calls:
+            raise AIProviderError(f"provider-failure-{call_index}")
+        if call_index < len(self.responses):
+            return self.responses[call_index]
+        return self.responses[-1]
+
+    def get_model_info(self) -> dict[str, str]:
+        """Return fake model identification.
+
+        Returns:
+            Dict with ``provider`` and ``model`` keys.
+        """
+        return {"provider": "fake", "model": "fake-model-1"}
 
 
 # ---------------------------------------------------------------------------

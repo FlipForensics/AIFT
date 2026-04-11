@@ -596,9 +596,10 @@ class TestResolveHashVerification(unittest.TestCase):
 
     def test_insufficient_data(self) -> None:
         result = self.gen._resolve_hash_verification({})
-        self.assertFalse(result["passed"])
-        self.assertEqual(result["label"], "FAIL")
-        self.assertIn("Insufficient", result["detail"])
+        self.assertTrue(result["passed"])
+        self.assertTrue(result.get("skipped"))
+        self.assertEqual(result["label"], "UNAVAILABLE")
+        self.assertIn("No hash verification data", result["detail"])
 
     def test_unrecognized_string_falls_through_to_sha_check(self) -> None:
         result = self.gen._resolve_hash_verification({
