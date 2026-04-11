@@ -584,7 +584,7 @@ class ChatManagerTests(unittest.TestCase):
             self.assertEqual(mgr.get_recent_history(), [])
 
     def test_get_recent_history_consecutive_user_messages_takes_latest(self) -> None:
-        """When two user messages appear in a row, only the second pairs with the assistant."""
+        """When two user messages appear in a row, both are preserved in history."""
         with TemporaryDirectory(prefix="aift-chat-") as tmp:
             mgr = ChatManager(tmp)
             mgr.chat_file.parent.mkdir(parents=True, exist_ok=True)
@@ -595,9 +595,10 @@ class ChatManagerTests(unittest.TestCase):
             )
             mgr.chat_file.write_text(content, encoding="utf-8")
             recent = mgr.get_recent_history(max_pairs=10)
-            self.assertEqual(len(recent), 2)
-            self.assertEqual(recent[0]["content"], "Q2")
-            self.assertEqual(recent[1]["content"], "A2")
+            self.assertEqual(len(recent), 3)
+            self.assertEqual(recent[0]["content"], "Q1")
+            self.assertEqual(recent[1]["content"], "Q2")
+            self.assertEqual(recent[2]["content"], "A2")
 
     # ==================================================================
     # NEW TESTS: clear
