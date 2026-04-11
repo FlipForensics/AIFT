@@ -1783,3 +1783,50 @@ details > :not(summary) {
     display: block !important;
   }
 }
+
+/* ==========================================================================
+   Toast Notifications
+   ========================================================================== */
+#aift-toast-container {
+  position: fixed;
+  top: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+.aift-toast {
+  padding: var(--space-3) var(--space-6);
+  border-radius: 6px;
+  font-family: var(--font-ui);
+  font-size: 0.9rem;
+  color: #fff;
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  pointer-events: auto;
+  max-width: 36rem;
+  text-align: center;
+}
+
+.aift-toast-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.aift-toast-error {
+  background: var(--danger);
+}
+
+.aift-toast-info {
+  background: var(--accent);
+}
+
+.aift-toast-success {
+  background: var(--success);
+}

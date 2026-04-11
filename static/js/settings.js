@@ -179,7 +179,7 @@
     if (el.setPort) el.setPort.value = String(A.num(A.obj(s.server).port, 5000));
     if (el.setSize) {
       var threshMb = A.num(A.obj(s.evidence).large_file_threshold_mb, 0);
-      el.setSize.value = threshMb === 0 ? "0" : A.fmtNumber(threshMb / 1024, 3);
+      el.setSize.value = threshMb === 0 ? "0" : (threshMb / 1024).toFixed(3);
     }
     if (el.setCsvOutputDir) el.setCsvOutputDir.value = String(A.obj(s.evidence).csv_output_dir || "");
     updateCsvOutputHelp();

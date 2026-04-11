@@ -642,6 +642,44 @@ window.AIFT = (() => {
     return true;
   }
 
+  // ── Toast notifications ────────────────────────────────────────────────────
+
+  /**
+   * Show a temporary toast notification at the top of the viewport.
+   *
+   * Creates a small floating banner that auto-dismisses after a delay.
+   * Used for feedback that cannot be placed in a step-specific message
+   * element (e.g. when the target step panel is hidden).
+   *
+   * @param {string} text - Message to display.
+   * @param {string} [kind="error"] - One of "error", "info", or "success".
+   * @param {number} [durationMs=4000] - Time in ms before auto-dismiss.
+   */
+  function showToast(text, kind = "error", durationMs = 4000) {
+    if (!text) return;
+    let container = document.getElementById("aift-toast-container");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "aift-toast-container";
+      document.body.appendChild(container);
+    }
+    const toast = document.createElement("div");
+    toast.className = `aift-toast aift-toast-${kind}`;
+    toast.textContent = text;
+    toast.setAttribute("role", "alert");
+    container.appendChild(toast);
+    /* Trigger reflow so the CSS transition plays. */
+    void toast.offsetWidth;
+    toast.classList.add("aift-toast-visible");
+    const dismiss = () => {
+      toast.classList.remove("aift-toast-visible");
+      toast.addEventListener("transitionend", () => toast.remove(), { once: true });
+      /* Fallback removal if transitionend never fires. */
+      setTimeout(() => { if (toast.parentNode) toast.remove(); }, 500);
+    };
+    setTimeout(dismiss, durationMs);
+  }
+
   // ── Public API ─────────────────────────────────────────────────────────────
   return {
     // Constants
@@ -656,7 +694,7 @@ window.AIFT = (() => {
     // Case ID
     setCaseId, activeCaseId,
     // Messages & timers
-    ensureMsg, setMsg, clearMsg, ensureTimer, startTimer, stopTimer,
+    ensureMsg, setMsg, clearMsg, showToast, ensureTimer, startTimer, stopTimer,
     // SSE
     sseRetryDelayMs, closeSseChannel,
     // Network

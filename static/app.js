@@ -326,14 +326,35 @@
     return "Complete the previous step first.";
   }
 
-  /** Display the navigation-blocked reason as an error in the relevant step. */
+  /**
+   * Display the navigation-blocked reason as an error in the relevant step.
+   *
+   * When the target step's message element lives on a panel that is not
+   * currently visible (e.g. user clicks Step 5 from Step 1), the in-panel
+   * message would be invisible. In that case a toast notification is shown
+   * on the current viewport so the user always receives feedback.
+   *
+   * @param {number} n - The step number the user tried to navigate to.
+   */
   function blockedMsg(n) {
     const reason = navBlockReason(n);
     if (!reason) return;
-    if (n === 2) return A.setMsg(el.evidenceMsg, reason, "error");
-    if (n === 3) return A.setMsg(el.artifactsMsg, reason, "error");
-    if (n === 4) return A.setMsg(el.parseErr, reason, "error");
-    if (n === 5) return A.setMsg(el.analysisMsg, reason, "error");
+    /* Map target step to its message element and the step it lives on. */
+    const msgMap = {
+      2: { el: el.evidenceMsg,  step: 1 },
+      3: { el: el.artifactsMsg, step: 2 },
+      4: { el: el.parseErr,     step: 3 },
+      5: { el: el.analysisMsg,  step: 4 },
+    };
+    const entry = msgMap[n];
+    if (!entry) return;
+    /* If the message element's step is currently visible, show inline. */
+    if (entry.step === st.step) {
+      A.setMsg(entry.el, reason, "error");
+    } else {
+      /* Panel is hidden — fall back to a toast so the user sees feedback. */
+      A.showToast(reason, "error");
+    }
   }
 
   // ── Full case reset ────────────────────────────────────────────────────────
