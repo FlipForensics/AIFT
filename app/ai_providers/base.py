@@ -273,11 +273,11 @@ class AIProvider(ABC):
             if inlined:
                 logger.info("Base provider inlined attachment data into prompt.")
 
-        return self.analyze(
+        return "".join(self.analyze_stream(
             system_prompt=system_prompt,
             user_prompt=effective_prompt,
             max_tokens=max_tokens,
-        )
+        ))
 
     def _prepare_csv_attachments(
         self,

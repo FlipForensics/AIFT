@@ -152,6 +152,7 @@ class ForensicAnalyzer:
                 self.artifact_csv_paths[key] = Path(str(csv_path))
         # Not thread-safe: ForensicAnalyzer instances must not be shared across concurrent analysis threads.
         self._analysis_input_csv_paths: dict[str, Path] = {}
+        self.analysis_date_range: tuple[str, str] | None = None
         self.prompts_dir = Path(prompts_dir) if prompts_dir is not None else PROJECT_ROOT / "prompts"
         self.os_type = normalize_os_type(os_type)
         import random
@@ -680,13 +681,24 @@ class ForensicAnalyzer:
     # ------------------------------------------------------------------
 
     def _register_artifact_paths_from_metadata(self, metadata: Mapping[str, Any] | None) -> None:
-        """Extract and register artifact CSV paths from run metadata.
+        """Extract and register artifact CSV paths and date range from run metadata.
 
         Args:
             metadata: Optional metadata mapping.
         """
         if not isinstance(metadata, Mapping):
             return
+
+        raw_date_range = metadata.get("analysis_date_range")
+        if isinstance(raw_date_range, Mapping):
+            start_date = str(raw_date_range.get("start_date", "")).strip()
+            end_date = str(raw_date_range.get("end_date", "")).strip()
+            if start_date and end_date:
+                self.analysis_date_range: tuple[str, str] | None = (start_date, end_date)
+            else:
+                self.analysis_date_range = None
+        else:
+            self.analysis_date_range = None
 
         artifact_csv_paths = metadata.get("artifact_csv_paths")
         if isinstance(artifact_csv_paths, Mapping):
@@ -777,6 +789,7 @@ class ForensicAnalyzer:
             shortened_prompt_cutoff_tokens=self.shortened_prompt_cutoff_tokens,
             case_dir=self.case_dir,
             audit_log_fn=self._audit_log,
+            date_range=self.analysis_date_range,
         )
         self._set_analysis_input_csv_path(artifact_key=artifact_key, csv_path=analysis_csv_path)
         return prompt_text
@@ -887,23 +900,26 @@ class ForensicAnalyzer:
                 # Check if analyze_with_progress accepts 'attachments' parameter
                 sig = inspect.signature(analyze_with_progress)
                 if attachments and "attachments" in sig.parameters:
-                    analysis_text = analyze_with_progress(
-                        system_prompt=system_prompt,
+                    analysis_text = self._call_ai_with_retry(lambda: analyze_with_progress(
+                        system_prompt=self.system_prompt,
                         user_prompt=artifact_prompt,
+                        progress_callback=_provider_progress,
                         attachments=attachments,
                         max_tokens=self.ai_response_max_tokens,
-                    )
+                    ))
                 elif attachments:
                     # Provider doesn't support attachments in progress mode, use regular analyze
-                    analysis_text = self.ai_provider.analyze_with_attachments(
-                        system_prompt, artifact_prompt, attachments, self.ai_response_max_tokens
-                    )
+                    analysis_text = self._call_ai_with_retry(lambda: self.ai_provider.analyze_with_attachments(
+                        system_prompt=self.system_prompt, user_prompt=artifact_prompt,
+                        attachments=attachments, max_tokens=self.ai_response_max_tokens,
+                    ))
                 else:
-                    analysis_text = analyze_with_progress(
-                        system_prompt=system_prompt,
+                    analysis_text = self._call_ai_with_retry(lambda: analyze_with_progress(
+                        system_prompt=self.system_prompt,
                         user_prompt=artifact_prompt,
+                        progress_callback=_provider_progress,
                         max_tokens=self.ai_response_max_tokens,
-                    )
+                    ))
             else:
                 if progress_callback is not None:
                     emit_analysis_progress(progress_callback, artifact_key, "started", {

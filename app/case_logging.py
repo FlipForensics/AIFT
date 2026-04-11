@@ -21,6 +21,8 @@ Attributes:
     CASE_LOGS_DIRNAME: Subdirectory name for case log files.
     CASE_LOG_FILENAME: Name of the per-case application log file.
     CASE_LOG_FORMAT: :mod:`logging` format string for case log entries.
+    _MAX_CASE_HANDLERS: Upper bound on simultaneously registered case
+        handlers.  When exceeded, the oldest handlers are evicted.
 """
 
 from __future__ import annotations
@@ -50,6 +52,7 @@ CASE_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 _ACTIVE_CASE_ID: ContextVar[str | None] = ContextVar("aift_active_case_id", default=None)
 _HANDLER_LOCK = threading.RLock()
 _CASE_HANDLERS: dict[str, logging.Handler] = {}
+_MAX_CASE_HANDLERS = 100
 
 
 class _CasePathLogHandler(logging.Handler):
@@ -228,6 +231,17 @@ def register_case_log_handler(case_id: str, case_dir: str | Path) -> Path:
         existing = _CASE_HANDLERS.get(normalized_case_id)
         if existing is not None:
             return log_path
+
+        # Evict oldest handlers to prevent unbounded growth.
+        if len(_CASE_HANDLERS) >= _MAX_CASE_HANDLERS:
+            to_remove = list(_CASE_HANDLERS.keys())[
+                : len(_CASE_HANDLERS) - _MAX_CASE_HANDLERS + 1
+            ]
+            for old_id in to_remove:
+                old_handler = _CASE_HANDLERS.pop(old_id, None)
+                if old_handler is not None:
+                    root_logger.removeHandler(old_handler)
+                    old_handler.close()
 
         handler = _CasePathLogHandler(log_path)
         handler.setLevel(logging.INFO)

@@ -14,6 +14,13 @@ Attributes:
 """
 
 from ._utils import stringify_chat_value
+from .csv_retrieval import invalidate_header_cache
 from .manager import ChatManager
 
-__all__ = ["ChatManager", "csv_retrieval", "manager", "stringify_chat_value"]
+__all__ = [
+    "ChatManager",
+    "csv_retrieval",
+    "invalidate_header_cache",
+    "manager",
+    "stringify_chat_value",
+]

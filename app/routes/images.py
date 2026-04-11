@@ -819,9 +819,27 @@ def _run_image_parse(
             case["selected_artifacts"] = sorted(existing_selected)
             case["analysis_artifacts"] = sorted(existing_analysis)
             case["artifact_options"] = list(existing_options.values())
-            case["parse_results"] = results
-            case["artifact_csv_paths"] = csv_map
-            case["csv_output_dir"] = parsed_dir
+
+            # Rebuild case-level parse_results and artifact_csv_paths by
+            # aggregating from ALL images' per-image states.  This handles
+            # both concurrent multi-image parses (merge) and re-parses of the
+            # same image with different artifacts (replace stale entries).
+            merged_results: list[dict[str, Any]] = []
+            merged_results_keys: set[str] = set()
+            merged_csv_map: dict[str, Any] = {}
+            for iid, ist in image_states.items():
+                for entry in ist.get("parse_results") or []:
+                    akey = str(entry.get("artifact_key", ""))
+                    if akey and akey not in merged_results_keys:
+                        merged_results.append(entry)
+                        merged_results_keys.add(akey)
+                ist_csv = ist.get("artifact_csv_paths") or {}
+                merged_csv_map.update(ist_csv)
+            case["parse_results"] = merged_results
+            case["artifact_csv_paths"] = merged_csv_map
+
+            if not case.get("csv_output_dir"):
+                case["csv_output_dir"] = parsed_dir
 
             # Check if any other image is still parsing.  Only
             # transition the case to "parsed" when all images are

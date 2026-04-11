@@ -37,6 +37,7 @@ __all__ = [
     "retrieve_csv_data",
     "build_csv_aliases",
     "contains_heuristic_term",
+    "invalidate_header_cache",
 ]
 
 log = logging.getLogger(__name__)
@@ -46,6 +47,24 @@ log = logging.getLogger(__name__)
 # re-reading headers from disk on every chat message when artifact-name
 # matching fails.
 _HEADER_CACHE: dict[str, dict[Path, list[str]]] = {}
+
+
+def invalidate_header_cache(parsed_dir: str | Path | None = None) -> None:
+    """Clear cached CSV headers for a specific directory or all directories.
+
+    Call this after re-parsing artifacts to ensure chat retrieval picks
+    up newly created or modified CSV files instead of serving stale
+    cached headers.
+
+    Args:
+        parsed_dir: Directory path string to invalidate.  If *None*,
+            clears the entire cache.
+    """
+    if parsed_dir is None:
+        _HEADER_CACHE.clear()
+    else:
+        _HEADER_CACHE.pop(str(parsed_dir), None)
+
 
 CSV_RETRIEVAL_KEYWORDS = (
     "show me",
@@ -171,10 +190,14 @@ def _match_target_paths(
     cache_key = str(csv_paths[0].parent) if csv_paths else ""
     cached = _HEADER_CACHE.get(cache_key)
     if cached is not None:
-        headers_by_path = {
-            path: cached.get(path, _read_csv_headers(path))
-            for path in csv_paths
-        }
+        headers_by_path = {}
+        for path in csv_paths:
+            if path in cached:
+                headers_by_path[path] = cached[path]
+            else:
+                headers = _read_csv_headers(path)
+                headers_by_path[path] = headers
+                cached[path] = headers  # Update cache with new entry
     else:
         headers_by_path = {path: _read_csv_headers(path) for path in csv_paths}
         _HEADER_CACHE[cache_key] = dict(headers_by_path)

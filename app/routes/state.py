@@ -450,6 +450,18 @@ def stream_sse(store: dict[str, dict[str, Any]], case_id: str) -> Response:
                     yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
 
                 if status in TERMINAL_CASE_STATUSES and not pending:
+                    # One final check — events may arrive just after status
+                    # turns terminal.
+                    time.sleep(SSE_POLL_INTERVAL_SECONDS)
+                    with STATE_LOCK:
+                        state = store.get(case_id)
+                        if state is not None:
+                            final_events = list(state.get("events", [])[last:])
+                            last = len(state.get("events", []))
+                        else:
+                            final_events = []
+                    for event in final_events:
+                        yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
                     break
 
                 if not pending:

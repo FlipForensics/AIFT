@@ -297,7 +297,7 @@ def load_config(path: str | Path | None = None, use_env_overrides: bool = True) 
             parsed = yaml.safe_load(file) or {}
 
         if not isinstance(parsed, dict):
-            raise ConfigurationError(f"Invalid configuration format in {config_path}.")
+            raise ConfigurationError([f"Invalid configuration format in {config_path}."])
 
         _deep_merge_inplace(config, parsed)
     else:

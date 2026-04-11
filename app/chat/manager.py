@@ -437,7 +437,9 @@ class ChatManager:
         # Keep a trailing unpaired user message so the pending question
         # is not silently dropped from the returned context.
         if pending_user is not None:
-            result.append(pending_user)
+            pending_tokens = self.estimate_token_count(str(pending_user.get("content", "")))
+            if total + pending_tokens <= max_tokens or not result:
+                result.append(pending_user)
 
         return result
 

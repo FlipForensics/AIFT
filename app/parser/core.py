@@ -177,8 +177,13 @@ class ForensicParser:
             function_name = str(artifact_details.get("function", artifact_key))
             try:
                 available = bool(self.target.has_function(function_name))
-            except (PluginError, UnsupportedPluginError):
+            except Exception:
                 available = False
+                logger.warning(
+                    "Probe for artifact function '%s' raised an unexpected error",
+                    function_name,
+                    exc_info=True,
+                )
 
             available_artifact = dict(artifact_details)
             available_artifact["key"] = artifact_key
@@ -477,6 +482,7 @@ class ForensicParser:
             Tuple of ``(csv_paths, total_record_count)``.
         """
         writers: dict[str, dict[str, Any]] = {}
+        all_writer_states: list[dict[str, Any]] = []
         csv_paths: list[Path] = []
         record_count = 0
 
@@ -505,11 +511,24 @@ class ForensicParser:
                 elif writer_state["records_in_file"] >= EVTX_MAX_RECORDS_PER_FILE:
                     writer_state["handle"].close()
                     next_part = int(writer_state["part"]) + 1
+                    # Preserve old state for later header rewrite before replacing.
+                    old_state = writers[group_name]
+                    all_writer_states.append(old_state)
                     writer_state = self._open_evtx_writer(
                         artifact_key=artifact_key,
                         group_name=group_name,
                         part=next_part,
                     )
+                    # Carry forward accumulated fieldnames from previous part.
+                    if old_state["fieldnames"] is not None:
+                        writer_state["fieldnames"] = list(old_state["fieldnames"])
+                        writer_state["fieldnames_set"] = set(old_state["fieldnames_set"])
+                        writer_state["writer"] = csv.DictWriter(
+                            writer_state["handle"],
+                            fieldnames=writer_state["fieldnames"],
+                            extrasaction="ignore",
+                        )
+                        writer_state["writer"].writeheader()
                     writers[group_name] = writer_state
                     csv_paths.append(writer_state["path"])
 
@@ -553,7 +572,8 @@ class ForensicParser:
             for writer_state in writers.values():
                 writer_state["handle"].close()
 
-        for writer_state in writers.values():
+        all_writer_states.extend(writers.values())
+        for writer_state in all_writer_states:
             if writer_state["headers_expanded"] and writer_state["records_in_file"] > 0:
                 self._rewrite_csv_with_expanded_headers(
                     writer_state["path"], writer_state["fieldnames"],

@@ -233,13 +233,13 @@ def _render_table_html(header_cells: Sequence[str], body_rows: Sequence[Sequence
     Returns:
         An HTML string containing the complete ``<table>`` element.
     """
-    header_html = "".join(f"<th>{render_inline_markdown(cell, escape_html=True)}</th>" for cell in header_cells)
+    header_html = "".join(f"<th>{render_inline_markdown(cell, escape_html=False)}</th>" for cell in header_cells)
     table_html = [f"<table><thead><tr>{header_html}</tr></thead>"]
 
     if body_rows:
         rows_html: list[str] = []
         for row in body_rows:
-            row_html = "".join(f"<td>{render_inline_markdown(cell, escape_html=True)}</td>" for cell in row)
+            row_html = "".join(f"<td>{render_inline_markdown(cell, escape_html=False)}</td>" for cell in row)
             rows_html.append(f"<tr>{row_html}</tr>")
         table_html.append(f"<tbody>{''.join(rows_html)}</tbody>")
 
