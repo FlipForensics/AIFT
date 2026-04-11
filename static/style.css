@@ -968,8 +968,8 @@ thead th {
   text-transform: uppercase;
 }
 
-tbody td:nth-child(2),
-tbody td:nth-child(3) {
+#parse-single-table tbody td:nth-child(2),
+#parse-single-table tbody td:nth-child(3) {
   font-family: var(--font-mono);
 }
 
@@ -1392,8 +1392,13 @@ tbody td:nth-child(3) {
   background: var(--bg-card);
 }
 
-.chat-input-bar input {
+.chat-input-bar textarea {
   margin: 0;
+  resize: vertical;
+  min-height: 2.5rem;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.4;
 }
 
 .chat-input-bar button {
@@ -1512,6 +1517,22 @@ details > :not(summary) {
   background: var(--bg-secondary);
   padding: var(--space-5);
   z-index: 1000;
+}
+
+.settings-close-btn {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: var(--space-1);
+  line-height: 1;
+}
+.settings-close-btn:hover {
+  color: var(--text-primary);
 }
 
 #settings-form {
@@ -1734,7 +1755,11 @@ details > :not(summary) {
   }
 
   .wizard-step[hidden] {
-    display: block !important;
+    display: none !important;
+  }
+
+  .wizard-step {
+    break-inside: avoid;
   }
 
   .wizard-step,

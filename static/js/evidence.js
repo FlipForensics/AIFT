@@ -254,6 +254,26 @@
   }
 
   /**
+   * Format an OS version string, prepending the OS type label when it is
+   * not already contained in the version text.
+   *
+   * @param {string} rawVersion - Raw os_version value (may be empty/"-").
+   * @param {string} osType - Detected OS type label (e.g. "windows").
+   * @returns {string} Formatted OS version string.
+   */
+  function formatOsVersion(rawVersion, osType) {
+    let osVersion = String(rawVersion || "-");
+    const osLabel = String(osType || "").trim().toLowerCase();
+    if (osLabel && osLabel !== "unknown" && osVersion !== "-") {
+      if (osVersion.toLowerCase().indexOf(osLabel) === -1) {
+        const capitalized = osLabel.charAt(0).toUpperCase() + osLabel.slice(1);
+        osVersion = capitalized + " \u2014 " + osVersion;
+      }
+    }
+    return osVersion;
+  }
+
+  /**
    * Populate the evidence summary card with metadata and hashes.
    *
    * @param {Object} m - Metadata object (hostname, os_version, domain, ips).
@@ -263,20 +283,7 @@
   function renderSummary(m, h, osType) {
     if (el.sumHost) el.sumHost.textContent = String(m.hostname || "-");
 
-    /* Build the OS display string: include the OS type label when it
-       differs meaningfully from the version string (e.g. "Linux" prefix
-       for a version like "Ubuntu 22.04"). */
-    let osVersion = String(m.os_version || "-");
-    const osLabel = String(osType || "").trim().toLowerCase();
-    if (osLabel && osLabel !== "unknown" && osVersion !== "-") {
-      const versionLower = osVersion.toLowerCase();
-      /* Only prepend the type if it is not already part of the version. */
-      if (versionLower.indexOf(osLabel) === -1) {
-        const capitalized = osLabel.charAt(0).toUpperCase() + osLabel.slice(1);
-        osVersion = capitalized + " \u2014 " + osVersion;
-      }
-    }
-    if (el.sumOs) el.sumOs.textContent = osVersion;
+    if (el.sumOs) el.sumOs.textContent = A.formatOsVersion(m.os_version, osType);
 
     if (el.sumDomain) el.sumDomain.textContent = String(m.domain || "-");
     if (el.sumIps) el.sumIps.textContent = String(m.ips || "-");
@@ -764,6 +771,7 @@
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
+  A.formatOsVersion = formatOsVersion;
   A.setupEvidence = setupEvidence;
   A.setupArtifacts = setupArtifacts;
   A.loadArtifactProfiles = loadArtifactProfiles;

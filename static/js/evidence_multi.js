@@ -288,7 +288,10 @@
             if (!a || !a.key) return;
             const existing = allArtifacts.find((x) => x.key === a.key);
             if (!existing) allArtifacts.push(Object.assign({}, a));
-            else if (a.available && !existing.available) existing.available = true;
+            else if (a.available && !existing.available) {
+              existing.available = true;
+              if (a.name) existing.name = a.name;
+            }
           });
         }
 
@@ -354,26 +357,6 @@
   }
 
   /**
-   * Format an OS version string, prepending the OS type label when it is
-   * not already contained in the version text.
-   *
-   * @param {string} rawVersion - Raw os_version value (may be empty/"-").
-   * @param {string} osType - Detected OS type label (e.g. "windows").
-   * @returns {string} Formatted OS version string.
-   */
-  function formatOsVersion(rawVersion, osType) {
-    let osVersion = String(rawVersion || "-");
-    const osLabel = String(osType || "").trim().toLowerCase();
-    if (osLabel && osLabel !== "unknown" && osVersion !== "-") {
-      if (osVersion.toLowerCase().indexOf(osLabel) === -1) {
-        const capitalized = osLabel.charAt(0).toUpperCase() + osLabel.slice(1);
-        osVersion = capitalized + " \u2014 " + osVersion;
-      }
-    }
-    return osVersion;
-  }
-
-  /**
    * Render per-image metadata on a card in Step 1.
    *
    * @param {HTMLElement} card - The .image-form-card element.
@@ -389,7 +372,7 @@
       if (el) el.textContent = val;
     };
     setText("image-sum-hostname", String(metadata.hostname || "-"));
-    setText("image-sum-os", formatOsVersion(metadata.os_version, osType));
+    setText("image-sum-os", A.formatOsVersion(metadata.os_version, osType));
     setText("image-sum-domain", String(metadata.domain || "-"));
     setText("image-sum-ips", String(metadata.ips || "-"));
     setText("image-sum-sha256", String(hashes.sha256 || "-"));
@@ -422,7 +405,7 @@
       article.className = "summary-card";
       const m = img.metadata || {};
       const h = img.hashes || {};
-      const osVersion = formatOsVersion(m.os_version, img.os_type);
+      const osVersion = A.formatOsVersion(m.os_version, img.os_type);
       article.innerHTML = `
         <h4>${A.escapeHtml(img.label || "Image")}</h4>
         <dl>

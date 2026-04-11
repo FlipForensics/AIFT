@@ -27,6 +27,8 @@
       });
     }
     el.settingsBtn.addEventListener("click", () => (el.settingsPanel.hidden ? openSettings() : closeSettings()));
+    const closeBtn = document.getElementById("settings-close-btn");
+    if (closeBtn) closeBtn.addEventListener("click", () => closeSettings());
     if (el.setProvider) {
       el.setProvider.addEventListener("change", () => {
         fillProviderFields();
@@ -117,6 +119,7 @@
     // Move focus into the dialog
     const focusable = getFocusableElements();
     if (focusable.length) focusable[0].focus();
+    el.settingsPanel.removeEventListener("keydown", handleFocusTrap);
     el.settingsPanel.addEventListener("keydown", handleFocusTrap);
     loadSettings().catch((e) => A.setMsg(el.settingsMsg, `Unable to refresh settings: ${e.message}`, "error"));
   }

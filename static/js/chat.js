@@ -33,6 +33,14 @@
         await sendChatMessage();
       });
     }
+    if (el.chatInput) {
+      el.chatInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          if (el.chatForm) el.chatForm.requestSubmit();
+        }
+      });
+    }
     if (el.chatClear) {
       el.chatClear.addEventListener("click", async () => { await clearChat(); });
     }
@@ -376,8 +384,9 @@
     const caseId = A.activeCaseId();
     if (!caseId) return A.setMsg(el.resultsMsg, "No active case for chat.", "error");
     if (st.chat.run) return A.setMsg(el.resultsMsg, "Wait for the current chat response to finish.", "error");
+    st.chat.run = true;
     const message = A.val(el.chatInput);
-    if (!message) return;
+    if (!message) { st.chat.run = false; return; }
 
     toggleChat(true);
     appendChatMessage("user", message);
@@ -387,7 +396,6 @@
     st.chat.pending = pendingMessage
       ? { bubble: pendingMessage.bubble, contentNode: pendingMessage.contentNode, typingNode: pendingMessage.typingNode, text: "" }
       : null;
-    st.chat.run = true;
     st.chat.seq = -1;
     st.chat.retryCount = 0;
     syncChatControls();
@@ -420,7 +428,7 @@
 
   /** Dispatch a single chat SSE event (token, done, error) to the UI. */
   function onChatEvent(caseId, payload) {
-    if (caseId !== A.activeCaseId()) { finalizeChatStream(); return; }
+    if (caseId !== A.activeCaseId()) { finalizePendingChatMessage(); finalizeChatStream(); return; }
     const type = String(payload.type || "");
     if (type === "token") {
       const pending = ensurePendingChatMessage();

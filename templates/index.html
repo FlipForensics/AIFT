@@ -48,17 +48,17 @@
       </button>
     </div>
     <nav aria-label="Wizard steps">
-      <ol class="step-indicator">
-        <li id="indicator-evidence" class="is-active" data-step-target="step-evidence" aria-current="step">Evidence</li>
-        <li id="indicator-artifacts" data-step-target="step-artifacts">Artifacts</li>
-        <li id="indicator-parsing" data-step-target="step-parsing">Parsing</li>
-        <li id="indicator-analysis" data-step-target="step-analysis">Analysis</li>
-        <li id="indicator-results" data-step-target="step-results">Results</li>
+      <ol class="step-indicator" role="tablist">
+        <li id="indicator-evidence" class="is-active" data-step-target="step-evidence" aria-current="step" tabindex="0" role="tab">Evidence</li>
+        <li id="indicator-artifacts" data-step-target="step-artifacts" tabindex="0" role="tab">Artifacts</li>
+        <li id="indicator-parsing" data-step-target="step-parsing" tabindex="0" role="tab">Parsing</li>
+        <li id="indicator-analysis" data-step-target="step-analysis" tabindex="0" role="tab">Analysis</li>
+        <li id="indicator-results" data-step-target="step-results" tabindex="0" role="tab">Results</li>
       </ol>
     </nav>
   </header>
 
-  <main id="wizard" aria-live="polite">
+  <main id="wizard">
     <section id="step-evidence" class="wizard-step is-active" data-step="1" aria-labelledby="step-evidence-title">
       <h2 id="step-evidence-title">Step 1: Evidence</h2>
 
@@ -84,8 +84,8 @@
               <button type="button" class="image-remove-btn" data-image-index="0" hidden>Remove</button>
             </div>
             <div class="form-row">
-              <label>Label (optional)</label>
-              <input class="image-label-input" type="text" placeholder="e.g. Workstation-PC01" autocomplete="off" spellcheck="false">
+              <label for="image-label-input">Label (optional)</label>
+              <input id="image-label-input" class="image-label-input" type="text" placeholder="e.g. Workstation-PC01" autocomplete="off" spellcheck="false">
             </div>
 
             <fieldset class="mode-toggle">
@@ -110,8 +110,9 @@
 
             <section class="image-path-panel" data-mode="path">
               <h4>Local Path</h4>
-              <label>Filesystem path</label>
+              <label for="image-path-input">Filesystem path</label>
               <input
+                id="image-path-input"
                 class="image-path-input"
                 type="text"
                 placeholder="C:\Evidence\disk-image.E01 (or .dd, .vmdk, .vhd, .qcow2, folder, ...)"
@@ -604,13 +605,14 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
           </div>
           <form id="chat-form" class="chat-input-bar">
             <label for="chat-input" class="sr-only">Ask a follow-up question</label>
-            <input
+            <textarea
               id="chat-input"
-              type="text"
-              placeholder="Ask about findings, timelines, or artifacts..."
+              rows="2"
+              placeholder="Ask a follow-up question about the analysis..."
               autocomplete="off"
               spellcheck="false"
-            >
+              aria-label="Chat message"
+            ></textarea>
             <button id="chat-send" type="submit">Send</button>
           </form>
         </div>
@@ -622,9 +624,10 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
     <div class="app-footer-inner">©Flip Forensics <span class="mono">v{{ tool_version }}</span></div>
   </footer>
 
-  <div id="setting-tooltip"></div>
+  <div id="setting-tooltip" role="tooltip"></div>
   <div id="settings-backdrop" class="settings-backdrop" hidden></div>
   <div id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+    <button type="button" id="settings-close-btn" class="settings-close-btn" aria-label="Close settings">&times;</button>
     <h2 id="settings-title">Settings</h2>
     <form id="settings-form">
       <div class="settings-tabs" role="tablist" aria-label="Settings sections">
