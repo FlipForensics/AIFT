@@ -477,7 +477,7 @@ class ForensicAnalyzer:
             else:
                 # No case_dir — restrict to current working directory
                 cwd = Path.cwd().resolve()
-                if not str(resolved).startswith(str(cwd)):
+                if not resolved.is_relative_to(cwd):
                     logging.warning(
                         "Path traversal blocked: artifact_key %r resolved to %s "
                         "which is outside working directory %s",
@@ -1019,6 +1019,8 @@ class ForensicAnalyzer:
                 "duration_seconds": round(duration_seconds, 6), "status": "success",
             })
             return summary
+        except AnalysisCancelledError:
+            raise
         except Exception as error:
             duration_seconds = perf_counter() - start_time
             summary = f"Analysis failed: {error}"

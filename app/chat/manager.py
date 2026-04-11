@@ -289,6 +289,7 @@ class ChatManager:
         findings_section = f"Per-Artifact Findings (compressed):\n{compressed_findings}"
         return self._assemble_context(
             analysis_results, investigation_context, metadata, findings_section,
+            use_provided_findings=True,
         )
 
     def context_needs_compression(self, context_block: str, token_budget: int) -> bool:
@@ -484,6 +485,7 @@ class ChatManager:
         investigation_context: str,
         metadata: Mapping[str, Any] | None,
         findings_section: str,
+        use_provided_findings: bool = False,
     ) -> str:
         """Assemble context sections shared by build and rebuild methods.
 
@@ -497,6 +499,11 @@ class ChatManager:
         * A ``=== Cross-Image Correlation ===`` section is appended when
           a ``cross_image_summary`` is present.
 
+        When *use_provided_findings* is *True* (e.g. during context
+        compression), the caller-supplied *findings_section* is used
+        verbatim for **both** single-image and multi-image cases,
+        bypassing the per-image findings rebuild.
+
         For **single-image** (V1) results the original flat layout is
         used: system metadata, executive summary, and findings.
 
@@ -506,6 +513,11 @@ class ChatManager:
             metadata: Evidence metadata mapping.
             findings_section: Pre-formatted findings section string
                 (including its header line).
+            use_provided_findings: When *True*, append *findings_section*
+                directly instead of rebuilding per-artifact findings
+                from raw analysis data.  Used by
+                :meth:`rebuild_context_with_compressed_findings` to
+                preserve compressed findings for multi-image cases.
 
         Returns:
             A formatted multi-section context string.
@@ -549,28 +561,33 @@ class ChatManager:
                 )
             )
 
-            # Per-image sections: findings + summary grouped by image.
-            for image_id, img_data in images_data.items():
-                if not isinstance(img_data, Mapping):
-                    continue
-                label = _stringify(img_data.get("label"), default=image_id)
-                img_summary = _stringify(img_data.get("summary"), default="No summary.")
+            if use_provided_findings:
+                # Caller supplied pre-compressed findings -- use them
+                # verbatim instead of rebuilding from raw per-artifact data.
+                sections.append(findings_section)
+            else:
+                # Per-image sections: findings + summary grouped by image.
+                for image_id, img_data in images_data.items():
+                    if not isinstance(img_data, Mapping):
+                        continue
+                    label = _stringify(img_data.get("label"), default=image_id)
+                    img_summary = _stringify(img_data.get("summary"), default="No summary.")
 
-                raw = img_data.get("per_artifact")
-                items = self._normalize_findings_items(raw)
-                findings_tuples = self._extract_findings_tuples(items)
-                if findings_tuples:
-                    artifact_lines = "\n".join(
-                        f"- {name}: {text}" for name, text in findings_tuples
+                    raw = img_data.get("per_artifact")
+                    items = self._normalize_findings_items(raw)
+                    findings_tuples = self._extract_findings_tuples(items)
+                    if findings_tuples:
+                        artifact_lines = "\n".join(
+                            f"- {name}: {text}" for name, text in findings_tuples
+                        )
+                    else:
+                        artifact_lines = "- No per-artifact findings available."
+
+                    sections.append(
+                        f"=== Image: {label} ===\n"
+                        f"{artifact_lines}\n"
+                        f"Summary: {img_summary}"
                     )
-                else:
-                    artifact_lines = "- No per-artifact findings available."
-
-                sections.append(
-                    f"=== Image: {label} ===\n"
-                    f"{artifact_lines}\n"
-                    f"Summary: {img_summary}"
-                )
 
             # Cross-image summary.
             cross_summary = _stringify(analysis.get("cross_image_summary"))
@@ -592,11 +609,9 @@ class ChatManager:
             )
             sections.append(f"Executive Summary:\n{summary}")
 
-        # Only append the caller-provided findings_section for single-image
-        # cases.  Multi-image cases already include per-artifact findings
-        # inline within each ``=== Image: <label> ===`` block above, so
-        # appending findings_section again would duplicate the content and
-        # defeat compression in rebuild_context_with_compressed_findings.
+        # For single-image cases, append the caller-provided findings
+        # section.  Multi-image cases handle findings above -- either
+        # via the use_provided_findings path or by rebuilding inline.
         is_multi_image = isinstance(images_data, Mapping) and bool(images_data)
         if not is_multi_image:
             sections.append(findings_section)

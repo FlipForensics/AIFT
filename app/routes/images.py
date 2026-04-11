@@ -805,6 +805,13 @@ def _run_image_parse(
             emit_progress(PARSE_PROGRESS, progress_key, {
                 "type": "parse_cancelled", "image_id": image_id,
             })
+            # Mirror terminal status to case-level progress so SSE
+            # clients on /api/cases/<case_id>/parse/progress see it.
+            if not any_image_still_running:
+                set_progress_status(PARSE_PROGRESS, case_id, "cancelled")
+                emit_progress(PARSE_PROGRESS, case_id, {
+                    "type": "parse_cancelled", "image_id": image_id,
+                })
             return
 
         results, csv_map = outcome
@@ -877,16 +884,19 @@ def _run_image_parse(
         completed = sum(1 for item in results if item.get("success"))
         failed = len(results) - completed
         set_progress_status(PARSE_PROGRESS, progress_key, "completed")
-        emit_progress(
-            PARSE_PROGRESS, progress_key,
-            {
-                "type": "parse_completed",
-                "image_id": image_id,
-                "total_artifacts": len(results),
-                "successful_artifacts": completed,
-                "failed_artifacts": failed,
-            },
-        )
+        completion_event: dict[str, Any] = {
+            "type": "parse_completed",
+            "image_id": image_id,
+            "total_artifacts": len(results),
+            "successful_artifacts": completed,
+            "failed_artifacts": failed,
+        }
+        emit_progress(PARSE_PROGRESS, progress_key, completion_event)
+        # Mirror terminal status to case-level progress so SSE
+        # clients on /api/cases/<case_id>/parse/progress see it.
+        if not any_image_still_running:
+            set_progress_status(PARSE_PROGRESS, case_id, "completed")
+            emit_progress(PARSE_PROGRESS, case_id, completion_event)
         invalidate_header_cache(parsed_dir)
     except Exception:
         LOGGER.exception("Background parse failed for case %s image %s", case_id, image_id)
@@ -907,3 +917,8 @@ def _run_image_parse(
             mark_case_status(case_id, "error")
         set_progress_status(PARSE_PROGRESS, progress_key, "failed", user_message)
         emit_progress(PARSE_PROGRESS, progress_key, {"type": "parse_failed", "error": user_message})
+        # Mirror terminal status to case-level progress so SSE
+        # clients on /api/cases/<case_id>/parse/progress see it.
+        if not any_still_running:
+            set_progress_status(PARSE_PROGRESS, case_id, "failed", user_message)
+            emit_progress(PARSE_PROGRESS, case_id, {"type": "parse_failed", "error": user_message})

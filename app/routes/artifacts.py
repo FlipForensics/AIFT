@@ -633,9 +633,9 @@ def start_parse(case_id: str) -> tuple[Response, int]:
     # Delegate to image-specific parse if images exist.
     from .images import start_image_parse
     with STATE_LOCK:
-        image_states = case.get("image_states", {})
-    if image_states:
-        first_image_id = next(iter(image_states))
+        image_ids = list(case.get("image_states", {}).keys())
+    if image_ids:
+        first_image_id = image_ids[0]
         return start_image_parse(case_id, first_image_id)
 
     with STATE_LOCK:

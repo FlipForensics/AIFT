@@ -222,8 +222,10 @@ def run_chat(case_id: str, message: str, config_snapshot: dict[str, Any]) -> Non
         return
 
     with STATE_LOCK:
-        case_snapshot = dict(case)
         audit_logger = case["audit"]
+        # Deep-copy the case dict so the background thread reads a stable
+        # snapshot, but exclude the audit logger which is not copyable.
+        case_snapshot = copy.deepcopy({k: v for k, v in case.items() if k != "audit"})
 
     analysis_results = load_case_analysis_results(case_snapshot)
     if not analysis_results:

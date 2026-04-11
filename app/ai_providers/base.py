@@ -463,9 +463,16 @@ def _run_with_rate_limit_retries(
 
             result = request_fn()
 
-            with state.lock:
-                state.backoff_duration = 0.0
-                state.consecutive_error_count = 0
+            # Only reset backoff state for non-streaming responses.
+            # Streaming responses return a lazy iterator; the actual
+            # API data consumption happens later when the caller
+            # iterates.  Resetting here would falsely signal success
+            # before any data has been received.
+            is_streaming = hasattr(result, '__next__')
+            if not is_streaming:
+                with state.lock:
+                    state.backoff_duration = 0.0
+                    state.consecutive_error_count = 0
 
             return result
         except rate_limit_error_type as error:

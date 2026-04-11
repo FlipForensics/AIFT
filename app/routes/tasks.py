@@ -18,6 +18,7 @@ ensure log messages are tagged with the case ID.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import time
@@ -630,7 +631,7 @@ def run_multi_image_analysis_task(
     with STATE_LOCK:
         case_dir = case["case_dir"]
         audit_logger = case["audit"]
-        image_states = dict(case.get("image_states", {}))
+        image_states = copy.deepcopy(case.get("image_states", {}))
         case_images_list = list(case.get("images", []))
         analysis_date_range = case.get("analysis_date_range")
 
