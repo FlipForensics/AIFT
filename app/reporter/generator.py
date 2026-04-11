@@ -45,6 +45,21 @@ from .markdown import (
     format_markdown_block,
 )
 
+# More specific pattern for extracting confidence from free-text analysis.
+# Requires "confidence" (or "Confidence") as context preceding the label,
+# allowing a few intervening words (e.g. "Confidence is MEDIUM",
+# "confidence level: HIGH").  This avoids false positives from ordinary
+# English phrases like "the low number of events".
+CONFIDENCE_LABEL_PATTERN = re.compile(
+    r"\bconfidence\b[\s:]+(?:\w+[\s:]+){0,3}(CRITICAL|HIGH|MEDIUM|LOW)\b",
+    re.IGNORECASE,
+)
+
+# Fallback pattern that matches only ALL-CAPS confidence words.  Used when
+# the context-aware CONFIDENCE_LABEL_PATTERN does not find a match but the
+# text contains an unambiguous uppercase confidence indicator like "LOW".
+_CONFIDENCE_ALLCAPS_PATTERN = re.compile(r"\b(CRITICAL|HIGH|MEDIUM|LOW)\b")
+
 __all__ = ["ReportGenerator"]
 
 DEFAULT_CASE_NAME = "Untitled Investigation"
@@ -858,7 +873,20 @@ class ReportGenerator:
             if label in CONFIDENCE_CLASS_MAP:
                 return label, CONFIDENCE_CLASS_MAP[label]
 
-        match = CONFIDENCE_PATTERN.search(analysis_text or "")
+        text = analysis_text or ""
+
+        # First, try the context-aware pattern that requires "confidence"
+        # to precede the label word, avoiding false positives like
+        # "the low number of events" or "high frequency of access".
+        match = CONFIDENCE_LABEL_PATTERN.search(text)
+        if match:
+            label = match.group(1).upper()
+            return label, CONFIDENCE_CLASS_MAP[label]
+
+        # Fall back to matching standalone ALL-CAPS confidence words.
+        # AI models typically output "LOW", "HIGH" etc. in uppercase for
+        # confidence ratings, while ordinary prose uses lowercase.
+        match = _CONFIDENCE_ALLCAPS_PATTERN.search(text)
         if match:
             label = match.group(1).upper()
             return label, CONFIDENCE_CLASS_MAP[label]

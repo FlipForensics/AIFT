@@ -143,6 +143,7 @@ def run_multi_image_analysis(
     investigation_context: str,
     progress_callback: Any | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    analysis_date_range: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run the full multi-image analysis pipeline.
 
@@ -176,6 +177,9 @@ def run_multi_image_analysis(
             existing convention.
         cancel_check: Optional callable returning ``True`` when the
             user has cancelled.
+        analysis_date_range: Optional ``(start_date, end_date)`` tuple
+            for date-range filtering.  Applied to each image's
+            artifacts, matching the single-image path convention.
 
     Returns:
         A dict with the structure::
@@ -209,6 +213,7 @@ def run_multi_image_analysis(
     with _ANALYZER_LOCK:
         saved_os_type = analyzer.os_type
         saved_csv_paths = dict(analyzer.artifact_csv_paths)
+        saved_date_range = analyzer.analysis_date_range
 
     # ------------------------------------------------------------------
     try:
@@ -231,6 +236,11 @@ def run_multi_image_analysis(
                 analyzer.os_type = str(
                     metadata.get("os_type", "unknown")
                 )
+
+                # Apply the user-configured date range filter so that
+                # per-artifact data preparation honours it, matching
+                # the single-image path behaviour.
+                analyzer.analysis_date_range = analysis_date_range
 
                 # Clear stale CSV paths from prior image iterations so
                 # that analyze_artifact() and citation validation always
@@ -283,6 +293,7 @@ def run_multi_image_analysis(
         with _ANALYZER_LOCK:
             analyzer.os_type = saved_os_type
             analyzer.artifact_csv_paths = saved_csv_paths
+            analyzer.analysis_date_range = saved_date_range
 
     # ------------------------------------------------------------------
     # Phase 2: Per-image summary

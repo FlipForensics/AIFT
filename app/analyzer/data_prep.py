@@ -379,7 +379,7 @@ def _flag_anomalous_rows(
     min_count = max(1, int(total * threshold))
 
     # Build per-column frequency counts.
-    columns = [c for c in rows[0].keys() if c != "_row_ref"]
+    columns = [c for c in rows[0].keys() if c not in ("_row_ref", DEDUP_COMMENT_COLUMN)]
     counters: dict[str, Counter[str]] = {col: Counter() for col in columns}
     for row in rows:
         for col in columns:

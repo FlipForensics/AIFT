@@ -128,7 +128,7 @@ DEFAULT_FORENSIC_SYSTEM_PROMPT = (
     "Prioritize incident-relevant findings and response actions; use baseline only as supporting context."
 )
 CHAT_HISTORY_MAX_PAIRS = 20
-TERMINAL_CASE_STATUSES = frozenset({"completed", "failed", "error"})
+TERMINAL_CASE_STATUSES = frozenset({"completed", "failed", "error", "cancelled"})
 SSE_POLL_INTERVAL_SECONDS = 0.2
 SSE_INITIAL_IDLE_GRACE_SECONDS = 1.0
 CASE_TTL_SECONDS = 21600
@@ -576,7 +576,7 @@ def _evict_orphaned_progress(now: float) -> None:
 def cleanup_terminal_cases(exclude_case_id: str | None = None) -> None:
     """Remove in-memory state for TTL-expired cases.
 
-    Terminal cases (completed, failed, error) are only evicted once their
+    Terminal cases (completed, failed, error, cancelled) are only evicted once their
     ``_terminal_since`` timestamp exceeds ``CASE_TTL_SECONDS``, so that
     post-analysis actions (chat, report, download) continue to work.
     Non-terminal cases are evicted if their progress entries exceed the TTL.

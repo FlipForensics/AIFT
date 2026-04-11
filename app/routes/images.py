@@ -41,6 +41,7 @@ from .state import (
     stream_sse,
     success_response,
 )
+from ..chat.csv_retrieval import invalidate_header_cache
 
 __all__ = ["images_bp", "get_case_manager"]
 
@@ -788,7 +789,22 @@ def _run_image_parse(
             progress_key=progress_key,
         )
         if outcome is None:
-            # Parsing was cancelled.
+            # Parsing was cancelled — reset status so the user can retry.
+            # Only transition case status when no other image is still parsing.
+            with STATE_LOCK:
+                image_states = case.get("image_states", {})
+                any_image_still_running = any(
+                    iid != image_id
+                    and _progress_key(case_id, iid) in PARSE_PROGRESS
+                    and PARSE_PROGRESS[_progress_key(case_id, iid)].get("status") == "running"
+                    for iid in image_states
+                )
+            if not any_image_still_running:
+                mark_case_status(case_id, "evidence_loaded")
+            set_progress_status(PARSE_PROGRESS, progress_key, "cancelled")
+            emit_progress(PARSE_PROGRESS, progress_key, {
+                "type": "parse_cancelled", "image_id": image_id,
+            })
             return
 
         results, csv_map = outcome
@@ -871,6 +887,7 @@ def _run_image_parse(
                 "failed_artifacts": failed,
             },
         )
+        invalidate_header_cache(parsed_dir)
     except Exception:
         LOGGER.exception("Background parse failed for case %s image %s", case_id, image_id)
         user_message = (

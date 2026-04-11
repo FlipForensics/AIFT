@@ -49,6 +49,17 @@ __all__ = [
 ]
 
 CONFIDENCE_PATTERN = re.compile(r"\b(CRITICAL|HIGH|MEDIUM|LOW)\b", re.IGNORECASE)
+
+# Stricter pattern for highlight_confidence_tokens.  Matches confidence
+# keywords in two contexts to avoid colouring ordinary adjectives:
+#   1. Preceded by "confidence" (case-insensitive), e.g. "confidence high"
+#   2. Written in ALL CAPS without "confidence" prefix, e.g. standalone "HIGH"
+# This prevents "a high number of events" from being highlighted while
+# still catching "confidence: high" and standalone "HIGH".
+_CONFIDENCE_CONTEXT_OR_CAPS_PATTERN = re.compile(
+    r"(?i:\bconfidence\b[\s:]*(?:level[\s:]*)?)(CRITICAL|HIGH|MEDIUM|LOW|critical|high|medium|low|Critical|High|Medium|Low)"
+    r"|\b(CRITICAL|HIGH|MEDIUM|LOW)\b"
+)
 MARKDOWN_HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.*)$")
 MARKDOWN_ORDERED_LIST_PATTERN = re.compile(r"^\d+\.\s+(.*)$")
 MARKDOWN_UNORDERED_LIST_PATTERN = re.compile(r"^[-*]\s+(.*)$")
@@ -82,25 +93,48 @@ def _stringify(value: Any, default: str = "") -> str:
 
 
 def highlight_confidence_tokens(text: str) -> str:
-    """Wrap severity tokens in coloured ``<span>`` elements.
+    """Wrap confidence-related severity tokens in coloured ``<span>`` elements.
 
-    Matches ``CRITICAL``, ``HIGH``, ``MEDIUM``, and ``LOW``
-    (case-insensitive) and wraps each in a ``<span>`` with the
-    corresponding CSS class from :data:`CONFIDENCE_CLASS_MAP`.
+    Matches severity keywords only in contexts that indicate a confidence
+    rating, not as ordinary English adjectives:
+
+    * When preceded by the word ``confidence`` (case-insensitive), e.g.
+      ``"confidence: high"`` or ``"Confidence HIGH"``.
+    * When written in ALL CAPS as a standalone word, e.g. ``"HIGH"`` or
+      ``"CRITICAL"``.
+
+    Ordinary lowercase uses like ``"a high number of events"`` are **not**
+    highlighted.
 
     Args:
         text: Pre-escaped HTML string to scan for severity tokens.
 
     Returns:
-        The input string with severity tokens wrapped in spans.
+        The input string with confidence severity tokens wrapped in spans.
     """
     def _replace_confidence(match: re.Match[str]) -> str:
-        """Replace a confidence token match with a styled span."""
-        token = match.group(1).upper()
-        css_class = CONFIDENCE_CLASS_MAP.get(token, "confidence-unknown")
-        return f'<span class="confidence-inline {css_class}">{token}</span>'
+        """Replace a confidence token match with a styled span.
 
-    return CONFIDENCE_PATTERN.sub(_replace_confidence, text)
+        The regex has two alternatives: group(1) captures a keyword
+        preceded by 'confidence', group(2) captures a standalone
+        ALL-CAPS keyword.  Only the keyword portion is wrapped in
+        the coloured span; the 'confidence' prefix text is preserved
+        as-is.
+        """
+        keyword = match.group(1) or match.group(2)
+        label = keyword.upper()
+        css_class = CONFIDENCE_CLASS_MAP.get(label, "confidence-unknown")
+        span = f'<span class="confidence-inline {css_class}">{label}</span>'
+
+        if match.group(1):
+            # Context-preceded match: replace the keyword but keep the prefix
+            full = match.group(0)
+            keyword_start = full.lower().rfind(keyword.lower())
+            prefix = full[:keyword_start]
+            return f'{prefix}{span}'
+        return span
+
+    return _CONFIDENCE_CONTEXT_OR_CAPS_PATTERN.sub(_replace_confidence, text)
 
 
 def render_inline_markdown(value: str, *, escape_html: bool = False) -> str:

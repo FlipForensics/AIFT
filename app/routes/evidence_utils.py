@@ -19,6 +19,8 @@ from typing import Any
 
 from flask import request
 
+from ..chat.csv_retrieval import invalidate_header_cache
+
 LOGGER = logging.getLogger(__name__)
 
 __all__ = [
@@ -30,19 +32,28 @@ __all__ = [
 ]
 
 
-def safe_rmtree(target_dir: Path, cases_root: Path) -> bool:
+def safe_rmtree(
+    target_dir: Path,
+    cases_root: Path,
+    additional_allowed_roots: list[Path] | None = None,
+) -> bool:
     """Remove a directory only if it passes safety checks.
 
     Guards against accidentally deleting filesystem roots or directories
-    outside the known *cases_root*.  This is the single implementation of
-    the safety-checked removal logic shared by evidence cleanup and stale
-    parsed-data purging.
+    outside the known *cases_root* (or any of the *additional_allowed_roots*).
+    This is the single implementation of the safety-checked removal logic
+    shared by evidence cleanup and stale parsed-data purging.
 
     Args:
         target_dir: The directory to remove.  Must already exist on disk
             for any removal to occur.
         cases_root: The resolved root directory that contains all case
-            directories.  *target_dir* must be a descendant of this path.
+            directories.  *target_dir* must be a descendant of this path
+            or one of the *additional_allowed_roots*.
+        additional_allowed_roots: Optional list of extra root directories
+            that are also considered safe ancestors for *target_dir*.
+            Useful when the user has configured an external output
+            directory outside the ``cases/`` tree.
 
     Returns:
         ``True`` if the directory was removed (or an ``rmtree`` was
@@ -63,12 +74,16 @@ def safe_rmtree(target_dir: Path, cases_root: Path) -> bool:
         )
         return False
 
-    # Refuse to delete paths outside the known cases root.
-    resolved_cases_root = cases_root.resolve()
+    # Build the full list of allowed root directories.
+    allowed_roots = [cases_root.resolve()]
+    for extra in additional_allowed_roots or []:
+        allowed_roots.append(extra.resolve())
+
+    # Refuse to delete paths outside all allowed roots.
     try:
-        if not resolved.is_relative_to(resolved_cases_root):
+        if not any(resolved.is_relative_to(root) for root in allowed_roots):
             LOGGER.warning(
-                "Refusing to remove directory outside cases root: %s",
+                "Refusing to remove directory outside allowed roots: %s",
                 resolved,
             )
             return False
@@ -108,6 +123,10 @@ def cleanup_parsed_data(
     """
     cases_root = case_dir.resolve().parent
 
+    # Invalidate cached CSV headers so subsequent chat queries do not use
+    # stale column data from the files about to be removed.
+    invalidate_header_cache()
+
     # 1. Optionally clean the default parsed directory inside the case folder.
     default_parsed = case_dir / "parsed"
     if clean_default_parsed:
@@ -139,7 +158,11 @@ def cleanup_parsed_data(
             return
     except (TypeError, ValueError):
         return
-    safe_rmtree(prev_path, cases_root)
+    safe_rmtree(
+        prev_path,
+        cases_root,
+        additional_allowed_roots=[resolved_prev.parent],
+    )
 
 
 def should_skip_hashing() -> bool:

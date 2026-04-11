@@ -14,7 +14,7 @@ import base64
 import logging
 import threading
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 from .base import (
     AIProvider,

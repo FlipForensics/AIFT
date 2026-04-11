@@ -572,12 +572,19 @@ class ForensicParser:
             for writer_state in writers.values():
                 writer_state["handle"].close()
 
-        all_writer_states.extend(writers.values())
-        for writer_state in all_writer_states:
-            if writer_state["headers_expanded"] and writer_state["records_in_file"] > 0:
-                self._rewrite_csv_with_expanded_headers(
-                    writer_state["path"], writer_state["fieldnames"],
-                )
+            all_writer_states.extend(writers.values())
+            for writer_state in all_writer_states:
+                if writer_state["headers_expanded"] and writer_state["records_in_file"] > 0:
+                    try:
+                        self._rewrite_csv_with_expanded_headers(
+                            writer_state["path"], writer_state["fieldnames"],
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to rewrite expanded CSV headers for %s",
+                            writer_state["path"],
+                            exc_info=True,
+                        )
 
         if progress_callback is not None:
             self._emit_progress(progress_callback, artifact_key, record_count)

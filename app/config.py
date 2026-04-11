@@ -152,12 +152,43 @@ def get_default_config() -> dict[str, Any]:
     return deepcopy(DEFAULT_CONFIG)
 
 
+def _ensure_nested_dict(
+    config: dict[str, Any], *keys: str
+) -> dict[str, Any]:
+    """Traverse *config* along *keys*, ensuring each level is a dict.
+
+    If any intermediate value exists but is not a ``dict``, it is
+    replaced with an empty ``dict`` so that subsequent assignments
+    succeed without a ``TypeError``.
+
+    Args:
+        config: The root configuration dictionary.
+        *keys: One or more key names forming a path into *config*
+            (e.g. ``"ai", "claude"``).
+
+    Returns:
+        The innermost ``dict`` at the end of the key path.
+    """
+    current = config
+    for key in keys:
+        child = current.get(key)
+        if not isinstance(child, dict):
+            child = {}
+            current[key] = child
+        current = child
+    return current
+
+
 def apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
     """Overlay API keys from environment variables onto *config*.
 
     Checks ``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``, and
     ``MOONSHOT_API_KEY`` / ``KIMI_API_KEY``.  Non-empty values replace the
     corresponding ``api_key`` entries in the configuration dictionary.
+
+    If the YAML file contains a non-dict value for the ``ai`` section or
+    any provider sub-key (e.g. ``claude: null``), the offending value is
+    silently replaced with an empty dict so the env override can proceed.
 
     Args:
         config: The configuration dictionary to update in place.
@@ -170,11 +201,11 @@ def apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
     kimi_api_key = os.getenv("MOONSHOT_API_KEY", "").strip() or os.getenv("KIMI_API_KEY", "").strip()
 
     if anthropic_api_key:
-        config.setdefault("ai", {}).setdefault("claude", {})["api_key"] = anthropic_api_key
+        _ensure_nested_dict(config, "ai", "claude")["api_key"] = anthropic_api_key
     if openai_api_key:
-        config.setdefault("ai", {}).setdefault("openai", {})["api_key"] = openai_api_key
+        _ensure_nested_dict(config, "ai", "openai")["api_key"] = openai_api_key
     if kimi_api_key:
-        config.setdefault("ai", {}).setdefault("kimi", {})["api_key"] = kimi_api_key
+        _ensure_nested_dict(config, "ai", "kimi")["api_key"] = kimi_api_key
 
     return config
 

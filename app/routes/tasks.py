@@ -51,6 +51,7 @@ from .evidence import (
     generate_case_report,
     resolve_case_csv_output_dir,
 )
+from ..chat.csv_retrieval import invalidate_header_cache
 
 __all__ = [
     "run_task_with_case_log_context",
@@ -326,7 +327,11 @@ def run_parse(
             progress_key=case_id,
         )
         if outcome is None:
-            # Parsing was cancelled.
+            # Parsing was cancelled — reset case status so the user can
+            # retry or proceed with other operations.
+            mark_case_status(case_id, "evidence_loaded")
+            set_progress_status(PARSE_PROGRESS, case_id, "cancelled")
+            emit_progress(PARSE_PROGRESS, case_id, {"type": "parse_cancelled"})
             return
 
         results, csv_map = outcome
@@ -351,6 +356,7 @@ def run_parse(
             },
         )
         mark_case_status(case_id, "parsed")
+        invalidate_header_cache(str(csv_output_dir))
     except Exception:
         LOGGER.exception("Background parse failed for case %s", case_id)
         user_message = (
@@ -574,6 +580,11 @@ def run_analysis(case_id: str, prompt: str, config_snapshot: dict[str, Any]) -> 
         _auto_generate_report(case_id)
     except AnalysisCancelledError:
         LOGGER.info("Analysis cancelled for case %s", case_id)
+        # Reset case status back to "parsed" so the user can retry
+        # analysis without being stuck in "running" state.
+        mark_case_status(case_id, "parsed")
+        set_progress_status(ANALYSIS_PROGRESS, case_id, "cancelled")
+        emit_progress(ANALYSIS_PROGRESS, case_id, {"type": "analysis_cancelled"})
     except Exception:
         LOGGER.exception("Background analysis failed for case %s", case_id)
         _purge_stale_analysis(case, case_dir)
@@ -621,6 +632,7 @@ def run_multi_image_analysis_task(
         audit_logger = case["audit"]
         image_states = dict(case.get("image_states", {}))
         case_images_list = list(case.get("images", []))
+        analysis_date_range = case.get("analysis_date_range")
 
     # Build a label lookup from the case images list.
     label_lookup: dict[str, str] = {}
@@ -698,11 +710,21 @@ def run_multi_image_analysis_task(
 
         _analysis_progress = _make_analysis_progress_callback(case_id)
 
+        # Normalize analysis_date_range to (start, end) tuple or None,
+        # matching the format used by the single-image path.
+        date_range_tuple: tuple[str, str] | None = None
+        if isinstance(analysis_date_range, dict):
+            dr_start = str(analysis_date_range.get("start_date", "")).strip()
+            dr_end = str(analysis_date_range.get("end_date", "")).strip()
+            if dr_start and dr_end:
+                date_range_tuple = (dr_start, dr_end)
+
         output = analyzer.run_multi_image_analysis(
             images=images,
             investigation_context=prompt,
             progress_callback=_analysis_progress,
             cancel_check=(lambda: cancel_event.is_set()) if cancel_event is not None else None,
+            analysis_date_range=date_range_tuple,
         )
 
         # Attach skipped image information so the report can mention them.
@@ -783,6 +805,11 @@ def run_multi_image_analysis_task(
         _auto_generate_report(case_id)
     except AnalysisCancelledError:
         LOGGER.info("Multi-image analysis cancelled for case %s", case_id)
+        # Reset case status back to "parsed" so the user can retry
+        # analysis without being stuck in "running" state.
+        mark_case_status(case_id, "parsed")
+        set_progress_status(ANALYSIS_PROGRESS, case_id, "cancelled")
+        emit_progress(ANALYSIS_PROGRESS, case_id, {"type": "analysis_cancelled"})
     except Exception:
         LOGGER.exception("Background multi-image analysis failed for case %s", case_id)
         _purge_stale_analysis(case, case_dir)

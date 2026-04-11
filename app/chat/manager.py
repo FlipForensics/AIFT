@@ -177,12 +177,17 @@ class ChatManager:
             return []
 
         history = self.get_history()
-        paired_messages: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        paired_messages: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
         pending_user: dict[str, Any] | None = None
 
         for message in history:
             role = message.get("role")
             if role == "user":
+                if pending_user is not None:
+                    # Previous user message had no assistant response --
+                    # keep it as a standalone entry so it is not silently
+                    # dropped when consecutive user messages appear.
+                    paired_messages.append((pending_user, None))
                 pending_user = message
                 continue
             if role == "assistant" and pending_user is not None:
@@ -193,7 +198,8 @@ class ChatManager:
         recent_history: list[dict[str, Any]] = []
         for user_message, assistant_message in recent_pairs:
             recent_history.append(user_message)
-            recent_history.append(assistant_message)
+            if assistant_message is not None:
+                recent_history.append(assistant_message)
 
         # Keep a trailing unpaired user message so the pending question
         # is not silently dropped from the returned context.
@@ -404,11 +410,16 @@ class ChatManager:
             return []
 
         # Pair up messages so we can drop oldest pairs.
-        pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        pairs: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
         pending_user: dict[str, Any] | None = None
         for msg in history:
             role = msg.get("role")
             if role == "user":
+                if pending_user is not None:
+                    # Previous user message had no assistant response --
+                    # keep it as a standalone entry so it is not silently
+                    # dropped when consecutive user messages appear.
+                    pairs.append((pending_user, None))
                 pending_user = msg
             elif role == "assistant" and pending_user is not None:
                 pairs.append((pending_user, msg))
@@ -418,21 +429,22 @@ class ChatManager:
         # and subtract dropped pairs incrementally to avoid O(n^2).
         total = sum(
             self.estimate_token_count(str(u.get("content", "")))
-            + self.estimate_token_count(str(a.get("content", "")))
+            + self.estimate_token_count(str(a.get("content", "")) if a is not None else "")
             for u, a in pairs
         )
         drop_count = 0
         while drop_count < len(pairs) and total > max_tokens:
             u, a = pairs[drop_count]
             total -= self.estimate_token_count(str(u.get("content", "")))
-            total -= self.estimate_token_count(str(a.get("content", "")))
+            total -= self.estimate_token_count(str(a.get("content", "")) if a is not None else "")
             drop_count += 1
         pairs = pairs[drop_count:]
 
         result: list[dict[str, Any]] = []
         for user_msg, assistant_msg in pairs:
             result.append(user_msg)
-            result.append(assistant_msg)
+            if assistant_msg is not None:
+                result.append(assistant_msg)
 
         # Keep a trailing unpaired user message so the pending question
         # is not silently dropped from the returned context.
@@ -580,7 +592,14 @@ class ChatManager:
             )
             sections.append(f"Executive Summary:\n{summary}")
 
-        sections.append(findings_section)
+        # Only append the caller-provided findings_section for single-image
+        # cases.  Multi-image cases already include per-artifact findings
+        # inline within each ``=== Image: <label> ===`` block above, so
+        # appending findings_section again would duplicate the content and
+        # defeat compression in rebuild_context_with_compressed_findings.
+        is_multi_image = isinstance(images_data, Mapping) and bool(images_data)
+        if not is_multi_image:
+            sections.append(findings_section)
         return "\n\n".join(sections)
 
     def _format_per_artifact_findings(self, analysis_results: Mapping[str, Any]) -> str:

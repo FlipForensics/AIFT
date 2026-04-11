@@ -414,7 +414,7 @@ class ForensicAnalyzer:
             return []
         try:
             original_path = self._resolve_artifact_csv_path(artifact_key)
-        except FileNotFoundError:
+        except (FileNotFoundError, ValueError):
             return []
         csv_path = self._resolve_analysis_input_csv_path(
             artifact_key, fallback=original_path,
@@ -1087,6 +1087,7 @@ class ForensicAnalyzer:
         investigation_context: str,
         progress_callback: Any | None = None,
         cancel_check: Any | None = None,
+        analysis_date_range: tuple[str, str] | None = None,
     ) -> dict[str, Any]:
         """Run the multi-image analysis pipeline across one or more images.
 
@@ -1109,6 +1110,9 @@ class ForensicAnalyzer:
             investigation_context: Free-text investigation context.
             progress_callback: Optional callable for SSE progress.
             cancel_check: Optional callable returning ``True`` to abort.
+            analysis_date_range: Optional ``(start_date, end_date)`` tuple
+                for date-range filtering, matching the single-image path
+                convention.
 
         Returns:
             A dict with ``images``, ``cross_image_summary``, and
@@ -1127,4 +1131,5 @@ class ForensicAnalyzer:
             investigation_context=investigation_context,
             progress_callback=progress_callback,
             cancel_check=cancel_check,
+            analysis_date_range=analysis_date_range,
         )

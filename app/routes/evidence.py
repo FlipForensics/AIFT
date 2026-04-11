@@ -16,6 +16,7 @@ Attributes:
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from datetime import datetime, timezone
@@ -404,6 +405,15 @@ def generate_case_report(case_id: str) -> dict[str, Any]:
 
     with STATE_LOCK:
         case_snapshot = dict(case)
+        # Deep-copy mutable nested dicts so mutations outside the lock
+        # (e.g. annotating evidence_hashes for the reporter) do not
+        # bleed back into the live case state or race with other threads.
+        case_snapshot["image_states"] = copy.deepcopy(
+            case.get("image_states", {})
+        )
+        case_snapshot["evidence_hashes"] = copy.deepcopy(
+            case.get("evidence_hashes", {})
+        )
         audit_logger = case["audit"]
 
     # ------------------------------------------------------------------
@@ -672,6 +682,11 @@ def download_csv_bundle(case_id: str) -> Response | tuple[Response, int]:
 
     with STATE_LOCK:
         case_snapshot = dict(case)
+        # Deep-copy image_states so iteration outside the lock cannot
+        # race with concurrent modifications to the live state.
+        case_snapshot["image_states"] = copy.deepcopy(
+            case.get("image_states", {})
+        )
 
     csv_paths = collect_case_csv_paths(case_snapshot)
 
