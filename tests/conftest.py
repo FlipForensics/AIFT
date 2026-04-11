@@ -111,7 +111,7 @@ class FakeProvider:
         self.calls.append({
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
-            "max_tokens": str(max_tokens),
+            "max_tokens": max_tokens,
         })
         if call_index in self.fail_calls:
             raise AIProviderError(f"provider-failure-{call_index}")

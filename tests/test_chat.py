@@ -260,6 +260,46 @@ class ChatManagerTests(unittest.TestCase):
             )
             self.assertLess(len(rebuilt), len(original))
 
+    def test_rebuild_context_multi_image_uses_compressed_findings(self) -> None:
+        """Compressed findings must not be silently discarded for multi-image cases."""
+        multi_results: dict = {
+            "images": {
+                "img1": {
+                    "label": "SERVER01",
+                    "summary": "Image 1 summary.",
+                    "per_artifact": [
+                        {"artifact_name": "shimcache", "analysis": "Full verbose finding A. " * 50},
+                    ],
+                },
+                "img2": {
+                    "label": "WORKSTATION02",
+                    "summary": "Image 2 summary.",
+                    "per_artifact": [
+                        {"artifact_name": "prefetch", "analysis": "Full verbose finding B. " * 50},
+                    ],
+                },
+            },
+            "cross_image_summary": "Cross-image lateral movement detected.",
+        }
+        compressed = "- SERVER01/shimcache: Compressed A.\n- WORKSTATION02/prefetch: Compressed B."
+        with TemporaryDirectory(prefix="aift-chat-") as tmp:
+            mgr = ChatManager(tmp)
+            rebuilt = mgr.rebuild_context_with_compressed_findings(
+                analysis_results=multi_results,
+                investigation_context="Multi-image test.",
+                metadata={"hostname": "H", "os_version": "W", "domain": "D"},
+                compressed_findings=compressed,
+            )
+            # The compressed findings must appear in the output.
+            self.assertIn("Per-Artifact Findings (compressed):", rebuilt)
+            self.assertIn("Compressed A.", rebuilt)
+            self.assertIn("Compressed B.", rebuilt)
+            # The verbose raw findings must NOT appear.
+            self.assertNotIn("Full verbose finding A.", rebuilt)
+            self.assertNotIn("Full verbose finding B.", rebuilt)
+            # Cross-image summary should still be present.
+            self.assertIn("Cross-Image Correlation", rebuilt)
+
     # ------------------------------------------------------------------
     # fit_history
     # ------------------------------------------------------------------

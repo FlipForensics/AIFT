@@ -1273,7 +1273,7 @@ class AnalyzerTests(unittest.TestCase):
 
         self.assertEqual(len(fake_provider.calls), 1)
         # ai_max_tokens is the context window; auto-calc uses max(4096, 20%).
-        expected_response_tokens = str(max(4096, int(1234 * 0.2)))
+        expected_response_tokens = max(4096, int(1234 * 0.2))
         self.assertEqual(fake_provider.calls[0]["max_tokens"], expected_response_tokens)
         user_prompt = fake_provider.calls[0]["user_prompt"]
         # All rows must be included — no date filtering is applied.
