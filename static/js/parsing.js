@@ -586,6 +586,24 @@
       A.updateNav();
       return A.showStep(3);
     }
+    if (t === "complete" || t === "idle") {
+      // Synthetic events from the backend indicating the operation already
+      // finished (reconnect after completion) or timed out idle.  Finalize
+      // the UI so it does not stay stuck on "in progress".
+      if (!st.parse.done && !st.parse.fail) {
+        st.parse.run = false;
+        st.parse.done = true;
+        st.parse.fail = false;
+        updateParseProgress(true);
+        A.stopTimer("parse");
+      }
+      closeParseSse();
+      A.clearMsg(el.parseErr);
+      A.updateParseButton();
+      A.updateNav();
+      if (st.selectedAi.length > 0) return A.showStep(4);
+      return;
+    }
     if (t === "error") A.setMsg(el.parseErr, String(p.message || "Parse stream error."), "error");
   }
 
@@ -674,6 +692,18 @@
       imgState.fail = true;
       setImageParseSectionStatus(imageId, "failed");
       setImageParseSectionError(imageId, String(p.error || "Parsing failed."));
+      closeImageParseSse(imageId);
+      checkMultiImageCompletion();
+      return;
+    }
+    if (t === "complete" || t === "idle") {
+      // Synthetic events: operation already finished or timed out idle.
+      if (!imgState.done && !imgState.fail) {
+        imgState.run = false;
+        imgState.done = true;
+        imgState.fail = false;
+        setImageParseSectionStatus(imageId, "completed");
+      }
       closeImageParseSse(imageId);
       checkMultiImageCompletion();
       return;

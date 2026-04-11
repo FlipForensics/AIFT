@@ -221,6 +221,24 @@
       A.updateNav();
       return;
     }
+    if (t === "complete" || t === "idle") {
+      // Synthetic events from the backend indicating the operation already
+      // finished (reconnect after completion) or timed out idle.  Finalize
+      // the UI so it does not stay stuck on "in progress".
+      if (!st.analysis.done && !st.analysis.fail) {
+        st.analysis.run = false;
+        st.analysis.done = true;
+        st.analysis.fail = false;
+        A.stopTimer("analysis");
+      }
+      closeAnalysisSse();
+      setAnalysisStatus(null);
+      if (el.runBtn) el.runBtn.disabled = false;
+      if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
+      A.clearMsg(el.analysisMsg);
+      A.updateNav();
+      return A.showStep(5);
+    }
     if (t === "error") A.setMsg(el.analysisMsg, String(p.message || "Analysis stream error."), "error");
   }
 
