@@ -590,7 +590,6 @@ window.AIFT = (() => {
     channel.es = es;
     es.onopen = () => { channel.retryCount = 0; };
     es.onmessage = (ev) => {
-      channel.retryCount = 0;
       const payload = safeJson(ev.data);
       if (!payload) return;
       const seq = num(payload.sequence, -1);

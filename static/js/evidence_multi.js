@@ -220,6 +220,7 @@
       st.caseName = String(c.case_name || "");
       if (!caseId) throw new Error("Case ID missing from create response.");
       intakeProgress.setPhase("case-created");
+      A.setCaseId(caseId);
 
       const intakeTimeoutMs = A.num(A.obj(A.obj(A.obj(st.settings).evidence).intake_timeout_seconds), 7200) * 1000;
       const skipHashing = !A.boolSetting(A.obj(A.obj(st.settings).evidence).compute_hashes, true);
@@ -301,7 +302,6 @@
       intakeProgress.complete();
       if (intakeStatusEl) intakeStatusEl.hidden = true;
 
-      A.setCaseId(caseId);
       A.updateCsvOutputHelp();
 
       /* Build a combined evidence response for applyEvidence. */
