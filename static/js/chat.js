@@ -195,6 +195,7 @@
     if (!messages || !messages.length) return;
     // Find the first existing chat-message row to insert before (for "load earlier").
     const firstRow = el.chatThread.querySelector(".chat-message-row");
+    const frag = firstRow ? document.createDocumentFragment() : null;
     for (let i = from; i < to; i++) {
       const entry = messages[i];
       const role = strRole(entry.role);
@@ -204,11 +205,14 @@
         retrieved = entry.metadata.data_retrieved.map((item) => String(item || "").trim()).filter(Boolean);
       }
       const nodes = buildChatMessageNodes(role, content, { dataRetrieved: retrieved });
-      if (firstRow) {
-        el.chatThread.insertBefore(nodes.row, firstRow);
+      if (frag) {
+        frag.appendChild(nodes.row);
       } else {
         el.chatThread.appendChild(nodes.row);
       }
+    }
+    if (frag) {
+      el.chatThread.insertBefore(frag, firstRow);
     }
     st.chat.displayedCount = (st.chat.displayedCount || 0) + (to - from);
   }

@@ -273,9 +273,9 @@
         }
         let out = A.escapeHtml(part);
         out = out.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-        out = out.replace(/__(.+?)__/g, "<strong>$1</strong>");
+        out = out.replace(/(^|\s)__([^\s_](?:.*?[^\s_])?)__(?=$|\s|[.,;!?:)])/g, "$1<strong>$2</strong>");
         out = out.replace(/\*(.+?)\*/g, "<em>$1</em>");
-        out = out.replace(/_(.+?)_/g, "<em>$1</em>");
+        out = out.replace(/(^|\s)_([^\s_](?:.*?[^\s_])?)_(?=$|\s|[.,;!?:)])/g, "$1<em>$2</em>");
         out = highlightConfidenceTokens(out);
         return out;
       })

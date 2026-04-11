@@ -237,6 +237,9 @@
       if (el.cancelAnalysis) el.cancelAnalysis.hidden = true;
       A.clearMsg(el.analysisMsg);
       A.updateNav();
+      renderAnalysis();
+      renderExecSummary();
+      renderFindings();
       return A.showStep(5);
     }
     if (t === "error") A.setMsg(el.analysisMsg, String(p.message || "Analysis stream error."), "error");
