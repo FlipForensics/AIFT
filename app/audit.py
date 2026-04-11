@@ -36,6 +36,29 @@ from .version import TOOL_VERSION
 
 __all__ = ["AuditLogger"]
 
+_FILE_LOCKS: dict[str, threading.Lock] = {}
+_FILE_LOCKS_GUARD = threading.Lock()
+
+
+def _get_file_lock(path: str) -> threading.Lock:
+    """Get or create a lock for the given file path.
+
+    Ensures that all :class:`AuditLogger` instances writing to the same
+    file share a single :class:`threading.Lock`, providing correct
+    cross-instance synchronisation.
+
+    Args:
+        path: Resolved string path used as the registry key.
+
+    Returns:
+        A :class:`threading.Lock` unique to *path*.
+    """
+    with _FILE_LOCKS_GUARD:
+        if path not in _FILE_LOCKS:
+            _FILE_LOCKS[path] = threading.Lock()
+        return _FILE_LOCKS[path]
+
+
 ACTION_TYPES = frozenset(
     {
         "case_created",
@@ -137,7 +160,7 @@ class AuditLogger:
         self.session_id = session_id or str(uuid4())
         self.tool_version = tool_version
         self.dissect_version = dissect_version or _resolve_dissect_version()
-        self._write_lock = threading.Lock()
+        self._write_lock = _get_file_lock(str(self.audit_file))
 
         # Ensure the audit file exists immediately when the logger is created.
         with self.audit_file.open("ab", buffering=0) as audit_stream:

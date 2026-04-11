@@ -415,7 +415,7 @@ class ForensicParser:
                 }
                 if writer is not None:
                     writer.writerow(row)
-                record_count += 1
+                    record_count += 1
 
                 if record_count >= MAX_RECORDS_PER_ARTIFACT:
                     self.audit_logger.log(
@@ -580,11 +580,14 @@ class ForensicParser:
                             writer_state["path"], writer_state["fieldnames"],
                         )
                     except Exception:
-                        logger.warning(
-                            "Failed to rewrite expanded CSV headers for %s",
+                        logger.error(
+                            "Failed to rewrite expanded CSV headers for %s; "
+                            "CSV data columns may exceed header columns, "
+                            "causing silent data loss on read",
                             writer_state["path"],
                             exc_info=True,
                         )
+                        raise
 
         if progress_callback is not None:
             self._emit_progress(progress_callback, artifact_key, record_count)

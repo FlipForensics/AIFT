@@ -593,6 +593,8 @@ class ForensicAnalyzer:
                 reader = csv_mod.DictReader(fh)
                 if reader.fieldnames:
                     for fn in reader.fieldnames:
+                        if fn in (None, ""):
+                            continue
                         if fn not in fieldnames_set:
                             fieldnames.append(fn)
                             fieldnames_set.add(fn)

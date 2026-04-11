@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -44,6 +46,25 @@ logger = logging.getLogger(__name__)
 def _utc_now_iso8601() -> str:
     """Return the current UTC time as an ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _remove_readonly(func: Any, path: str, exc_info: Any) -> None:
+    """Error handler for :func:`shutil.rmtree` to handle read-only files on Windows.
+
+    When ``shutil.rmtree`` encounters a read-only file it raises
+    :class:`PermissionError`.  This handler clears the read-only
+    attribute and retries the removal.
+
+    Args:
+        func: The function that raised the exception (e.g.
+            :func:`os.unlink` or :func:`os.rmdir`).
+        path: The path to the file or directory that could not be
+            removed.
+        exc_info: Exception information tuple as returned by
+            :func:`sys.exc_info`.
+    """
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
 
 
 class CaseManager:
@@ -197,7 +218,7 @@ class CaseManager:
                 f"Image directory not found: {image_dir}"
             )
 
-        shutil.rmtree(str(image_dir), ignore_errors=False)
+        shutil.rmtree(str(image_dir), onerror=_remove_readonly)
 
         audit = AuditLogger(case_dir, session_id=self._session_id)
         audit.log("image_deleted", {
@@ -330,18 +351,39 @@ class CaseManager:
         image_dir.mkdir(exist_ok=True)
 
         # Move each legacy subdirectory into the image slot.
-        for subdir_name in ("evidence", "parsed", "parsed_deduplicated"):
-            src = case_dir / subdir_name
-            dst = image_dir / subdir_name
-            if src.is_dir():
-                shutil.move(str(src), str(dst))
-                logger.info(
-                    "Migrated %s -> %s", src, dst,
-                )
-            else:
-                # Ensure the target directory exists even if the source
-                # did not.
-                dst.mkdir(exist_ok=True)
+        # Track completed moves so we can roll back on partial failure.
+        completed_moves: list[tuple[Path, Path]] = []
+        try:
+            for subdir_name in ("evidence", "parsed", "parsed_deduplicated"):
+                src = case_dir / subdir_name
+                dst = image_dir / subdir_name
+                if src.is_dir():
+                    shutil.move(str(src), str(dst))
+                    completed_moves.append((src, dst))
+                    logger.info(
+                        "Migrated %s -> %s", src, dst,
+                    )
+                else:
+                    # Ensure the target directory exists even if the source
+                    # did not.
+                    dst.mkdir(exist_ok=True)
+        except OSError as exc:
+            logger.error(
+                "Migration failed for case %s: %s. Attempting rollback of "
+                "%d completed move(s).",
+                case_id, exc, len(completed_moves),
+            )
+            for src, dst in reversed(completed_moves):
+                try:
+                    shutil.move(str(dst), str(src))
+                    logger.info("Rolled back %s -> %s", dst, src)
+                except OSError as rollback_exc:
+                    logger.error(
+                        "Failed to rollback migration move %s -> %s: %s. "
+                        "Manual recovery required.",
+                        dst, src, rollback_exc,
+                    )
+            raise
 
         # Write image metadata.
         metadata = {

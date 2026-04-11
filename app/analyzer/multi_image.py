@@ -15,10 +15,12 @@ Single-image cases skip Phase 3 and return ``cross_image_summary=None``.
 
 Attributes:
     LOGGER: Module-level logger instance.
-    _ANALYZER_LOCK: Threading lock that guards brief mutations of shared
-        analyzer state (``os_type``, ``artifact_csv_paths``) during
-        multi-image analysis.  Only held for state save/swap/restore
-        operations, never across AI API calls.
+    _ANALYZER_LOCK: Threading lock that guards shared analyzer state
+        (``os_type``, ``artifact_csv_paths``, ``analysis_date_range``)
+        during multi-image analysis.  Held for each full per-image pass
+        (state swap + all ``analyze_artifact()`` calls) so that a
+        concurrent thread on the same ``ForensicAnalyzer`` instance
+        cannot corrupt the state mid-analysis.
     DEFAULT_CROSS_IMAGE_PROMPT_TEMPLATE: Fallback template used when
         ``prompts/cross_image_prompt.md`` cannot be loaded.
 """
@@ -36,9 +38,9 @@ from .utils import emit_analysis_progress, estimate_tokens, sanitize_filename
 
 LOGGER = logging.getLogger(__name__)
 
-# Guards brief analyzer state mutations (os_type, artifact_csv_paths) during
-# multi-image analysis so concurrent threads cannot corrupt each other.
-# Only held for save/swap/restore operations, never across AI API calls.
+# Guards shared analyzer state (os_type, artifact_csv_paths, analysis_date_range)
+# during multi-image analysis.  Held for each full per-image pass (state swap +
+# all analyze_artifact() calls) so concurrent threads cannot corrupt each other.
 _ANALYZER_LOCK = threading.Lock()
 
 __all__ = [
@@ -227,8 +229,13 @@ def run_multi_image_analysis(
             if cancel_check is not None and cancel_check():
                 raise AnalysisCancelledError("Analysis cancelled by user.")
 
-            # Swap analyzer state for the current image under lock so
-            # that concurrent threads do not see a half-updated state.
+            # Swap analyzer state for the current image under lock and
+            # hold it through all analyze_artifact() calls.  Phase 1
+            # iterates images sequentially, so holding the lock for the
+            # full per-image pass does not reduce parallelism.  Releasing
+            # it earlier would allow a concurrent thread calling
+            # run_multi_image_analysis on the same ForensicAnalyzer to
+            # corrupt artifact_csv_paths / os_type mid-analysis.
             with _ANALYZER_LOCK:
                 # Update the analyzer's os_type for the current image so
                 # that OS-specific analysis logic uses the correct
@@ -252,32 +259,30 @@ def run_multi_image_analysis(
                 # Register the image's parsed CSV paths into the analyzer
                 _register_image_csv_paths(analyzer, artifact_keys, parsed_dir)
 
-            # Build investigation context with image label prefix
-            image_context = (
-                f"System: {label}\n\n{investigation_context}"
-            )
-
-            per_artifact_results: list[dict[str, Any]] = []
-            for artifact_key in artifact_keys:
-                if cancel_check is not None and cancel_check():
-                    raise AnalysisCancelledError("Analysis cancelled by user.")
-
-                # AI calls run WITHOUT holding the lock so concurrent
-                # analysis requests are not blocked.
-                result = analyzer.analyze_artifact(
-                    artifact_key=str(artifact_key),
-                    investigation_context=image_context,
-                    progress_callback=progress_callback,
+                # Build investigation context with image label prefix
+                image_context = (
+                    f"System: {label}\n\n{investigation_context}"
                 )
-                per_artifact_results.append(result)
 
-                if progress_callback is not None:
-                    emit_analysis_progress(
-                        progress_callback,
-                        str(artifact_key),
-                        "complete",
-                        {**result, "image_id": image_id, "image_label": label},
+                per_artifact_results: list[dict[str, Any]] = []
+                for artifact_key in artifact_keys:
+                    if cancel_check is not None and cancel_check():
+                        raise AnalysisCancelledError("Analysis cancelled by user.")
+
+                    result = analyzer.analyze_artifact(
+                        artifact_key=str(artifact_key),
+                        investigation_context=image_context,
+                        progress_callback=progress_callback,
                     )
+                    per_artifact_results.append(result)
+
+                    if progress_callback is not None:
+                        emit_analysis_progress(
+                            progress_callback,
+                            str(artifact_key),
+                            "complete",
+                            {**result, "image_id": image_id, "image_label": label},
+                        )
 
             image_results[image_id] = {
                 "label": label,

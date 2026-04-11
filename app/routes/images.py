@@ -218,6 +218,7 @@ def delete_image(case_id: str, image_id: str) -> tuple[Response, int]:
         # Mark the image as deleting so concurrent operations won't start
         # on it while we perform disk I/O outside the lock.
         image_states = case.get("image_states", {})
+        original_state = image_states.get(image_id, {}).copy()
         image_states[image_id] = {"status": "deleting"}
 
     # Perform the potentially slow disk deletion outside the lock to avoid
@@ -228,12 +229,12 @@ def delete_image(case_id: str, image_id: str) -> tuple[Response, int]:
         # Roll back the deleting marker before returning.
         with STATE_LOCK:
             image_states = case.get("image_states", {})
-            image_states.pop(image_id, None)
+            image_states[image_id] = original_state
         return error_response(f"Image not found: {image_id}", 404)
     except ValueError:
         with STATE_LOCK:
             image_states = case.get("image_states", {})
-            image_states.pop(image_id, None)
+            image_states[image_id] = original_state
         return error_response("Invalid image identifier.", 400)
     except OSError:
         LOGGER.exception(
@@ -242,7 +243,7 @@ def delete_image(case_id: str, image_id: str) -> tuple[Response, int]:
         )
         with STATE_LOCK:
             image_states = case.get("image_states", {})
-            image_states.pop(image_id, None)
+            image_states[image_id] = original_state
         return error_response(
             "Failed to remove the image directory from disk.", 500,
         )

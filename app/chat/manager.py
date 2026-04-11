@@ -39,6 +39,29 @@ __all__ = ["ChatManager"]
 
 log = logging.getLogger(__name__)
 
+_FILE_LOCKS: dict[str, threading.Lock] = {}
+_FILE_LOCKS_GUARD = threading.Lock()
+
+
+def _get_file_lock(path: str) -> threading.Lock:
+    """Get or create a lock for the given file path.
+
+    Ensures that all :class:`ChatManager` instances writing to the same
+    chat history file share a single :class:`threading.Lock`, providing
+    correct cross-instance synchronisation.
+
+    Args:
+        path: Resolved string path used as the registry key.
+
+    Returns:
+        A :class:`threading.Lock` unique to *path*.
+    """
+    with _FILE_LOCKS_GUARD:
+        if path not in _FILE_LOCKS:
+            _FILE_LOCKS[path] = threading.Lock()
+        return _FILE_LOCKS[path]
+
+
 VALID_ROLES = frozenset({"user", "assistant"})
 
 
@@ -72,7 +95,7 @@ class ChatManager:
         """
         self.case_dir = Path(case_dir)
         self.chat_file = self.case_dir / "chat_history.jsonl"
-        self._write_lock = threading.Lock()
+        self._write_lock = _get_file_lock(str(self.chat_file))
         self.MAX_CONTEXT_TOKENS = self._resolve_max_context_tokens(max_context_tokens)
 
     # ------------------------------------------------------------------
@@ -304,7 +327,7 @@ class ChatManager:
             80 % of *token_budget*, *False* otherwise.
         """
         if token_budget <= 0:
-            return False
+            return True
         return self.estimate_token_count(context_block) > int(token_budget * 0.8)
 
     # ------------------------------------------------------------------

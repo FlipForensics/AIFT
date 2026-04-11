@@ -60,8 +60,13 @@ def main() -> None:
             # Browser launch failures should not prevent server startup.
             pass
 
-    threading.Timer(1.0, _open_browser).start()
-    app.run(host=host, port=port, debug=False, use_reloader=False)
+    browser_timer = threading.Timer(1.0, _open_browser)
+    browser_timer.daemon = True
+    browser_timer.start()
+    try:
+        app.run(host=host, port=port, debug=False, use_reloader=False)
+    finally:
+        browser_timer.cancel()
 
 
 if __name__ == "__main__":

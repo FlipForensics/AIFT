@@ -95,6 +95,7 @@ __all__ = ["register_routes"]
 LOGGER = logging.getLogger(__name__)
 
 routes_bp = Blueprint("routes", __name__)
+_SETTINGS_LOCK = threading.Lock()
 _REQUEST_CASE_LOG_TOKEN = "_aift_case_log_token"
 
 
@@ -342,22 +343,24 @@ def update_settings() -> Response | tuple[Response, int]:
         return error_response("Settings payload must be a JSON object.", 400)
 
     config_path = Path(str(current_app.config.get("AIFT_CONFIG_PATH", "config.yaml")))
-    current_config = load_config(config_path, use_env_overrides=False)
-    changed_keys = deep_merge(current_config, payload)
 
-    validation_errors = validate_config(current_config)
-    if validation_errors:
-        return error_response(
-            f"Invalid settings: {'; '.join(validation_errors)}", 400
-        )
+    with _SETTINGS_LOCK:
+        current_config = load_config(config_path, use_env_overrides=False)
+        changed_keys = deep_merge(current_config, payload)
 
-    save_config(current_config, config_path)
+        validation_errors = validate_config(current_config)
+        if validation_errors:
+            return error_response(
+                f"Invalid settings: {'; '.join(validation_errors)}", 400
+            )
 
-    refreshed = load_config(config_path)
-    current_app.config["AIFT_CONFIG"] = refreshed
-    if changed_keys:
-        LOGGER.info("Updated settings: %s", ", ".join(changed_keys))
-        audit_config_change(changed_keys)
+        save_config(current_config, config_path)
+
+        refreshed = load_config(config_path)
+        current_app.config["AIFT_CONFIG"] = refreshed
+        if changed_keys:
+            LOGGER.info("Updated settings: %s", ", ".join(changed_keys))
+            audit_config_change(changed_keys)
 
     return success_response(mask_sensitive(refreshed))
 

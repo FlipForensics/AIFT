@@ -331,6 +331,15 @@ def load_config(path: str | Path | None = None, use_env_overrides: bool = True) 
             raise ConfigurationError([f"Invalid configuration format in {config_path}."])
 
         _deep_merge_inplace(config, parsed)
+
+        # Strip unknown top-level keys that are not part of the default
+        # schema.  This prevents stale keys (e.g. a ``success`` flag
+        # accidentally written by save_config) from polluting the config.
+        known_keys = set(DEFAULT_CONFIG.keys())
+        for key in list(config.keys()):
+            if key not in known_keys:
+                logger.warning("Ignoring unknown config key: %r", key)
+                del config[key]
     else:
         save_config(config, config_path)
 

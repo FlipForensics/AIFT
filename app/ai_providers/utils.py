@@ -165,14 +165,19 @@ def _extract_openai_text(response: Any) -> str:
     """Extract the generated text from an OpenAI Chat Completions API response.
 
     Handles plain string content, structured content arrays, and
-    reasoning-model fallback fields (``reasoning_content``, ``reasoning``,
-    ``refusal``).
+    reasoning-model fallback fields (``reasoning_content``, ``reasoning``).
+    If the model refused the request (non-empty ``refusal`` field), raises
+    an ``AIProviderError`` instead of returning the refusal as valid output.
 
     Args:
         response: The OpenAI ``ChatCompletion`` response object.
 
     Returns:
         The extracted text content, stripped of whitespace.
+
+    Raises:
+        AIProviderError: If the model's ``refusal`` field is non-empty,
+            indicating it declined to answer the request.
     """
     choices = getattr(response, "choices", None)
     if not choices:
@@ -215,7 +220,20 @@ def _extract_openai_text(response: Any) -> str:
         if joined:
             return joined
 
-    for field_name in ("reasoning_content", "reasoning", "refusal"):
+    # Check for model refusal before falling back to reasoning fields.
+    # The ``refusal`` field is set by OpenAI when the model declines a
+    # request.  Returning refusal text as valid analysis output would cause
+    # it to appear in forensic reports, so raise an error instead.
+    refusal_value = getattr(message, "refusal", None)
+    if refusal_value is None and isinstance(message, dict):
+        refusal_value = message.get("refusal")
+    refusal_text = _coerce_openai_text(refusal_value).strip()
+    if refusal_text:
+        from .base import AIProviderError
+
+        raise AIProviderError(f"AI model refused the request: {refusal_text}")
+
+    for field_name in ("reasoning_content", "reasoning"):
         field_value = getattr(message, field_name, None)
         if field_value is None and isinstance(message, dict):
             field_value = message.get(field_name)

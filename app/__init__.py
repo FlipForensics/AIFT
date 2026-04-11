@@ -64,6 +64,15 @@ def create_app(
     app.config["AIFT_CONFIG"] = aift_config
     app.config["AIFT_CONFIG_PATH"] = resolved_config_path
 
+    # Enforce an upload size limit so Flask/Werkzeug rejects oversized request
+    # bodies before buffering them fully into memory.  A value of 0 means
+    # "unlimited" per project convention, so MAX_CONTENT_LENGTH stays None.
+    large_file_threshold_mb: int | float = (
+        aift_config.get("evidence", {}).get("large_file_threshold_mb", 0)
+    )
+    if large_file_threshold_mb > 0:
+        app.config["MAX_CONTENT_LENGTH"] = int(large_file_threshold_mb * 1024 * 1024)
+
     # Generate a per-process CSRF token for protecting state-changing requests.
     app.config["CSRF_TOKEN"] = secrets.token_hex(32)
 

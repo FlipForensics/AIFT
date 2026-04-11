@@ -404,17 +404,14 @@ def generate_case_report(case_id: str) -> dict[str, Any]:
         return {"success": False, "error": f"Case not found: {case_id}"}
 
     with STATE_LOCK:
-        case_snapshot = dict(case)
-        # Deep-copy mutable nested dicts so mutations outside the lock
-        # (e.g. annotating evidence_hashes for the reporter) do not
-        # bleed back into the live case state or race with other threads.
-        case_snapshot["image_states"] = copy.deepcopy(
-            case.get("image_states", {})
-        )
-        case_snapshot["evidence_hashes"] = copy.deepcopy(
-            case.get("evidence_hashes", {})
-        )
+        # Deep-copy the entire case dict so no nested mutable objects
+        # (analysis_results, image_states, evidence_hashes, etc.) are
+        # shared with the live state.  The "audit" key holds a
+        # non-serializable AuditLogger instance and must be excluded.
         audit_logger = case["audit"]
+        case_snapshot = copy.deepcopy(
+            {k: v for k, v in case.items() if k != "audit"}
+        )
 
     # ------------------------------------------------------------------
     # Determine whether this is a multi-image case.
@@ -681,11 +678,11 @@ def download_csv_bundle(case_id: str) -> Response | tuple[Response, int]:
         return error_response(f"Case not found: {case_id}", 404)
 
     with STATE_LOCK:
-        case_snapshot = dict(case)
-        # Deep-copy image_states so iteration outside the lock cannot
-        # race with concurrent modifications to the live state.
-        case_snapshot["image_states"] = copy.deepcopy(
-            case.get("image_states", {})
+        # Deep-copy all nested mutable objects so iteration outside the
+        # lock cannot race with concurrent modifications to the live
+        # state.  Exclude "audit" (non-serializable AuditLogger).
+        case_snapshot = copy.deepcopy(
+            {k: v for k, v in case.items() if k != "audit"}
         )
 
     csv_paths = collect_case_csv_paths(case_snapshot)
