@@ -16,8 +16,12 @@ class AppFactoryTests(unittest.TestCase):
         ):
             return create_app("config.yaml")
 
-    def test_create_app_does_not_set_max_content_length(self) -> None:
+    def test_create_app_sets_max_content_length_from_config(self) -> None:
         app = self._create_app({"evidence": {"large_file_threshold_mb": 42}})
+        self.assertEqual(app.config.get("MAX_CONTENT_LENGTH"), 42 * 1024 * 1024)
+
+    def test_create_app_no_max_content_length_when_unlimited(self) -> None:
+        app = self._create_app({"evidence": {"large_file_threshold_mb": 0}})
         self.assertIsNone(app.config.get("MAX_CONTENT_LENGTH"))
 
     def test_csrf_token_endpoint_returns_token(self) -> None:

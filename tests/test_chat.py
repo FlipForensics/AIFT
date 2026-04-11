@@ -220,8 +220,8 @@ class ChatManagerTests(unittest.TestCase):
     def test_context_needs_compression_handles_zero_and_negative_budget(self) -> None:
         with TemporaryDirectory(prefix="aift-chat-") as tmp:
             mgr = ChatManager(tmp)
-            self.assertFalse(mgr.context_needs_compression("any text", 0))
-            self.assertFalse(mgr.context_needs_compression("any text", -1))
+            self.assertTrue(mgr.context_needs_compression("any text", 0))
+            self.assertTrue(mgr.context_needs_compression("any text", -1))
 
     def test_rebuild_context_with_compressed_findings(self) -> None:
         with TemporaryDirectory(prefix="aift-chat-") as tmp:

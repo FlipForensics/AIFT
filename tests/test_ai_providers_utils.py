@@ -173,11 +173,13 @@ class TestExtractOpenAIText(unittest.TestCase):
         resp = SimpleNamespace(choices=[choice])
         self.assertEqual(_extract_openai_text(resp), "Connection OK")
 
-    def test_falls_back_to_refusal_when_content_empty(self) -> None:
+    def test_raises_error_on_refusal_when_content_empty(self) -> None:
         message = SimpleNamespace(content="", refusal="Request refused")
         choice = SimpleNamespace(message=message)
         resp = SimpleNamespace(choices=[choice])
-        self.assertEqual(_extract_openai_text(resp), "Request refused")
+        with self.assertRaises(AIProviderError) as ctx:
+            _extract_openai_text(resp)
+        self.assertIn("Request refused", str(ctx.exception))
 
     def test_list_content_with_content_key(self) -> None:
         message = SimpleNamespace(content=[{"content": "from content key"}])
