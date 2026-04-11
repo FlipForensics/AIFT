@@ -59,15 +59,25 @@ class CaseManager:
             directory.
     """
 
-    def __init__(self, cases_dir: str | Path = "cases") -> None:
+    def __init__(
+        self,
+        cases_dir: str | Path = "cases",
+        session_id: str | None = None,
+    ) -> None:
         """Initialise the case manager.
 
         Args:
             cases_dir: Base directory where all case directories are
                 stored.  Created if it does not exist.
+            session_id: Optional session UUID passed through to every
+                :class:`~app.audit.AuditLogger` created internally.
+                When *None*, each logger generates its own UUID (the
+                previous behaviour).  Supplying a value ensures all
+                audit entries from one user session share the same ID.
         """
         self.cases_dir = Path(cases_dir).resolve()
         self.cases_dir.mkdir(parents=True, exist_ok=True)
+        self._session_id = session_id
 
     # ------------------------------------------------------------------
     # Case lifecycle
@@ -95,7 +105,7 @@ class CaseManager:
         (case_dir / "images").mkdir(exist_ok=True)
         (case_dir / "reports").mkdir(exist_ok=True)
 
-        audit = AuditLogger(case_dir)
+        audit = AuditLogger(case_dir, session_id=self._session_id)
         audit.log("case_created", {
             "case_id": case_id,
             "case_name": case_name or "",
@@ -147,7 +157,7 @@ class CaseManager:
             json.dumps(metadata, indent=2), encoding="utf-8",
         )
 
-        audit = AuditLogger(case_dir)
+        audit = AuditLogger(case_dir, session_id=self._session_id)
         audit.log("image_added", {
             "case_id": case_id,
             "image_id": image_id,
@@ -189,7 +199,7 @@ class CaseManager:
 
         shutil.rmtree(str(image_dir), ignore_errors=False)
 
-        audit = AuditLogger(case_dir)
+        audit = AuditLogger(case_dir, session_id=self._session_id)
         audit.log("image_deleted", {
             "case_id": case_id,
             "image_id": image_id,
@@ -347,7 +357,7 @@ class CaseManager:
         (case_dir / "reports").mkdir(exist_ok=True)
 
         # Audit the migration.
-        audit = AuditLogger(case_dir)
+        audit = AuditLogger(case_dir, session_id=self._session_id)
         audit.log("legacy_case_migrated", {
             "case_id": case_id,
             "image_id": image_id,

@@ -4,14 +4,19 @@ Extracts Indicators of Compromise (URLs, IPs, domains, hashes, emails,
 file paths, filenames, suspicious tool keywords) from investigation context
 text, and formats them into prompt sections for AI analysis.
 
+Includes false-positive filtering to avoid misidentifying GUIDs as hashes
+and filenames/version strings as domain names.
+
 Attributes:
-    LOGGER: Module-level logger instance.
+    _GUID_HEX_RE: Compiled regex matching 32-char GUID-shaped hex strings.
 """
 
 from __future__ import annotations
 
 from .constants import (
     DOMAIN_EXCLUDED_SUFFIXES,
+    DOMAIN_EXCLUDED_TLDS,
+    HASH_ID_COLUMN_HINTS,
     IOC_DOMAIN_RE,
     IOC_EMAIL_RE,
     IOC_FILENAME_RE,
@@ -28,13 +33,85 @@ from .utils import (
     unique_preserve_order,
 )
 
+import re
+
 __all__ = [
     "extract_ioc_targets",
     "format_ioc_targets",
     "build_priority_directives",
     "build_artifact_final_context_reminder",
     "extract_tool_keywords",
+    "is_likely_false_positive_hash",
+    "is_likely_false_positive_domain",
 ]
+
+# Pattern matching GUID format with hyphens: 8-4-4-4-12 hex digits.
+_GUID_HYPHENATED_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def _collect_guid_hex_set(text: str) -> set[str]:
+    """Find all hyphenated GUIDs in text and return their hex-only forms.
+
+    Args:
+        text: Source text to scan for GUIDs.
+
+    Returns:
+        A set of lowercased 32-char hex strings corresponding to GUIDs
+        found in the text (with hyphens removed).
+    """
+    return {m.replace("-", "").lower() for m in _GUID_HYPHENATED_RE.findall(text)}
+
+
+def is_likely_false_positive_hash(value: str, guid_hex_set: set[str] | None = None) -> bool:
+    """Check whether a hex string is likely a non-IOC false positive.
+
+    Filters out hex strings that correspond to hyphenated GUIDs found in
+    the source text, and values that are all zeros or all one repeated
+    hex digit (e.g. ``"0" * 64``).
+
+    Args:
+        value: A hex string matched by ``IOC_HASH_RE``.
+        guid_hex_set: Optional set of lowercase 32-char hex strings derived
+            from hyphenated GUIDs in the source text.  When provided,
+            32-char matches are checked against this set.
+
+    Returns:
+        ``True`` if the value is likely a false positive, ``False`` otherwise.
+    """
+    # All-zero or single-repeated-digit hashes are placeholders, not IOCs.
+    if len(set(value.lower())) <= 1:
+        return True
+    # If we have a GUID set from the source text, check membership.
+    if guid_hex_set and len(value) == 32 and value.lower() in guid_hex_set:
+        return True
+    return False
+
+
+def is_likely_false_positive_domain(domain: str) -> bool:
+    """Check whether a domain candidate is likely a filename or version string.
+
+    Args:
+        domain: A domain candidate string matched by ``IOC_DOMAIN_RE``.
+
+    Returns:
+        ``True`` if the domain looks like a filename (ends with a known
+        file extension) or a version string (e.g. ``v2.0``), ``False``
+        otherwise.
+    """
+    lowered = domain.lower()
+    # Check if the TLD portion matches a known file extension.
+    last_dot = lowered.rfind(".")
+    if last_dot >= 0:
+        suffix = lowered[last_dot:]
+        if suffix in DOMAIN_EXCLUDED_TLDS:
+            return True
+    # Version-string pattern like "v2.0", "1.2.3", "v10.3"
+    if re.match(r"^v?\d+(\.\d+)+$", lowered):
+        return True
+    return False
 
 
 def extract_tool_keywords(text: str) -> list[str]:
@@ -75,7 +152,9 @@ def extract_ioc_targets(investigation_context: str) -> dict[str, list[str]]:
 
     urls = unique_preserve_order(IOC_URL_RE.findall(text))
     ips = unique_preserve_order(IOC_IPV4_RE.findall(text))
-    hashes = unique_preserve_order(IOC_HASH_RE.findall(text))
+    guid_hex_set = _collect_guid_hex_set(text)
+    raw_hashes = unique_preserve_order(IOC_HASH_RE.findall(text))
+    hashes = [h for h in raw_hashes if not is_likely_false_positive_hash(h, guid_hex_set)]
     emails = unique_preserve_order(IOC_EMAIL_RE.findall(text))
     windows_paths = unique_preserve_order(WINDOWS_PATH_RE.findall(text))
     file_names = unique_preserve_order(IOC_FILENAME_RE.findall(text))
@@ -92,6 +171,8 @@ def extract_ioc_targets(investigation_context: str) -> dict[str, list[str]]:
         if lowered in file_names_lower:
             continue
         if any(lowered.endswith(suffix) for suffix in DOMAIN_EXCLUDED_SUFFIXES):
+            continue
+        if is_likely_false_positive_domain(domain):
             continue
         domains.append(domain)
     domains = unique_preserve_order(domains)

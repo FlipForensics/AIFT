@@ -217,7 +217,7 @@ def delete_image(case_id: str, image_id: str) -> tuple[Response, int]:
         # Mark the image as deleting so concurrent operations won't start
         # on it while we perform disk I/O outside the lock.
         image_states = case.get("image_states", {})
-        image_states[image_id] = "deleting"
+        image_states[image_id] = {"status": "deleting"}
 
     # Perform the potentially slow disk deletion outside the lock to avoid
     # blocking other threads waiting on STATE_LOCK.
@@ -472,23 +472,26 @@ def intake_image_evidence(case_id: str, image_id: str) -> Response | tuple[Respo
         # resurrect results from prior evidence.
         case_dir_path = Path(str(case_dir))
 
-        # Clean up external CSV output directory for this specific
-        # image (mirrors the logic in evidence.py::intake_evidence).
-        from .evidence import _cleanup_parsed_output
-        _cleanup_parsed_output(case_dir_path, prev_csv_output_dir)
+        # Clean up external CSV output directory and image-specific
+        # parsed directory using the shared cleanup helper.
+        from .evidence_utils import cleanup_parsed_data
 
-        # Clean up the image-specific parsed directory.
-        image_parsed_dir = image_dir / "parsed"
-        if image_parsed_dir.is_dir():
-            shutil.rmtree(image_parsed_dir, ignore_errors=True)
+        # Build a minimal image_states dict for just this image so that
+        # cleanup_parsed_data removes its parsed directory.
+        single_image_states: dict[str, dict[str, Any]] = {
+            image_id: {"dir": str(image_dir)},
+        }
+        cleanup_parsed_data(
+            case_dir=case_dir_path,
+            image_states=single_image_states,
+            prev_csv_output_dir=prev_csv_output_dir,
+            clean_default_parsed=should_clean_case_level,
+        )
 
-        # Only clean case-level legacy parsed dir and stale analysis
-        # files when no other image retains parse results.  Otherwise
-        # adding a new image would destroy on-disk state for prior images.
+        # Only clean case-level stale analysis files when no other image
+        # retains parse results.  Otherwise adding a new image would
+        # destroy on-disk state for prior images.
         if should_clean_case_level:
-            parsed_dir_legacy = case_dir_path / "parsed"
-            if parsed_dir_legacy.is_dir():
-                shutil.rmtree(parsed_dir_legacy, ignore_errors=True)
             for stale_file in ("analysis_results.json", "prompt.txt", "chat_history.jsonl"):
                 stale_path = case_dir_path / stale_file
                 if stale_path.exists():

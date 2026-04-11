@@ -102,7 +102,7 @@ def compute_hashes(
     """
     digests, total_bytes = _compute_digests(
         filepath,
-        {"sha256": sha256(), "md5": md5()},
+        {"sha256": sha256(), "md5": md5(usedforsecurity=False)},
         progress_callback=progress_callback,
     )
     return {

@@ -1,8 +1,12 @@
 """Data preparation pipeline for forensic artifact analysis.
 
 Handles date extraction from investigation context, CSV reading,
-column projection, deduplication, statistics computation, and
-final prompt assembly for AI analysis.
+column projection, deduplication, date filtering, anomaly flagging,
+sampling, statistics computation, and final prompt assembly for
+AI analysis.
+
+Attributes:
+    LOGGER: Module-level logger instance.
 """
 
 from __future__ import annotations
@@ -10,8 +14,9 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import random
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -28,12 +33,14 @@ from .ioc import (
     format_ioc_targets,
 )
 from .utils import (
+    extract_row_datetime,
     format_datetime,
     is_dedup_safe_identifier_column,
     looks_like_timestamp_column,
     normalize_artifact_key,
     normalize_csv_row,
     normalize_table_cell,
+    parse_datetime_value,
     sanitize_filename,
     stringify_value,
     time_range_for_rows,
@@ -52,6 +59,9 @@ __all__ = [
     "project_rows_for_analysis",
     "deduplicate_rows_for_analysis",
     "build_full_data_csv",
+    "_filter_by_date_range",
+    "_flag_anomalous_rows",
+    "_sample_rows",
 ]
 
 
@@ -280,6 +290,180 @@ def deduplicate_rows_for_analysis(
 
 
 # ---------------------------------------------------------------------------
+# Data feeding: date filtering, anomaly flagging, and sampling
+# ---------------------------------------------------------------------------
+
+
+def _filter_by_date_range(
+    rows: list[dict[str, str]],
+    date_range: tuple[str, str] | None,
+    buffer_days: int = 7,
+) -> list[dict[str, str]]:
+    """Filter rows to those within a date range plus a buffer.
+
+    Parses ``date_range`` start/end strings into datetimes, expands the
+    window by ``buffer_days`` on each side, and keeps only rows whose
+    first parseable timestamp falls within that window.  Rows without a
+    parseable timestamp are always retained (to avoid silently dropping
+    data that may still be relevant).
+
+    Args:
+        rows: List of row dicts to filter.
+        date_range: A 2-tuple of ``(start_date_str, end_date_str)`` or
+            ``None``.  If ``None``, all rows are returned unchanged.
+        buffer_days: Number of days to expand the window on each side.
+
+    Returns:
+        A filtered list of row dicts.
+    """
+    if not date_range or not rows:
+        return list(rows)
+
+    start_str, end_str = date_range
+    start_dt = parse_datetime_value(start_str) if start_str else None
+    end_dt = parse_datetime_value(end_str) if end_str else None
+
+    if start_dt is None and end_dt is None:
+        return list(rows)
+
+    buffer = timedelta(days=buffer_days)
+    if start_dt is not None:
+        start_dt = start_dt - buffer
+    if end_dt is not None:
+        end_dt = end_dt + buffer
+
+    filtered: list[dict[str, str]] = []
+    for row in rows:
+        row_dt = extract_row_datetime(row)
+        if row_dt is None:
+            # Keep rows without timestamps — they may still be relevant.
+            filtered.append(row)
+            continue
+        if start_dt is not None and row_dt < start_dt:
+            continue
+        if end_dt is not None and row_dt > end_dt:
+            continue
+        filtered.append(row)
+
+    LOGGER.debug(
+        "Date filter: %d -> %d rows (range %s to %s, buffer %d days)",
+        len(rows), len(filtered), start_str, end_str, buffer_days,
+    )
+    return filtered
+
+
+def _flag_anomalous_rows(
+    rows: list[dict[str, str]],
+    threshold: float = 0.01,
+) -> list[bool]:
+    """Flag rows containing statistically rare column values.
+
+    A row is flagged as anomalous if any of its cell values appears in
+    fewer than ``threshold`` fraction of all rows for that column.  This
+    is a simple frequency-based anomaly detector that highlights
+    potentially interesting records for the AI.
+
+    Args:
+        rows: List of row dicts to evaluate.
+        threshold: Fraction below which a value count is considered rare.
+            Defaults to 0.01 (1%).
+
+    Returns:
+        A list of booleans parallel to ``rows``, where ``True`` means
+        the row is flagged as anomalous.
+    """
+    if not rows:
+        return []
+
+    total = len(rows)
+    min_count = max(1, int(total * threshold))
+
+    # Build per-column frequency counts.
+    columns = [c for c in rows[0].keys() if c != "_row_ref"]
+    counters: dict[str, Counter[str]] = {col: Counter() for col in columns}
+    for row in rows:
+        for col in columns:
+            val = row.get(col, "").strip()
+            if val:
+                counters[col][val] += 1
+
+    # Build per-column sets of rare values for fast lookup.
+    rare_values: dict[str, set[str]] = {}
+    for col, counter in counters.items():
+        rare_values[col] = {val for val, cnt in counter.items() if cnt <= min_count}
+
+    flags: list[bool] = []
+    for row in rows:
+        flagged = False
+        for col in columns:
+            val = row.get(col, "").strip()
+            if val and val in rare_values.get(col, set()):
+                flagged = True
+                break
+        flags.append(flagged)
+
+    flagged_count = sum(flags)
+    LOGGER.debug(
+        "Anomaly flagging: %d of %d rows flagged (threshold=%.3f)",
+        flagged_count, total, threshold,
+    )
+    return flags
+
+
+def _sample_rows(
+    rows: list[dict[str, str]],
+    max_flagged: int = 500,
+    max_normal: int = 200,
+) -> list[dict[str, str]]:
+    """Down-sample rows using anomaly flags to prioritize interesting data.
+
+    If the total number of rows is at most ``max_flagged + max_normal``,
+    all rows are returned unchanged.  Otherwise, anomalous rows are
+    prioritized (up to ``max_flagged``), supplemented by a random sample
+    of normal rows (up to ``max_normal``).
+
+    Args:
+        rows: List of row dicts to sample from.
+        max_flagged: Maximum number of anomaly-flagged rows to keep.
+        max_normal: Maximum number of non-flagged rows to keep.
+
+    Returns:
+        A sampled list of row dicts, preserving original row order.
+    """
+    max_total = max_flagged + max_normal
+    if len(rows) <= max_total:
+        return list(rows)
+
+    flags = _flag_anomalous_rows(rows)
+
+    flagged_indices: list[int] = []
+    normal_indices: list[int] = []
+    for idx, is_flagged in enumerate(flags):
+        if is_flagged:
+            flagged_indices.append(idx)
+        else:
+            normal_indices.append(idx)
+
+    # Cap flagged rows.
+    if len(flagged_indices) > max_flagged:
+        flagged_indices = random.sample(flagged_indices, max_flagged)
+
+    # Cap normal rows.
+    if len(normal_indices) > max_normal:
+        normal_indices = random.sample(normal_indices, max_normal)
+
+    # Merge and sort to preserve original row order.
+    selected = sorted(set(flagged_indices) | set(normal_indices))
+    sampled = [rows[i] for i in selected]
+
+    LOGGER.debug(
+        "Sampling: %d -> %d rows (%d flagged, %d normal)",
+        len(rows), len(sampled), len(flagged_indices), len(normal_indices),
+    )
+    return sampled
+
+
+# ---------------------------------------------------------------------------
 # CSV serialisation
 # ---------------------------------------------------------------------------
 
@@ -408,15 +592,20 @@ def prepare_artifact_data(
     shortened_prompt_cutoff_tokens: int,
     case_dir: Path | None,
     audit_log_fn: Any = None,
+    date_range: tuple[str, str] | None = None,
 ) -> tuple[str, Path, list[str]]:
     """Prepare one artifact CSV as an analysis-ready prompt.
 
     Reads the full artifact CSV, applies column projection,
-    deduplication, and statistics computation.  Fills the appropriate
-    prompt template with all gathered data.
+    deduplication, date filtering, anomaly-based sampling, and
+    statistics computation.  Fills the appropriate prompt template
+    with all gathered data.
 
-    All rows are loaded to preserve forensic completeness — no data is
-    silently discarded.
+    When ``date_range`` is provided, rows outside the range (with a
+    7-day buffer) are excluded.  Large datasets are then down-sampled
+    using anomaly flagging: up to 500 flagged rows and 200 random
+    normal rows are kept, reducing prompt size while preserving
+    forensically interesting records.
 
     Args:
         artifact_key: Unique identifier for the artifact.
@@ -432,6 +621,8 @@ def prepare_artifact_data(
         shortened_prompt_cutoff_tokens: Token threshold for small template.
         case_dir: Optional case directory path.
         audit_log_fn: Optional callable ``(action, details)`` for audit.
+        date_range: Optional 2-tuple of ``(start_date_str, end_date_str)``
+            for date-based row filtering.  ``None`` skips date filtering.
 
     Returns:
         A 3-tuple of ``(prompt_text, analysis_csv_path, analysis_columns)``.
@@ -466,6 +657,25 @@ def prepare_artifact_data(
         analysis_rows, analysis_columns, deduplicated_records, dedup_annotated_rows, dedup_variant_columns = (
             deduplicate_rows_for_analysis(rows=analysis_rows, columns=analysis_columns)
         )
+
+    # ----- Data feeding strategy: date filter + anomaly sampling -----
+    pre_filter_count = len(analysis_rows)
+    analysis_rows = _filter_by_date_range(rows=analysis_rows, date_range=date_range)
+    date_filtered_count = pre_filter_count - len(analysis_rows)
+
+    pre_sample_count = len(analysis_rows)
+    analysis_rows = _sample_rows(rows=analysis_rows)
+    sampled_away_count = pre_sample_count - len(analysis_rows)
+
+    if (date_filtered_count or sampled_away_count) and audit_log_fn is not None:
+        audit_log_fn("artifact_data_feeding", {
+            "artifact_key": artifact_key,
+            "rows_before_date_filter": pre_filter_count,
+            "rows_removed_by_date_filter": date_filtered_count,
+            "rows_before_sampling": pre_sample_count,
+            "rows_removed_by_sampling": sampled_away_count,
+            "rows_after_sampling": len(analysis_rows),
+        })
 
     if projection_applied or artifact_deduplication_enabled:
         try:

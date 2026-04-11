@@ -106,6 +106,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ai_max_tokens": 128000,
         "shortened_prompt_cutoff_tokens": 64000,
         "connection_test_max_tokens": 256,
+        "ai_response_max_tokens": 0,
         "citation_spot_check_limit": 20,
         "artifact_deduplication_enabled": True,
         "artifact_ai_columns_config_path": "config/artifact_ai_columns.yaml",
@@ -286,7 +287,7 @@ def load_config(path: str | Path | None = None, use_env_overrides: bool = True) 
         The fully merged configuration dictionary.
 
     Raises:
-        ValueError: If the YAML file contains a non-dictionary root value.
+        ConfigurationError: If the YAML file contains a non-dictionary root value.
     """
     config_path = Path(path) if path is not None else PROJECT_ROOT / "config.yaml"
     config = get_default_config()
@@ -296,7 +297,7 @@ def load_config(path: str | Path | None = None, use_env_overrides: bool = True) 
             parsed = yaml.safe_load(file) or {}
 
         if not isinstance(parsed, dict):
-            raise ValueError(f"Invalid configuration format in {config_path}.")
+            raise ConfigurationError(f"Invalid configuration format in {config_path}.")
 
         _deep_merge_inplace(config, parsed)
     else:
@@ -325,15 +326,16 @@ def save_config(config: dict[str, Any], path: str | Path | None = None) -> None:
             ``<PROJECT_ROOT>/config.yaml``.
     """
     config_path = Path(path) if path is not None else PROJECT_ROOT / "config.yaml"
-    if config_path.parent != Path("."):
-        config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
 
     tmp_path = config_path.with_suffix(".yaml.tmp")
+    replaced = False
     try:
         with tmp_path.open("w", encoding="utf-8") as file:
             yaml.safe_dump(config, file, sort_keys=False)
         tmp_path.replace(config_path)
+        replaced = True
     finally:
-        # Clean up the temp file if it still exists (e.g. replace() failed).
-        if tmp_path.exists():
+        # Clean up the temp file only if replace() did not succeed.
+        if not replaced and tmp_path.exists():
             tmp_path.unlink()

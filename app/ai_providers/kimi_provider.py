@@ -12,7 +12,8 @@ Attributes:
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Iterator, Mapping
+import threading
+from typing import Any, Iterator, Mapping
 
 from .base import (
     AIProvider,
@@ -23,14 +24,11 @@ from .base import (
     DEFAULT_KIMI_MODEL,
     DEFAULT_MAX_TOKENS,
     _is_attachment_unsupported_error,
-    _is_context_length_error,
     _is_kimi_model_not_available_error,
     _normalize_api_key_value,
     _normalize_kimi_model_name,
     _normalize_openai_compatible_base_url,
     _resolve_timeout_seconds,
-    _run_with_rate_limit_retries,
-    _T,
 )
 from .utils import (
     _extract_openai_delta_text,
@@ -55,6 +53,8 @@ class KimiProvider(AIProvider):
         request_timeout_seconds (float): HTTP timeout in seconds.
         client: The ``openai.OpenAI`` SDK client instance configured for Kimi.
     """
+
+    _provider_display_name: str = "Kimi"
 
     def __init__(
         self,
@@ -100,6 +100,8 @@ class KimiProvider(AIProvider):
         )
         self.attach_csv_as_file = bool(attach_csv_as_file)
         self._csv_attachment_supported: bool | None = None
+        self._attachment_lock = threading.Lock()
+        self._rate_limit_error_class = openai.RateLimitError
         self.request_timeout_seconds = _resolve_timeout_seconds(
             request_timeout_seconds,
             DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
@@ -111,31 +113,35 @@ class KimiProvider(AIProvider):
         )
         logger.info("Initialized Kimi provider at %s with model %s (timeout %.1fs)", self.base_url, self.model, self.request_timeout_seconds)
 
-    def analyze(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        max_tokens: int = DEFAULT_MAX_TOKENS,
-    ) -> str:
-        """Send a prompt to Kimi and return the generated text.
+    def _map_api_error(self, error: Exception) -> AIProviderError:
+        """Map an OpenAI SDK exception to an ``AIProviderError`` with Kimi messages.
+
+        Overrides the base implementation to provide Kimi-specific error
+        messages (authentication config keys, model-not-available detection).
 
         Args:
-            system_prompt: The system-level instruction text.
-            user_prompt: The user-facing prompt with investigation context.
-            max_tokens: Maximum completion tokens.
+            error: The raw SDK or network exception.
 
         Returns:
-            The generated analysis text.
-
-        Raises:
-            AIProviderError: On any API or network failure.
+            An ``AIProviderError`` with a user-friendly message.
         """
-        return self.analyze_with_attachments(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            attachments=None,
-            max_tokens=max_tokens,
-        )
+        if isinstance(error, self._openai.APIConnectionError):
+            return AIProviderError(
+                "Unable to connect to Kimi API. Check `ai.kimi.base_url` and network access."
+            )
+        if isinstance(error, self._openai.AuthenticationError):
+            return AIProviderError(
+                "Kimi authentication failed. Check `ai.kimi.api_key`, MOONSHOT_API_KEY, or KIMI_API_KEY."
+            )
+        if isinstance(error, self._openai.APIError):
+            if _is_kimi_model_not_available_error(error):
+                return AIProviderError(
+                    "Kimi rejected the configured model. "
+                    f"Current model: `{self.model}`. "
+                    "Set `ai.kimi.model` to a model enabled for your Moonshot account "
+                    "(for example `kimi-k2-turbo-preview`) and retry."
+                )
+        return super()._map_api_error(error)
 
     def analyze_stream(
         self,
@@ -157,7 +163,7 @@ class KimiProvider(AIProvider):
             AIProviderError: On empty response or API failure.
         """
         def _stream() -> Iterator[str]:
-            stream = self._run_kimi_request(
+            stream = self._run_request(
                 lambda: self.client.chat.completions.create(
                     model=self.model,
                     max_tokens=max_tokens,
@@ -225,64 +231,7 @@ class KimiProvider(AIProvider):
                 attachments=attachments,
             )
 
-        return self._run_kimi_request(_request)
-
-    def _run_kimi_request(self, request_fn: Callable[[], _T]) -> _T:
-        """Execute a Kimi request with rate-limit retries and error mapping.
-
-        Args:
-            request_fn: A zero-argument callable that performs the request.
-
-        Returns:
-            The return value of ``request_fn`` on success.
-
-        Raises:
-            AIProviderError: On any OpenAI SDK error (with Kimi messages).
-        """
-        try:
-            return _run_with_rate_limit_retries(
-                request_fn=request_fn,
-                rate_limit_error_type=self._openai.RateLimitError,
-                provider_name="Kimi",
-            )
-        except AIProviderError:
-            raise
-        except Exception as error:
-            raise self._map_api_error(error) from error
-
-    def _map_api_error(self, error: Exception) -> AIProviderError:
-        """Map an OpenAI SDK exception to an ``AIProviderError`` with Kimi messages.
-
-        Args:
-            error: The raw SDK or network exception.
-
-        Returns:
-            An ``AIProviderError`` with a user-friendly message.
-        """
-        if isinstance(error, self._openai.APIConnectionError):
-            return AIProviderError(
-                "Unable to connect to Kimi API. Check `ai.kimi.base_url` and network access."
-            )
-        if isinstance(error, self._openai.AuthenticationError):
-            return AIProviderError(
-                "Kimi authentication failed. Check `ai.kimi.api_key`, MOONSHOT_API_KEY, or KIMI_API_KEY."
-            )
-        if isinstance(error, self._openai.BadRequestError):
-            if _is_context_length_error(error):
-                return AIProviderError(
-                    "Kimi request exceeded the model context length. Reduce prompt size and retry."
-                )
-            return AIProviderError(f"Kimi request was rejected: {error}")
-        if isinstance(error, self._openai.APIError):
-            if _is_kimi_model_not_available_error(error):
-                return AIProviderError(
-                    "Kimi rejected the configured model. "
-                    f"Current model: `{self.model}`. "
-                    "Set `ai.kimi.model` to a model enabled for your Moonshot account "
-                    "(for example `kimi-k2-turbo-preview`) and retry."
-                )
-            return AIProviderError(f"Kimi API error: {error}")
-        return AIProviderError(f"Unexpected Kimi provider error: {error}")
+        return self._run_request(_request)
 
     def _request_non_stream(
         self,
@@ -374,11 +323,13 @@ class KimiProvider(AIProvider):
                 upload_purpose=DEFAULT_KIMI_FILE_UPLOAD_PURPOSE,
                 convert_csv_to_txt=False,
             )
-            self._csv_attachment_supported = True
+            with self._attachment_lock:
+                self._csv_attachment_supported = True
             return text
         except Exception as error:
             if _is_attachment_unsupported_error(error):
-                self._csv_attachment_supported = False
+                with self._attachment_lock:
+                    self._csv_attachment_supported = False
                 logger.info(
                     "Kimi endpoint does not support CSV attachments via /files + /responses; "
                     "falling back to chat.completions text mode."

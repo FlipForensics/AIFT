@@ -13,6 +13,7 @@ Attributes:
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Callable, Iterator, Mapping
 
@@ -24,12 +25,10 @@ from .base import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS,
     _is_attachment_unsupported_error,
-    _is_context_length_error,
     _normalize_api_key_value,
     _normalize_openai_compatible_base_url,
     _resolve_timeout_seconds,
     _run_with_rate_limit_retries,
-    _T,
 )
 from .utils import (
     _clean_streamed_answer_text,
@@ -55,6 +54,8 @@ class LocalProvider(AIProvider):
         request_timeout_seconds (float): HTTP timeout in seconds.
         client: The ``openai.OpenAI`` SDK client instance.
     """
+
+    _provider_display_name: str = "Local/OpenAI-compatible"
 
     def __init__(
         self,
@@ -94,12 +95,14 @@ class LocalProvider(AIProvider):
         self.model = model
         self._api_key = normalized_api_key
         self.attach_csv_as_file = bool(attach_csv_as_file)
+        self._rate_limit_error_class = openai.RateLimitError
         self.request_timeout_seconds = _resolve_timeout_seconds(
             request_timeout_seconds,
             DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS,
         )
         self._api_timeout_error_type = getattr(openai, "APITimeoutError", None)
         self._csv_attachment_supported: bool | None = None
+        self._attachment_lock = threading.Lock()
         self.client = openai.OpenAI(
             api_key=normalized_api_key,
             base_url=self.base_url,
@@ -113,31 +116,28 @@ class LocalProvider(AIProvider):
             self.request_timeout_seconds,
         )
 
-    def analyze(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        max_tokens: int = DEFAULT_MAX_TOKENS,
-    ) -> str:
-        """Send a prompt to the local endpoint and return the generated text.
+    def _map_api_error(self, error: Exception) -> AIProviderError:
+        """Map an OpenAI SDK exception to an ``AIProviderError`` with local messages.
+
+        Overrides the base implementation to add local-specific handling:
+        timeout detection for connection errors, 404 detection for API
+        errors, and local-specific authentication messaging.
 
         Args:
-            system_prompt: The system-level instruction text.
-            user_prompt: The user-facing prompt with investigation context.
-            max_tokens: Maximum completion tokens.
+            error: The raw SDK or network exception.
 
         Returns:
-            The generated analysis text.
-
-        Raises:
-            AIProviderError: On any API or network failure.
+            An ``AIProviderError`` with a user-friendly message.
         """
-        return self.analyze_with_attachments(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            attachments=None,
-            max_tokens=max_tokens,
-        )
+        if isinstance(error, self._openai.APIConnectionError):
+            return self._make_connection_error(error)
+        if isinstance(error, self._openai.AuthenticationError):
+            return AIProviderError(
+                "Local AI endpoint rejected authentication. Check `ai.local.api_key` if your server requires one."
+            )
+        if isinstance(error, self._openai.APIError):
+            return self._make_api_error(error)
+        return super()._map_api_error(error)
 
     def analyze_stream(
         self,
@@ -204,9 +204,15 @@ class LocalProvider(AIProvider):
                     delta = getattr(choice, "delta", None)
                     if delta is None and isinstance(choice, dict):
                         delta = choice.get("delta")
-                    chunk_text = _extract_openai_delta_text(
-                        delta,
-                        ("content", "reasoning_content", "reasoning", "thinking"),
+                    # Only yield from the content field, skipping
+                    # reasoning/thinking fields so streaming output
+                    # matches the non-streaming path which strips
+                    # leading <think> blocks via
+                    # _strip_leading_reasoning_blocks().
+                    chunk_text = (
+                        getattr(delta, "content", None)
+                        if not isinstance(delta, dict)
+                        else (delta.get("content") if delta else None)
                     )
                     if not chunk_text:
                         continue
@@ -254,55 +260,7 @@ class LocalProvider(AIProvider):
                 attachments=attachments,
             )
 
-        return self._run_local_request(_request)
-
-    def _run_local_request(self, request_fn: Callable[[], _T]) -> _T:
-        """Execute a local request with rate-limit retries and error mapping.
-
-        Args:
-            request_fn: A zero-argument callable that performs the request.
-
-        Returns:
-            The return value of ``request_fn`` on success.
-
-        Raises:
-            AIProviderError: On any OpenAI SDK error (with local messages).
-        """
-        try:
-            return _run_with_rate_limit_retries(
-                request_fn=request_fn,
-                rate_limit_error_type=self._openai.RateLimitError,
-                provider_name="Local provider",
-            )
-        except AIProviderError:
-            raise
-        except Exception as error:
-            raise self._map_api_error(error) from error
-
-    def _map_api_error(self, error: Exception) -> AIProviderError:
-        """Map an OpenAI SDK exception to an ``AIProviderError`` with local messages.
-
-        Args:
-            error: The raw SDK or network exception.
-
-        Returns:
-            An ``AIProviderError`` with a user-friendly message.
-        """
-        if isinstance(error, self._openai.APIConnectionError):
-            return self._make_connection_error(error)
-        if isinstance(error, self._openai.AuthenticationError):
-            return AIProviderError(
-                "Local AI endpoint rejected authentication. Check `ai.local.api_key` if your server requires one."
-            )
-        if isinstance(error, self._openai.BadRequestError):
-            if _is_context_length_error(error):
-                return AIProviderError(
-                    "Local model request exceeded the context length. Reduce prompt size and retry."
-                )
-            return AIProviderError(f"Local provider request was rejected: {error}")
-        if isinstance(error, self._openai.APIError):
-            return self._make_api_error(error)
-        return AIProviderError(f"Unexpected local provider error: {error}")
+        return self._run_request(_request)
 
     def _make_connection_error(self, error: Exception) -> AIProviderError:
         """Map APIConnectionError to AIProviderError with timeout detection.
@@ -426,7 +384,7 @@ class LocalProvider(AIProvider):
 
             return self._finalize_stream_response(thinking_parts, answer_parts)
 
-        return self._run_local_request(_request)
+        return self._run_request(_request)
 
     def _build_stream_or_result(
         self,
@@ -738,11 +696,13 @@ class LocalProvider(AIProvider):
                 upload_purpose="assistants",
                 convert_csv_to_txt=False,
             )
-            self._csv_attachment_supported = True
+            with self._attachment_lock:
+                self._csv_attachment_supported = True
             return text
         except Exception as error:
             if _is_attachment_unsupported_error(error):
-                self._csv_attachment_supported = False
+                with self._attachment_lock:
+                    self._csv_attachment_supported = False
                 logger.info(
                     "Local endpoint does not support file attachments via /files + /responses; "
                     "falling back to chat.completions text mode."

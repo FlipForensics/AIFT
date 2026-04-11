@@ -41,6 +41,8 @@ __all__ = [
     "CITATION_SPOT_CHECK_LIMIT",
     "PROJECT_ROOT",
     "DEFAULT_ARTIFACT_AI_COLUMNS_CONFIG_PATH",
+    "DOMAIN_EXCLUDED_TLDS",
+    "HASH_ID_COLUMN_HINTS",
     "UnavailableProvider",
 ]
 
@@ -96,6 +98,30 @@ KNOWN_MALICIOUS_TOOL_KEYWORDS = (
 )
 
 DOMAIN_EXCLUDED_SUFFIXES = {".local", ".lan", ".internal"}
+
+# File extensions that should not be treated as domain TLDs.
+# Matches like "file.exe", "System.dll", "v2.0" are filenames or version
+# strings, not domain names.
+DOMAIN_EXCLUDED_TLDS = {
+    ".exe", ".dll", ".sys", ".dat", ".log", ".tmp", ".ini", ".cfg",
+    ".xml", ".json", ".csv", ".py", ".js", ".html", ".css", ".txt",
+    ".md", ".bat", ".cmd", ".ps1", ".vbs", ".vbe", ".msi", ".msp",
+    ".scr", ".cpl", ".lnk", ".jar", ".doc", ".docx", ".xls", ".xlsx",
+    ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".zip",
+    ".rar", ".7z", ".gz", ".tar", ".cab", ".iso", ".img", ".bin",
+    ".drv", ".ocx", ".pdb", ".lib", ".obj", ".res", ".rc",
+    ".h", ".c", ".cpp", ".java", ".class", ".pyc", ".pyo", ".whl",
+    ".yaml", ".yml", ".toml", ".conf", ".reg", ".inf", ".cat", ".man",
+    ".evtx", ".etl", ".dmp", ".pf", ".nls", ".mui", ".mof", ".sdb",
+}
+
+# Column name substrings that indicate a column holds identifiers (GUIDs,
+# session IDs, etc.) rather than cryptographic hashes.  Used to suppress
+# hash-IOC false positives when scanning CSV data.
+HASH_ID_COLUMN_HINTS = {
+    "guid", "uuid", "id", "session", "correlat", "instance",
+    "object_id", "objectid", "handle", "token", "logon",
+}
 
 # ---------------------------------------------------------------------------
 # Citation-validation regex patterns

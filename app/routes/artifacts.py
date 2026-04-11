@@ -578,34 +578,24 @@ artifact_bp = Blueprint("artifacts", __name__)
 def _purge_stale_parsed_data(case_dir: Path, prev_csv_output_dir: str) -> None:
     """Remove parsed CSV data from disk before a new parse run.
 
-    Cleans both the default ``case_dir/parsed`` directory and any external
-    CSV output directory that was used by the previous parse run.
+    Delegates to :func:`~app.routes.evidence_utils.cleanup_parsed_data`.
+
+    .. deprecated::
+        Use :func:`~app.routes.evidence_utils.cleanup_parsed_data` directly.
 
     Args:
         case_dir: Path to the case directory.
         prev_csv_output_dir: The ``csv_output_dir`` stored from the previous
             parse run.  May be empty if no prior run exists.
     """
-    from .evidence_utils import safe_rmtree
+    from .evidence_utils import cleanup_parsed_data
 
-    cases_root = case_dir.resolve().parent
-
-    # Clean the default parsed directory inside the case folder.
-    default_parsed = case_dir / "parsed"
-    safe_rmtree(default_parsed, cases_root)
-
-    # Clean external CSV output directory if configured and different
-    # from the default location.
-    if not prev_csv_output_dir:
-        return
-    prev_path = Path(prev_csv_output_dir)
-    if not prev_path.is_dir():
-        return
-    resolved_prev = prev_path.resolve()
-    resolved_default = default_parsed.resolve()
-    if resolved_prev == resolved_default:
-        return  # Already handled above.
-    safe_rmtree(prev_path, cases_root)
+    cleanup_parsed_data(
+        case_dir=case_dir,
+        image_states={},
+        prev_csv_output_dir=prev_csv_output_dir,
+        clean_default_parsed=True,
+    )
 
 
 def _purge_stale_downstream_case_files(case_dir: Path) -> None:
@@ -692,7 +682,14 @@ def start_parse(case_id: str) -> tuple[Response, int]:
         case["csv_output_dir"] = ""
         case["investigation_context"] = ""
 
-    _purge_stale_parsed_data(case_dir, prev_csv_output_dir)
+    from .evidence_utils import cleanup_parsed_data
+
+    cleanup_parsed_data(
+        case_dir=case_dir,
+        image_states={},
+        prev_csv_output_dir=prev_csv_output_dir,
+        clean_default_parsed=True,
+    )
     _purge_stale_downstream_case_files(case_dir)
 
     parse_started_event: dict[str, Any] = {

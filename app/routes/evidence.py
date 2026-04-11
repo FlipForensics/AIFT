@@ -254,41 +254,24 @@ def read_audit_entries(case_dir: Path) -> list[dict[str, Any]]:
 def _cleanup_parsed_output(case_dir: Path, prev_csv_output_dir: str) -> None:
     """Remove stale parsed CSV output from a previous parse run.
 
-    Handles both the default ``case_dir/parsed`` location and external
-    directories configured via ``evidence.csv_output_dir``.  Only the
-    case-specific parsed directory is removed — parent directories and
-    unrelated paths are never touched.
+    Delegates to :func:`~app.routes.evidence_utils.cleanup_parsed_data`.
+
+    .. deprecated::
+        Use :func:`~app.routes.evidence_utils.cleanup_parsed_data` directly.
 
     Args:
         case_dir: Path to the case's root directory.
         prev_csv_output_dir: The ``csv_output_dir`` value stored from the
             previous parse run (may be empty).
     """
-    if not prev_csv_output_dir:
-        return
+    from .evidence_utils import cleanup_parsed_data
 
-    prev_path = Path(prev_csv_output_dir)
-
-    # Nothing to do if the directory doesn't exist.
-    if not prev_path.is_dir():
-        return
-
-    resolved_prev = prev_path.resolve()
-    resolved_case = case_dir.resolve()
-
-    # If the previous output dir is inside the case directory, the normal
-    # ``case_dir/parsed`` cleanup already handles it — skip.
-    try:
-        if resolved_prev.is_relative_to(resolved_case):
-            return
-    except (TypeError, ValueError):
-        return
-
-    # Delegate safety-checked removal to the shared helper.
-    from .evidence_utils import safe_rmtree
-
-    cases_root = resolved_case.parent
-    safe_rmtree(prev_path, cases_root)
+    cleanup_parsed_data(
+        case_dir=case_dir,
+        image_states={},
+        prev_csv_output_dir=prev_csv_output_dir,
+        clean_default_parsed=False,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -511,6 +494,10 @@ def generate_case_report(case_id: str) -> dict[str, Any]:
 
         hashing_skipped = intake_sha256 == "N/A (skipped)"
 
+        # Safety defaults in case neither branch assigns these variables.
+        computed_sha256 = ""
+        verify_details: list[dict[str, Any]] = []
+
         if file_hash_entries or hashing_skipped or intake_sha256.startswith("N/A"):
             hash_ok, computed_sha256, verify_details = _verify_image_hashes(
                 hashes, file_hash_entries,
@@ -722,6 +709,14 @@ def download_csv_bundle(case_id: str) -> Response | tuple[Response, int]:
 
     reports_dir = Path(case_snapshot["case_dir"]) / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
+
+    # Clean up previous ZIP bundles to prevent resource leak.
+    for old_zip in reports_dir.glob("parsed_csvs_*.zip"):
+        try:
+            old_zip.unlink()
+        except OSError:
+            pass
+
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     zip_path = reports_dir / f"parsed_csvs_{timestamp}.zip"
     used_names: set[str] = set()

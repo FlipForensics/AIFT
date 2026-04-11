@@ -414,21 +414,31 @@ class ChatManager:
                 pairs.append((pending_user, msg))
                 pending_user = None
 
-        # Drop oldest pairs until total fits.
-        while pairs:
-            total = sum(
-                self.estimate_token_count(str(u.get("content", "")))
-                + self.estimate_token_count(str(a.get("content", "")))
-                for u, a in pairs
-            )
-            if total <= max_tokens:
-                break
-            pairs.pop(0)
+        # Drop oldest pairs until total fits.  Compute the total once
+        # and subtract dropped pairs incrementally to avoid O(n^2).
+        total = sum(
+            self.estimate_token_count(str(u.get("content", "")))
+            + self.estimate_token_count(str(a.get("content", "")))
+            for u, a in pairs
+        )
+        drop_count = 0
+        while drop_count < len(pairs) and total > max_tokens:
+            u, a = pairs[drop_count]
+            total -= self.estimate_token_count(str(u.get("content", "")))
+            total -= self.estimate_token_count(str(a.get("content", "")))
+            drop_count += 1
+        pairs = pairs[drop_count:]
 
         result: list[dict[str, Any]] = []
         for user_msg, assistant_msg in pairs:
             result.append(user_msg)
             result.append(assistant_msg)
+
+        # Keep a trailing unpaired user message so the pending question
+        # is not silently dropped from the returned context.
+        if pending_user is not None:
+            result.append(pending_user)
+
         return result
 
     # ------------------------------------------------------------------

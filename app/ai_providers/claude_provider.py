@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import base64
 import logging
+import threading
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any, Iterator, Mapping
 
 from .base import (
     AIProvider,
@@ -23,7 +24,6 @@ from .base import (
     DEFAULT_MAX_TOKENS,
     _is_attachment_unsupported_error,
     _is_anthropic_streaming_required_error,
-    _is_context_length_error,
     _normalize_api_key_value,
     _resolve_completion_token_retry_limit,
     _resolve_timeout_seconds,
@@ -55,6 +55,8 @@ class ClaudeProvider(AIProvider):
         request_timeout_seconds (float): HTTP timeout in seconds.
         client: The ``anthropic.Anthropic`` SDK client instance.
     """
+
+    _provider_display_name: str = "Claude"
 
     def __init__(
         self,
@@ -95,6 +97,8 @@ class ClaudeProvider(AIProvider):
         self.model = model
         self.attach_csv_as_file = bool(attach_csv_as_file)
         self._csv_attachment_supported: bool | None = None
+        self._attachment_lock = threading.Lock()
+        self._rate_limit_error_class = anthropic.RateLimitError
         self.request_timeout_seconds = _resolve_timeout_seconds(
             request_timeout_seconds,
             DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
@@ -105,31 +109,27 @@ class ClaudeProvider(AIProvider):
         )
         logger.info("Initialized Claude provider with model %s (timeout %.1fs)", model, self.request_timeout_seconds)
 
-    def analyze(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        max_tokens: int = DEFAULT_MAX_TOKENS,
-    ) -> str:
-        """Send a prompt to Claude and return the generated text.
+    def _map_api_error(self, error: Exception) -> AIProviderError:
+        """Map an Anthropic SDK exception to an ``AIProviderError``.
+
+        Overrides the base implementation to provide Claude-specific error
+        messages referencing the correct config keys.
 
         Args:
-            system_prompt: The system-level instruction text.
-            user_prompt: The user-facing prompt with investigation context.
-            max_tokens: Maximum completion tokens.
+            error: The raw SDK or network exception.
 
         Returns:
-            The generated analysis text.
-
-        Raises:
-            AIProviderError: On any API or network failure.
+            An ``AIProviderError`` with a user-friendly message.
         """
-        return self.analyze_with_attachments(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            attachments=None,
-            max_tokens=max_tokens,
-        )
+        if isinstance(error, self._anthropic.APIConnectionError):
+            return AIProviderError(
+                "Unable to connect to Claude API. Check network access and endpoint configuration."
+            )
+        if isinstance(error, self._anthropic.AuthenticationError):
+            return AIProviderError(
+                "Claude authentication failed. Check `ai.claude.api_key` or ANTHROPIC_API_KEY."
+            )
+        return super()._map_api_error(error)
 
     def analyze_stream(
         self,
@@ -233,57 +233,7 @@ class ClaudeProvider(AIProvider):
                 raise AIProviderError("Claude returned an empty response.")
             return text
 
-        return self._run_claude_request(_request)
-
-    def _run_claude_request(self, request_fn: Callable[[], _T]) -> _T:
-        """Execute a Claude request with rate-limit retries and error mapping.
-
-        Args:
-            request_fn: A zero-argument callable that performs the API request.
-
-        Returns:
-            The return value of ``request_fn`` on success.
-
-        Raises:
-            AIProviderError: On any Anthropic SDK error.
-        """
-        try:
-            return _run_with_rate_limit_retries(
-                request_fn=request_fn,
-                rate_limit_error_type=self._anthropic.RateLimitError,
-                provider_name="Claude",
-            )
-        except AIProviderError:
-            raise
-        except Exception as error:
-            raise self._map_api_error(error) from error
-
-    def _map_api_error(self, error: Exception) -> AIProviderError:
-        """Map an Anthropic SDK exception to an ``AIProviderError``.
-
-        Args:
-            error: The raw SDK or network exception.
-
-        Returns:
-            An ``AIProviderError`` with a user-friendly message.
-        """
-        if isinstance(error, self._anthropic.APIConnectionError):
-            return AIProviderError(
-                "Unable to connect to Claude API. Check network access and endpoint configuration."
-            )
-        if isinstance(error, self._anthropic.AuthenticationError):
-            return AIProviderError(
-                "Claude authentication failed. Check `ai.claude.api_key` or ANTHROPIC_API_KEY."
-            )
-        if isinstance(error, self._anthropic.BadRequestError):
-            if _is_context_length_error(error):
-                return AIProviderError(
-                    "Claude request exceeded the model context length. Reduce prompt size and retry."
-                )
-            return AIProviderError(f"Claude request was rejected: {error}")
-        if isinstance(error, self._anthropic.APIError):
-            return AIProviderError(f"Claude API error: {error}")
-        return AIProviderError(f"Unexpected Claude provider error: {error}")
+        return self._run_request(_request)
 
     def _request_with_csv_attachments(
         self,
@@ -353,11 +303,13 @@ class ClaudeProvider(AIProvider):
             if not text:
                 raise AIProviderError("Claude returned an empty response for file-attachment mode.")
 
-            self._csv_attachment_supported = True
+            with self._attachment_lock:
+                self._csv_attachment_supported = True
             return text
         except Exception as error:
             if _is_attachment_unsupported_error(error):
-                self._csv_attachment_supported = False
+                with self._attachment_lock:
+                    self._csv_attachment_supported = False
                 logger.info(
                     "Claude endpoint does not support CSV attachments; "
                     "falling back to standard text mode."

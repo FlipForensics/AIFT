@@ -43,7 +43,7 @@ _T = TypeVar("_T")
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_MAX_TOKENS = 256000
+DEFAULT_MAX_TOKENS = 16384
 RATE_LIMIT_MAX_RETRIES = 3
 DEFAULT_LOCAL_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS = 600.0
@@ -157,19 +157,27 @@ class AIProvider(ABC):
     interchangeably.
 
     Subclasses must implement:
-        * ``analyze`` -- single-shot prompt-to-text generation.
         * ``analyze_stream`` -- incremental (streaming) text generation.
         * ``get_model_info`` -- provider/model metadata dictionary.
+        * ``analyze_with_attachments`` -- analysis with CSV file attachments
+          (unless the default inline-into-prompt behavior is sufficient).
 
-    Subclasses may override:
-        * ``analyze_with_attachments`` -- analysis with CSV file attachments.
+    Subclasses should set:
+        * ``_provider_display_name`` -- human-readable name for error messages.
+        * ``_rate_limit_error_class`` -- SDK-specific rate-limit exception type.
 
     Attributes:
         attach_csv_as_file (bool): Whether to attempt uploading CSV artifacts
             as file attachments rather than inlining them into the prompt.
+        _provider_display_name (str): Human-readable provider name used in
+            error messages and log entries.  Override in subclasses.
+        _rate_limit_error_class (type | None): The SDK exception class that
+            signals a rate-limit (HTTP 429) error.  Override in subclasses.
     """
 
-    @abstractmethod
+    _provider_display_name: str = "AI"
+    _rate_limit_error_class: type | None = None
+
     def analyze(
         self,
         system_prompt: str,
@@ -177,6 +185,9 @@ class AIProvider(ABC):
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
         """Send a prompt to the provider and return the complete generated text.
+
+        Delegates to ``analyze_with_attachments`` with no attachments.
+        Subclasses typically do not need to override this method.
 
         Args:
             system_prompt: The system-level instruction text.
@@ -189,6 +200,12 @@ class AIProvider(ABC):
         Raises:
             AIProviderError: If the request fails for any reason.
         """
+        return self.analyze_with_attachments(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            attachments=None,
+            max_tokens=max_tokens,
+        )
 
     @abstractmethod
     def analyze_stream(
@@ -285,17 +302,106 @@ class AIProvider(ABC):
             return None
         if not attachments:
             return None
-        if getattr(self, "_csv_attachment_supported", None) is False:
+        attachment_lock = getattr(self, "_attachment_lock", None)
+        if attachment_lock is not None:
+            with attachment_lock:
+                if getattr(self, "_csv_attachment_supported", None) is False:
+                    return None
+        elif getattr(self, "_csv_attachment_supported", None) is False:
             return None
         if not supports_file_attachments:
             if hasattr(self, "_csv_attachment_supported"):
-                setattr(self, "_csv_attachment_supported", False)
+                if attachment_lock is not None:
+                    with attachment_lock:
+                        setattr(self, "_csv_attachment_supported", False)
+                else:
+                    setattr(self, "_csv_attachment_supported", False)
             return None
 
         normalized_attachments = normalize_attachment_inputs(attachments)
         if not normalized_attachments:
             return None
         return normalized_attachments
+
+    # ------------------------------------------------------------------
+    # Shared error mapping
+    # ------------------------------------------------------------------
+
+    def _map_api_error(self, error: Exception) -> AIProviderError:
+        """Map an SDK exception to an ``AIProviderError`` with a user-friendly message.
+
+        The base implementation handles the four error types common to every
+        provider that wraps an OpenAI-style or Anthropic-style SDK:
+        ``APIConnectionError``, ``AuthenticationError``, ``BadRequestError``
+        (with context-length detection), and generic ``APIError``.
+
+        Subclasses with provider-specific error handling (e.g. Kimi
+        model-not-available, Local timeout detection) should override this
+        method and call ``super()._map_api_error(error)`` in the fallback
+        path.
+
+        Args:
+            error: The raw SDK or network exception.
+
+        Returns:
+            An ``AIProviderError`` with a user-friendly message.
+        """
+        name = self._provider_display_name
+        # Dynamically resolve the SDK module stored by the subclass.
+        sdk = getattr(self, "_openai", None) or getattr(self, "_anthropic", None)
+        if sdk is None:
+            return AIProviderError(f"Unexpected {name} provider error: {error}")
+
+        if isinstance(error, sdk.APIConnectionError):
+            return AIProviderError(
+                f"Unable to connect to {name} API. Check network access and endpoint configuration."
+            )
+        if isinstance(error, sdk.AuthenticationError):
+            return AIProviderError(
+                f"{name} authentication failed. Check the API key configuration."
+            )
+        if isinstance(error, sdk.BadRequestError):
+            if _is_context_length_error(error):
+                return AIProviderError(
+                    f"{name} request exceeded the model context length. Reduce prompt size and retry."
+                )
+            return AIProviderError(f"{name} request was rejected: {error}")
+        if isinstance(error, sdk.APIError):
+            return AIProviderError(f"{name} API error: {error}")
+        return AIProviderError(f"Unexpected {name} provider error: {error}")
+
+    # ------------------------------------------------------------------
+    # Shared request runner
+    # ------------------------------------------------------------------
+
+    def _run_request(self, request_fn: Callable[[], _T]) -> _T:
+        """Execute a provider request with rate-limit retries and error mapping.
+
+        This is the standard request-execution wrapper shared by all
+        providers.  It delegates to ``_run_with_rate_limit_retries`` using
+        the subclass-configured ``_rate_limit_error_class`` and
+        ``_provider_display_name``, then maps any remaining exceptions via
+        ``_map_api_error``.
+
+        Args:
+            request_fn: A zero-argument callable that performs the API request.
+
+        Returns:
+            The return value of ``request_fn`` on success.
+
+        Raises:
+            AIProviderError: On any SDK or network error.
+        """
+        try:
+            return _run_with_rate_limit_retries(
+                request_fn=request_fn,
+                rate_limit_error_type=self._rate_limit_error_class,
+                provider_name=self._provider_display_name,
+            )
+        except AIProviderError:
+            raise
+        except Exception as exc:
+            raise self._map_api_error(exc) from exc
 
 
 # ---------------------------------------------------------------------------

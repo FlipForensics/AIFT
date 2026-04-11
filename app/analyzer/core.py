@@ -20,6 +20,7 @@ Attributes:
 
 from __future__ import annotations
 
+import inspect
 import logging
 from pathlib import Path
 from time import perf_counter, sleep
@@ -149,6 +150,7 @@ class ForensicAnalyzer:
                 self.artifact_csv_paths[key] = [Path(str(p)) for p in csv_path]
             else:
                 self.artifact_csv_paths[key] = Path(str(csv_path))
+        # Not thread-safe: ForensicAnalyzer instances must not be shared across concurrent analysis threads.
         self._analysis_input_csv_paths: dict[str, Path] = {}
         self.prompts_dir = Path(prompts_dir) if prompts_dir is not None else PROJECT_ROOT / "prompts"
         self.os_type = normalize_os_type(os_type)
@@ -184,7 +186,11 @@ class ForensicAnalyzer:
             analysis_config = {}
 
         self.ai_max_tokens = read_int_setting(analysis_config, "ai_max_tokens", AI_MAX_TOKENS, minimum=1)
-        self.ai_response_max_tokens = max(1, int(self.ai_max_tokens * 0.2))
+        configured_response_tokens = read_int_setting(analysis_config, "ai_response_max_tokens", 0, minimum=0)
+        if configured_response_tokens > 0:
+            self.ai_response_max_tokens = configured_response_tokens
+        else:
+            self.ai_response_max_tokens = max(4096, int(self.ai_max_tokens * 0.2))
         legacy_shortened = read_int_setting(
             analysis_config, "statistics_section_cutoff_tokens", DEFAULT_SHORTENED_PROMPT_CUTOFF_TOKENS, minimum=1,
         )
@@ -456,17 +462,31 @@ class ForensicAnalyzer:
         candidate_path = Path(artifact_key)
         if candidate_path.exists():
             resolved = candidate_path.resolve()
-            if self.case_dir is not None and not resolved.is_relative_to(
-                self.case_dir.resolve()
-            ):
-                logging.warning(
-                    "Path traversal blocked: artifact_key %r resolved to %s "
-                    "which is outside case directory %s",
-                    artifact_key,
-                    resolved,
-                    self.case_dir.resolve(),
-                )
+            if self.case_dir is not None:
+                if not resolved.is_relative_to(self.case_dir.resolve()):
+                    logging.warning(
+                        "Path traversal blocked: artifact_key %r resolved to %s "
+                        "which is outside case directory %s",
+                        artifact_key,
+                        resolved,
+                        self.case_dir.resolve(),
+                    )
+                else:
+                    return resolved
             else:
+                # No case_dir — restrict to current working directory
+                cwd = Path.cwd().resolve()
+                if not str(resolved).startswith(str(cwd)):
+                    logging.warning(
+                        "Path traversal blocked: artifact_key %r resolved to %s "
+                        "which is outside working directory %s",
+                        artifact_key,
+                        resolved,
+                        cwd,
+                    )
+                    raise ValueError(
+                        f"Path {artifact_key} is outside working directory"
+                    )
                 return resolved
 
         if self.case_dir is not None:
@@ -864,16 +884,25 @@ class ForensicAnalyzer:
                         "model": model,
                     })
 
-                try:
+                # Check if analyze_with_progress accepts 'attachments' parameter
+                sig = inspect.signature(analyze_with_progress)
+                if attachments and "attachments" in sig.parameters:
                     analysis_text = analyze_with_progress(
-                        system_prompt=self.system_prompt, user_prompt=artifact_prompt,
-                        progress_callback=_provider_progress, attachments=attachments,
+                        system_prompt=system_prompt,
+                        user_prompt=artifact_prompt,
+                        attachments=attachments,
                         max_tokens=self.ai_response_max_tokens,
                     )
-                except TypeError:
+                elif attachments:
+                    # Provider doesn't support attachments in progress mode, use regular analyze
+                    analysis_text = self.ai_provider.analyze_with_attachments(
+                        system_prompt, artifact_prompt, attachments, self.ai_response_max_tokens
+                    )
+                else:
                     analysis_text = analyze_with_progress(
-                        system_prompt=self.system_prompt, user_prompt=artifact_prompt,
-                        progress_callback=_provider_progress, max_tokens=self.ai_response_max_tokens,
+                        system_prompt=system_prompt,
+                        user_prompt=artifact_prompt,
+                        max_tokens=self.ai_response_max_tokens,
                     )
             else:
                 if progress_callback is not None:
@@ -904,6 +933,7 @@ class ForensicAnalyzer:
         except AnalysisCancelledError:
             raise
         except Exception as error:
+            self.logger.exception("Unhandled error in analyze_artifact for '%s'", artifact_key)
             duration_seconds = perf_counter() - start_time
             analysis_text = f"Analysis failed: {error}"
             self._audit_log("analysis_completed", {

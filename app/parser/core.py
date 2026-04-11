@@ -87,8 +87,9 @@ class ForensicParser:
         self.audit_logger = audit_logger
         self.parsed_dir = Path(parsed_dir) if parsed_dir is not None else self.case_dir / "parsed"
         self.parsed_dir.mkdir(parents=True, exist_ok=True)
-        self.target = Target.open(self.evidence_path)
+        self.target: Target | None = None
         self._closed = False
+        self.target = Target.open(self.evidence_path)
 
         try:
             self.os_type: str = str(self.target.os).strip().lower()
@@ -100,12 +101,13 @@ class ForensicParser:
         if self._closed:
             return
 
-        try:
-            close_method = getattr(self.target, "close", None)
-        except Exception:
-            close_method = None
-        if callable(close_method):
-            close_method()
+        if self.target is not None:
+            try:
+                close_method = getattr(self.target, "close", None)
+            except Exception:
+                close_method = None
+            if callable(close_method):
+                close_method()
         self._closed = True
 
     def __enter__(self) -> ForensicParser:

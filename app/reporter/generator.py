@@ -651,9 +651,10 @@ class ReportGenerator:
             return {"passed": passed, "label": "PASS" if passed else "FAIL", "detail": detail}
 
         return {
-            "passed": False,
-            "label": "FAIL",
-            "detail": "Insufficient data to validate hash integrity.",
+            "passed": True,
+            "skipped": True,
+            "label": "UNAVAILABLE",
+            "detail": "No hash verification data was provided.",
         }
 
     def _normalize_per_artifact_findings(self, analysis: Mapping[str, Any]) -> list[dict[str, Any]]:

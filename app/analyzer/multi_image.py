@@ -15,6 +15,9 @@ Single-image cases skip Phase 3 and return ``cross_image_summary=None``.
 
 Attributes:
     LOGGER: Module-level logger instance.
+    _ANALYZER_LOCK: Threading lock that serializes access to shared
+        analyzer state (``os_type``, ``artifact_csv_paths``) during
+        multi-image analysis to prevent corruption from concurrent threads.
     DEFAULT_CROSS_IMAGE_PROMPT_TEMPLATE: Fallback template used when
         ``prompts/cross_image_prompt.md`` cannot be loaded.
 """
@@ -22,6 +25,7 @@ Attributes:
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
@@ -30,6 +34,10 @@ from .prompts import load_prompt_template
 from .utils import emit_analysis_progress, estimate_tokens, sanitize_filename
 
 LOGGER = logging.getLogger(__name__)
+
+# Protects analyzer state mutations (os_type, artifact_csv_paths) during
+# multi-image analysis so concurrent threads cannot corrupt each other.
+_ANALYZER_LOCK = threading.Lock()
 
 __all__ = [
     "build_cross_image_prompt",
@@ -188,152 +196,153 @@ def run_multi_image_analysis(
     """
     from .core import AnalysisCancelledError
 
-    image_results: dict[str, dict[str, Any]] = {}
+    with _ANALYZER_LOCK:
+        image_results: dict[str, dict[str, Any]] = {}
 
-    # ------------------------------------------------------------------
-    # Phase 1: Per-artifact analysis for each image
-    # Save original analyzer state before the loop so we can restore it
-    # after all images are processed (or on failure).  Without this,
-    # Phase 2 summaries would see the last image's os_type / CSV paths
-    # instead of the caller's original values.
-    saved_os_type = analyzer.os_type
-    saved_csv_paths = dict(analyzer.artifact_csv_paths)
+        # ------------------------------------------------------------------
+        # Phase 1: Per-artifact analysis for each image
+        # Save original analyzer state before the loop so we can restore it
+        # after all images are processed (or on failure).  Without this,
+        # Phase 2 summaries would see the last image's os_type / CSV paths
+        # instead of the caller's original values.
+        saved_os_type = analyzer.os_type
+        saved_csv_paths = dict(analyzer.artifact_csv_paths)
 
-    # ------------------------------------------------------------------
-    try:
-        for image in images:
-            image_id = str(image.get("image_id", "unknown"))
-            label = str(image.get("label", image_id))
-            metadata = image.get("metadata") or {}
-            artifact_keys = image.get("artifact_keys", [])
-            parsed_dir = image.get("parsed_dir", "")
+        # ------------------------------------------------------------------
+        try:
+            for image in images:
+                image_id = str(image.get("image_id", "unknown"))
+                label = str(image.get("label", image_id))
+                metadata = image.get("metadata") or {}
+                artifact_keys = image.get("artifact_keys", [])
+                parsed_dir = image.get("parsed_dir", "")
 
-            if cancel_check is not None and cancel_check():
-                raise AnalysisCancelledError("Analysis cancelled by user.")
-
-            # Update the analyzer's os_type for the current image so that
-            # OS-specific analysis logic uses the correct operating system.
-            analyzer.os_type = str(
-                metadata.get("os_type", "unknown")
-            )
-
-            # Clear stale CSV paths from prior image iterations so that
-            # analyze_artifact() and citation validation always reference the
-            # current image's data — not a leftover path from an earlier image
-            # that shares the same artifact key.
-            analyzer.artifact_csv_paths.clear()
-
-            # Register the image's parsed CSV paths into the analyzer
-            _register_image_csv_paths(analyzer, artifact_keys, parsed_dir)
-
-            # Build investigation context with image label prefix
-            image_context = (
-                f"System: {label}\n\n{investigation_context}"
-            )
-
-            per_artifact_results: list[dict[str, Any]] = []
-            for artifact_key in artifact_keys:
                 if cancel_check is not None and cancel_check():
                     raise AnalysisCancelledError("Analysis cancelled by user.")
 
-                result = analyzer.analyze_artifact(
-                    artifact_key=str(artifact_key),
-                    investigation_context=image_context,
-                    progress_callback=progress_callback,
+                # Update the analyzer's os_type for the current image so that
+                # OS-specific analysis logic uses the correct operating system.
+                analyzer.os_type = str(
+                    metadata.get("os_type", "unknown")
                 )
-                per_artifact_results.append(result)
 
-                if progress_callback is not None:
-                    emit_analysis_progress(
-                        progress_callback,
-                        str(artifact_key),
-                        "complete",
-                        {**result, "image_id": image_id, "image_label": label},
+                # Clear stale CSV paths from prior image iterations so that
+                # analyze_artifact() and citation validation always reference the
+                # current image's data — not a leftover path from an earlier image
+                # that shares the same artifact key.
+                analyzer.artifact_csv_paths.clear()
+
+                # Register the image's parsed CSV paths into the analyzer
+                _register_image_csv_paths(analyzer, artifact_keys, parsed_dir)
+
+                # Build investigation context with image label prefix
+                image_context = (
+                    f"System: {label}\n\n{investigation_context}"
+                )
+
+                per_artifact_results: list[dict[str, Any]] = []
+                for artifact_key in artifact_keys:
+                    if cancel_check is not None and cancel_check():
+                        raise AnalysisCancelledError("Analysis cancelled by user.")
+
+                    result = analyzer.analyze_artifact(
+                        artifact_key=str(artifact_key),
+                        investigation_context=image_context,
+                        progress_callback=progress_callback,
                     )
+                    per_artifact_results.append(result)
 
-            image_results[image_id] = {
-                "label": label,
-                "per_artifact": per_artifact_results,
-                "summary": "",
-                "metadata": metadata,
+                    if progress_callback is not None:
+                        emit_analysis_progress(
+                            progress_callback,
+                            str(artifact_key),
+                            "complete",
+                            {**result, "image_id": image_id, "image_label": label},
+                        )
+
+                image_results[image_id] = {
+                    "label": label,
+                    "per_artifact": per_artifact_results,
+                    "summary": "",
+                    "metadata": metadata,
+                }
+        finally:
+            # Restore analyzer state so the caller (and Phase 2 summaries)
+            # always see the original os_type and artifact_csv_paths,
+            # regardless of whether the loop succeeded or raised.
+            analyzer.os_type = saved_os_type
+            analyzer.artifact_csv_paths = saved_csv_paths
+
+        # ------------------------------------------------------------------
+        # Phase 2: Per-image summary
+        # ------------------------------------------------------------------
+        for image_id, img_data in image_results.items():
+            if cancel_check is not None and cancel_check():
+                raise AnalysisCancelledError("Analysis cancelled by user.")
+
+            metadata = img_data.get("metadata") or {}
+            per_artifact = img_data["per_artifact"]
+            label = img_data["label"]
+
+            if progress_callback is not None:
+                emit_analysis_progress(
+                    progress_callback,
+                    f"summary_{image_id}",
+                    "started",
+                    {"image_id": image_id, "image_label": label,
+                     "status": "Generating per-image summary"},
+                )
+
+            summary = analyzer.generate_summary(
+                per_artifact_results=per_artifact,
+                investigation_context=f"System: {label}\n\n{investigation_context}",
+                metadata=metadata,
+            )
+            img_data["summary"] = summary
+
+            if progress_callback is not None:
+                emit_analysis_progress(
+                    progress_callback,
+                    f"summary_{image_id}",
+                    "complete",
+                    {"image_id": image_id, "image_label": label,
+                     "summary": summary},
+                )
+
+        # ------------------------------------------------------------------
+        # Phase 3: Cross-image correlation (only if > 1 image)
+        # ------------------------------------------------------------------
+        cross_image_summary: str | None = None
+
+        if len(images) > 1:
+            if cancel_check is not None and cancel_check():
+                raise AnalysisCancelledError("Analysis cancelled by user.")
+
+            cross_image_summary = _run_cross_image_correlation(
+                analyzer=analyzer,
+                images=images,
+                image_results=image_results,
+                investigation_context=investigation_context,
+                progress_callback=progress_callback,
+            )
+
+        # ------------------------------------------------------------------
+        # Build return value
+        # ------------------------------------------------------------------
+        output_images: dict[str, dict[str, Any]] = {}
+        for image_id, img_data in image_results.items():
+            output_images[image_id] = {
+                "label": img_data["label"],
+                "per_artifact": img_data["per_artifact"],
+                "summary": img_data["summary"],
+                "metadata": img_data.get("metadata", {}),
             }
-    finally:
-        # Restore analyzer state so the caller (and Phase 2 summaries)
-        # always see the original os_type and artifact_csv_paths,
-        # regardless of whether the loop succeeded or raised.
-        analyzer.os_type = saved_os_type
-        analyzer.artifact_csv_paths = saved_csv_paths
 
-    # ------------------------------------------------------------------
-    # Phase 2: Per-image summary
-    # ------------------------------------------------------------------
-    for image_id, img_data in image_results.items():
-        if cancel_check is not None and cancel_check():
-            raise AnalysisCancelledError("Analysis cancelled by user.")
-
-        metadata = img_data.get("metadata") or {}
-        per_artifact = img_data["per_artifact"]
-        label = img_data["label"]
-
-        if progress_callback is not None:
-            emit_analysis_progress(
-                progress_callback,
-                f"summary_{image_id}",
-                "started",
-                {"image_id": image_id, "image_label": label,
-                 "status": "Generating per-image summary"},
-            )
-
-        summary = analyzer.generate_summary(
-            per_artifact_results=per_artifact,
-            investigation_context=f"System: {label}\n\n{investigation_context}",
-            metadata=metadata,
-        )
-        img_data["summary"] = summary
-
-        if progress_callback is not None:
-            emit_analysis_progress(
-                progress_callback,
-                f"summary_{image_id}",
-                "complete",
-                {"image_id": image_id, "image_label": label,
-                 "summary": summary},
-            )
-
-    # ------------------------------------------------------------------
-    # Phase 3: Cross-image correlation (only if > 1 image)
-    # ------------------------------------------------------------------
-    cross_image_summary: str | None = None
-
-    if len(images) > 1:
-        if cancel_check is not None and cancel_check():
-            raise AnalysisCancelledError("Analysis cancelled by user.")
-
-        cross_image_summary = _run_cross_image_correlation(
-            analyzer=analyzer,
-            images=images,
-            image_results=image_results,
-            investigation_context=investigation_context,
-            progress_callback=progress_callback,
-        )
-
-    # ------------------------------------------------------------------
-    # Build return value
-    # ------------------------------------------------------------------
-    output_images: dict[str, dict[str, Any]] = {}
-    for image_id, img_data in image_results.items():
-        output_images[image_id] = {
-            "label": img_data["label"],
-            "per_artifact": img_data["per_artifact"],
-            "summary": img_data["summary"],
-            "metadata": img_data.get("metadata", {}),
+        return {
+            "images": output_images,
+            "cross_image_summary": cross_image_summary,
+            "model_info": dict(analyzer.model_info),
         }
-
-    return {
-        "images": output_images,
-        "cross_image_summary": cross_image_summary,
-        "model_info": dict(analyzer.model_info),
-    }
 
 
 def _register_image_csv_paths(

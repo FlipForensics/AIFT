@@ -96,7 +96,6 @@ def save_with_limit(
                 break
             written += len(chunk)
             if cumulative + written > max_bytes:
-                out.close()
                 dest.unlink(missing_ok=True)
                 limit_gb = max_bytes / (1024 * 1024 * 1024)
                 raise ValueError(

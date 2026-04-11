@@ -28,6 +28,7 @@ from importlib import metadata
 import json
 import os
 from pathlib import Path
+import threading
 from typing import Any
 from uuid import uuid4
 
@@ -115,6 +116,7 @@ class AuditLogger:
         case_directory: str | Path,
         tool_version: str = DEFAULT_TOOL_VERSION,
         dissect_version: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Initialise the audit logger for a case directory.
 
@@ -124,14 +126,18 @@ class AuditLogger:
             tool_version: AIFT version string to embed in records.
             dissect_version: Explicit Dissect version.  Auto-detected
                 from installed packages when *None*.
+            session_id: Optional session UUID.  A new UUID is generated
+                when *None*, ensuring consistent session identity when
+                the caller supplies an existing ID.
         """
         self.case_directory = Path(case_directory)
         self.case_directory.mkdir(parents=True, exist_ok=True)
 
         self.audit_file = self.case_directory / "audit.jsonl"
-        self.session_id = str(uuid4())
+        self.session_id = session_id or str(uuid4())
         self.tool_version = tool_version
         self.dissect_version = dissect_version or _resolve_dissect_version()
+        self._write_lock = threading.Lock()
 
         # Ensure the audit file exists immediately when the logger is created.
         with self.audit_file.open("ab", buffering=0) as audit_stream:
@@ -170,7 +176,8 @@ class AuditLogger:
         }
 
         line = json.dumps(record, separators=(",", ":"), default=_json_default) + "\n"
-        with self.audit_file.open("ab", buffering=0) as audit_stream:
-            audit_stream.write(line.encode("utf-8"))
-            audit_stream.flush()
-            os.fsync(audit_stream.fileno())
+        with self._write_lock:
+            with self.audit_file.open("ab", buffering=0) as audit_stream:
+                audit_stream.write(line.encode("utf-8"))
+                audit_stream.flush()
+                os.fsync(audit_stream.fileno())

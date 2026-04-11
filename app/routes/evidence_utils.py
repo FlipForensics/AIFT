@@ -22,6 +22,7 @@ from flask import request
 LOGGER = logging.getLogger(__name__)
 
 __all__ = [
+    "cleanup_parsed_data",
     "compute_evidence_hashes",
     "open_dissect_target",
     "safe_rmtree",
@@ -77,6 +78,68 @@ def safe_rmtree(target_dir: Path, cases_root: Path) -> bool:
     LOGGER.info("Removing directory: %s", resolved)
     shutil.rmtree(resolved, ignore_errors=True)
     return True
+
+
+def cleanup_parsed_data(
+    case_dir: Path,
+    image_states: dict[str, dict[str, Any]],
+    prev_csv_output_dir: str = "",
+    clean_default_parsed: bool = True,
+) -> None:
+    """Remove stale parsed CSV data from disk before a new parse run.
+
+    Consolidates cleanup logic previously duplicated across artifacts and
+    evidence modules.  Handles the default ``case_dir/parsed`` directory,
+    per-image parsed directories found in *image_states*, and any external
+    CSV output directory from a prior parse run.
+
+    Args:
+        case_dir: Path to the case directory.
+        image_states: Mapping of image IDs to image state dicts.  Each dict
+            may contain a ``"dir"`` key whose value is a path (str or Path)
+            to the image directory; if present, ``<image_dir>/parsed`` is
+            cleaned.
+        prev_csv_output_dir: The ``csv_output_dir`` stored from the previous
+            parse run.  May be empty if no prior run exists.
+        clean_default_parsed: When ``True`` (the default), the legacy
+            ``case_dir/parsed`` directory is also removed.  Callers that
+            only need to clean external or per-image directories can pass
+            ``False``.
+    """
+    cases_root = case_dir.resolve().parent
+
+    # 1. Optionally clean the default parsed directory inside the case folder.
+    default_parsed = case_dir / "parsed"
+    if clean_default_parsed:
+        safe_rmtree(default_parsed, cases_root)
+
+    # 2. Clean per-image parsed directories.
+    for _img_id, img_state in image_states.items():
+        img_dir = img_state.get("dir")
+        if img_dir:
+            img_parsed = Path(str(img_dir)) / "parsed"
+            safe_rmtree(img_parsed, cases_root)
+
+    # 3. Clean external CSV output directory if configured and different
+    #    from the default location.
+    if not prev_csv_output_dir:
+        return
+    prev_path = Path(prev_csv_output_dir)
+    if not prev_path.is_dir():
+        return
+    resolved_prev = prev_path.resolve()
+    resolved_default = default_parsed.resolve()
+    if resolved_prev == resolved_default:
+        return  # Already handled above.
+    # Also skip if the external dir is inside the case directory (already
+    # covered by per-image or default cleanup).
+    resolved_case = case_dir.resolve()
+    try:
+        if resolved_prev.is_relative_to(resolved_case):
+            return
+    except (TypeError, ValueError):
+        return
+    safe_rmtree(prev_path, cases_root)
 
 
 def should_skip_hashing() -> bool:

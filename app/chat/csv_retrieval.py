@@ -19,6 +19,8 @@ Attributes:
         indicate the user is requesting raw data.
     CSV_ROW_LIMIT: Maximum number of CSV rows to include in a single
         retrieval response.
+    _HEADER_CACHE: Module-level dict caching CSV headers by parsed
+        directory path to avoid redundant disk reads.
 """
 
 from __future__ import annotations
@@ -38,6 +40,12 @@ __all__ = [
 ]
 
 log = logging.getLogger(__name__)
+
+# Module-level cache for CSV headers keyed by parent directory path string.
+# Maps each parsed_dir to a dict of {csv_path: header_list}.  Avoids
+# re-reading headers from disk on every chat message when artifact-name
+# matching fails.
+_HEADER_CACHE: dict[str, dict[Path, list[str]]] = {}
 
 CSV_RETRIEVAL_KEYWORDS = (
     "show me",
@@ -158,7 +166,18 @@ def _match_target_paths(
 
     # Only scan CSV headers when artifact-name matching didn't find anything,
     # to avoid reading every CSV file on every chat message.
-    headers_by_path = {path: _read_csv_headers(path) for path in csv_paths}
+    # Use a module-level cache keyed by the parent directory to avoid
+    # re-reading headers from disk on repeated calls.
+    cache_key = str(csv_paths[0].parent) if csv_paths else ""
+    cached = _HEADER_CACHE.get(cache_key)
+    if cached is not None:
+        headers_by_path = {
+            path: cached.get(path, _read_csv_headers(path))
+            for path in csv_paths
+        }
+    else:
+        headers_by_path = {path: _read_csv_headers(path) for path in csv_paths}
+        _HEADER_CACHE[cache_key] = dict(headers_by_path)
     matched_columns = {
         header.lower()
         for headers in headers_by_path.values()
@@ -284,18 +303,30 @@ def _read_csv_rows(
             headers = [_stringify(field) for field in (reader.fieldnames or []) if _stringify(field)]
 
             rows: list[dict[str, str]] = []
-            total_row_count = 0
+            hit_limit = False
             for row in reader:
-                total_row_count += 1
-                if len(rows) < limit:
-                    compact_row: dict[str, str] = {}
-                    for column in headers:
-                        value = _stringify(row.get(column, ""))
-                        value = re.sub(r"\s+", " ", value)
-                        if len(value) > 240:
-                            value = f"{value[:237]}..."
-                        compact_row[column] = value
-                    rows.append(compact_row)
+                if len(rows) >= limit:
+                    hit_limit = True
+                    break
+                compact_row: dict[str, str] = {}
+                for column in headers:
+                    value = _stringify(row.get(column, ""))
+                    value = re.sub(r"\s+", " ", value)
+                    if len(value) > 240:
+                        value = f"{value[:237]}..."
+                    compact_row[column] = value
+                rows.append(compact_row)
+
+            # Count remaining rows cheaply via the underlying csv.reader
+            # (avoids DictReader dict construction overhead).  We must
+            # iterate through the reader rather than the raw file handle
+            # because csv.reader may have buffered ahead of the file
+            # position.  Add 1 for the row consumed by the for-loop
+            # iteration that triggered the break.
+            remaining = sum(1 for _ in reader.reader)
+            if hit_limit:
+                remaining += 1
+            total_row_count = len(rows) + remaining
     except Exception:
         log.warning("Failed to read CSV rows from %s", csv_path, exc_info=True)
         return [], [], 0

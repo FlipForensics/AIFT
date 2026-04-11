@@ -48,6 +48,9 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
     if case is None:
         return error_response(f"Case not found: {case_id}", 404)
 
+    # Read case state, validate, and transition to "running" in a single lock
+    # acquisition to prevent a TOCTOU window where the status could go stale
+    # between the read and the mutation.
     with STATE_LOCK:
         has_results = bool(case.get("parse_results") or case.get("artifact_csv_paths"))
         analysis_artifacts_state = case.get("analysis_artifacts")
@@ -55,19 +58,19 @@ def start_analysis(case_id: str) -> tuple[Response, int]:
         analysis_date_range = case.get("analysis_date_range")
         audit_logger = case["audit"]
 
-    if not has_results:
-        return error_response("No parsed artifacts found. Run parsing first.", 400)
-    if isinstance(analysis_artifacts_state, list):
-        configured_analysis_artifacts = [
-            artifact
-            for artifact in (str(item).strip() for item in analysis_artifacts_state)
-            if artifact
-        ]
-        if not configured_analysis_artifacts:
-            return error_response(
-                "No artifacts are marked `Parse and use in AI`. Select at least one AI-enabled artifact and parse again.",
-                400,
-            )
+        if not has_results:
+            return error_response("No parsed artifacts found. Run parsing first.", 400)
+        if isinstance(analysis_artifacts_state, list):
+            configured_analysis_artifacts = [
+                artifact
+                for artifact in (str(item).strip() for item in analysis_artifacts_state)
+                if artifact
+            ]
+            if not configured_analysis_artifacts:
+                return error_response(
+                    "No artifacts are marked `Parse and use in AI`. Select at least one AI-enabled artifact and parse again.",
+                    400,
+                )
 
     payload = request.get_json(silent=True) or {}
     if not isinstance(payload, dict):
