@@ -532,18 +532,20 @@ class TestPrepareCsvAttachments(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestAIProviderDefaultAnalyzeWithAttachments(unittest.TestCase):
-    def test_delegates_to_analyze(self) -> None:
+    def test_delegates_to_analyze_stream(self) -> None:
+        """Default analyze_with_attachments delegates to analyze_stream to avoid recursion."""
         class _ConcreteProvider(AIProvider):
             def analyze(self, system_prompt, user_prompt, max_tokens=DEFAULT_MAX_TOKENS):
                 return f"analyzed: {user_prompt}"
             def analyze_stream(self, system_prompt, user_prompt, max_tokens=DEFAULT_MAX_TOKENS):
-                yield "chunk"
+                yield "chunk1"
+                yield "chunk2"
             def get_model_info(self):
                 return {"provider": "test", "model": "test"}
 
         provider = _ConcreteProvider()
         result = provider.analyze_with_attachments("sys", "user", attachments=[{"path": "/x"}])
-        self.assertEqual(result, "analyzed: user")
+        self.assertEqual(result, "chunk1chunk2")
 
 
 

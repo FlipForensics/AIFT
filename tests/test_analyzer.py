@@ -492,7 +492,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("AwareEntry", filled_prompt)
         self.assertIn("Total=1", filled_prompt)
 
-    def test_explicit_step2_date_range_does_not_filter_mft_prompt_rows(self) -> None:
+    def test_explicit_step2_date_range_filters_out_of_range_rows(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
             temp_path = Path(temp_dir)
             prompts_dir = temp_path / "prompts"
@@ -536,12 +536,13 @@ class AnalyzerTests(unittest.TestCase):
                 )
 
         mft_prompt = fake_provider.calls[0]["user_prompt"]
-        # All rows must be included — no date filtering is applied.
+        # In-range row must be included; out-of-range row (well outside the
+        # 7-day buffer) should be filtered by date_range logic.
         self.assertIn(r"C:\Users\Public\in-range.txt", mft_prompt)
-        self.assertIn(r"C:\Users\Public\old.txt", mft_prompt)
-        self.assertIn("Total=2", mft_prompt)
+        self.assertNotIn(r"C:\Users\Public\old.txt", mft_prompt)
+        self.assertIn("Total=1", mft_prompt)
 
-    def test_explicit_step2_date_range_does_not_filter_non_target_artifacts(self) -> None:
+    def test_explicit_step2_date_range_filters_non_target_artifacts_too(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
             temp_path = Path(temp_dir)
             prompts_dir = temp_path / "prompts"
@@ -587,10 +588,12 @@ class AnalyzerTests(unittest.TestCase):
                 )
 
         runkeys_prompt = fake_provider.calls[0]["user_prompt"]
-        self.assertIn("Total=2", runkeys_prompt)
+        # Date filtering now applies to all artifacts when date_range is set.
+        # The out-of-range row (Nov 30 2025) falls outside the 7-day buffer
+        # around Jan 1-31 2026, so it is filtered.
+        self.assertIn("Total=1", runkeys_prompt)
         self.assertIn("InRange", runkeys_prompt)
-        self.assertIn("OutOfRange", runkeys_prompt)
-        self.assertNotIn("Date filter applied from Step 2 selection", runkeys_prompt)
+        self.assertNotIn("OutOfRange", runkeys_prompt)
 
     def test_init_loads_prompt_templates_and_creates_provider(self) -> None:
         with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
