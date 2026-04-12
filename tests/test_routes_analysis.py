@@ -371,5 +371,125 @@ class TestAnalysisRerunClearsStaleResults(unittest.TestCase):
             self.assertFalse(chat_body.get("success"))
 
 
+class TestStreamSSECursorResetOnRestart(unittest.TestCase):
+    """Regression: SSE cursor must reset when progress dict is replaced.
+
+    When ``start_analysis`` replaces the progress dict (restarting analysis),
+    the SSE streaming function must detect that the event list has shrunk and
+    reset its internal cursor so that new events are not silently skipped.
+    """
+
+    def setUp(self) -> None:
+        """Clear shared state and create a Flask app for request context."""
+        self.temp_dir = TemporaryDirectory(prefix="aift-sse-cursor-")
+        self.config_path = Path(self.temp_dir.name) / "config.yaml"
+        self.app = create_app(str(self.config_path))
+        self.app.testing = True
+        routes_state.CASE_STATES.clear()
+        routes_state.ANALYSIS_PROGRESS.clear()
+
+    def tearDown(self) -> None:
+        """Clear shared state after each test."""
+        routes_state.CASE_STATES.clear()
+        routes_state.ANALYSIS_PROGRESS.clear()
+        self.temp_dir.cleanup()
+
+    def test_sse_delivers_new_events_after_progress_reset(self) -> None:
+        """After progress dict replacement, new events must not be skipped.
+
+        Simulates a restart scenario:
+        1. Populate a progress store with events from a first run.
+        2. Partially consume them via ``stream_sse`` so the cursor advances.
+        3. Replace the progress dict (as ``start_analysis`` does).
+        4. Add new events to the replacement dict.
+        5. Assert that the SSE stream delivers all new events.
+        """
+        case_id = "sse-cursor-reset-test"
+
+        # Register a minimal case so stream_sse doesn't emit "Case not found".
+        routes_state.CASE_STATES[case_id] = {"status": "running"}
+
+        with self.app.test_request_context("/"):
+            # --- First run: populate events and let a consumer advance ---
+            routes_state.ANALYSIS_PROGRESS[case_id] = routes_state.new_progress(
+                status="running",
+            )
+            for i in range(5):
+                routes_state.emit_progress(
+                    routes_state.ANALYSIS_PROGRESS, case_id,
+                    {"type": "progress", "message": f"old-event-{i}"},
+                )
+
+            # Consume events from the first run by iterating the SSE
+            # generator.  We read all 5 pending events, then break on the
+            # keep-alive.  The generator's internal ``last`` cursor is now 5.
+            response = routes_state.stream_sse(
+                routes_state.ANALYSIS_PROGRESS, case_id,
+            )
+            gen = response.response  # the underlying generator
+
+            old_events: list[str] = []
+            for frame in gen:
+                if isinstance(frame, bytes):
+                    frame = frame.decode()
+                if frame.startswith("data:"):
+                    old_events.append(frame)
+                elif frame.strip() == ": keep-alive":
+                    # Cursor has caught up — break to simulate ongoing
+                    # connection.
+                    break
+
+            self.assertEqual(
+                len(old_events), 5,
+                "Should have consumed all 5 old events",
+            )
+
+            # --- Restart: replace the progress dict (mimics
+            # start_analysis) ---
+            routes_state.ANALYSIS_PROGRESS[case_id] = (
+                routes_state.new_progress(status="running")
+            )
+
+            # Add new events to the fresh progress dict.
+            for i in range(3):
+                routes_state.emit_progress(
+                    routes_state.ANALYSIS_PROGRESS, case_id,
+                    {"type": "progress", "message": f"new-event-{i}"},
+                )
+
+            # Mark as completed so the stream terminates.
+            routes_state.ANALYSIS_PROGRESS[case_id]["status"] = "completed"
+
+            # Continue reading from the *same* generator.
+            new_events: list[str] = []
+            for frame in gen:
+                if isinstance(frame, bytes):
+                    frame = frame.decode()
+                if frame.startswith("data:"):
+                    new_events.append(frame)
+
+            # The critical assertion: all 3 new events must be delivered,
+            # not skipped due to a stale cursor.
+            new_messages = []
+            for raw in new_events:
+                parsed = json.loads(raw[len("data:"):].strip())
+                msg = parsed.get("message", "")
+                if msg.startswith("new-event-"):
+                    new_messages.append(msg)
+
+            self.assertEqual(
+                len(new_messages), 3,
+                "All 3 new events must be delivered after progress reset; "
+                f"got {new_messages}",
+            )
+            self.assertEqual(
+                new_messages,
+                ["new-event-0", "new-event-1", "new-event-2"],
+            )
+
+            # Clean up the generator to avoid ResourceWarning.
+            gen.close()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -774,6 +774,124 @@ class ParserTests(unittest.TestCase):
         self.assertIn("Y", sys_rows[0])
 
 
+    def test_parse_artifact_cleans_up_partial_csv_on_failure(self) -> None:
+        """When the Dissect iterator raises mid-stream, partial CSV files
+        must be removed so downstream components never see truncated data."""
+
+        def _exploding_records() -> list[FakeRecord]:
+            """Yield a few records then raise to simulate a mid-stream failure."""
+            yield FakeRecord({"ts": "2026-01-01", "value": "ok1"})
+            yield FakeRecord({"ts": "2026-01-02", "value": "ok2"})
+            raise RuntimeError("disk I/O error mid-stream")
+
+        class PartialTarget:
+            def runkeys(self) -> list[FakeRecord]:
+                return _exploding_records()
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(PartialTarget(), Path(temp_dir), audit)
+            result = parser.parse_artifact("runkeys")
+
+            self.assertFalse(result["success"])
+            self.assertIn("disk I/O error mid-stream", result["error"])
+
+            # No CSV files should remain in the parsed directory
+            parsed_dir = Path(temp_dir) / "parsed"
+            remaining_csvs = list(parsed_dir.glob("*.csv"))
+            self.assertEqual(
+                remaining_csvs, [],
+                f"Partial CSV files were not cleaned up: {remaining_csvs}",
+            )
+
+    def test_parse_artifact_cleans_up_partial_evtx_csvs_on_failure(self) -> None:
+        """When EVTX parsing fails mid-stream, all partial per-channel CSV
+        files must be removed."""
+
+        def _exploding_evtx_records() -> list[FakeRecord]:
+            """Yield some EVTX records across channels then raise."""
+            yield FakeRecord({"channel": "Security", "event_id": 4624})
+            yield FakeRecord({"channel": "System", "event_id": 7045})
+            yield FakeRecord({"channel": "Security", "event_id": 4625})
+            raise RuntimeError("corrupt EVTX record")
+
+        class PartialEvtxTarget:
+            def evtx(self) -> list[FakeRecord]:
+                return _exploding_evtx_records()
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(PartialEvtxTarget(), Path(temp_dir), audit)
+            result = parser.parse_artifact("evtx")
+
+            self.assertFalse(result["success"])
+            self.assertIn("corrupt EVTX record", result["error"])
+
+            # No CSV files should remain in the parsed directory
+            parsed_dir = Path(temp_dir) / "parsed"
+            remaining_csvs = list(parsed_dir.glob("*.csv"))
+            self.assertEqual(
+                remaining_csvs, [],
+                f"Partial EVTX CSV files were not cleaned up: {remaining_csvs}",
+            )
+
+    def test_evtx_finally_rewrite_failure_does_not_mask_original_exception(self) -> None:
+        """When EVTX parsing raises AND the header rewrite also fails, the
+        original Dissect exception must propagate -- not the rewrite error.
+
+        This guards against the finally block in _write_evtx_records masking
+        the real parse failure, which would corrupt the forensic audit trail.
+        """
+
+        def _expanding_then_exploding() -> list[FakeRecord]:
+            """Yield records with schema expansion, then raise."""
+            yield FakeRecord({"channel": "Security", "A": "a1"})
+            yield FakeRecord({"channel": "Security", "A": "a2", "B": "b2"})
+            raise RuntimeError("corrupt EVTX segment")
+
+        class ExpandingEvtxTarget:
+            def evtx(self) -> list[FakeRecord]:
+                return _expanding_then_exploding()
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(
+                ExpandingEvtxTarget(), Path(temp_dir), audit,
+            )
+            # Make the header rewrite raise a secondary error.
+            with patch.object(
+                parser, "_rewrite_csv_with_expanded_headers",
+                side_effect=OSError("disk full"),
+            ):
+                result = parser.parse_artifact("evtx")
+
+            self.assertFalse(result["success"])
+            # The error must be the ORIGINAL Dissect exception, not the
+            # rewrite failure.
+            self.assertIn("corrupt EVTX segment", result["error"])
+            self.assertNotIn("disk full", result["error"])
+
+    def test_parse_artifact_successful_parse_leaves_csv_intact(self) -> None:
+        """Verify that the cleanup logic does not affect successful parses."""
+
+        class GoodTarget:
+            def runkeys(self) -> list[FakeRecord]:
+                return [
+                    FakeRecord({"ts": "2026-01-01", "value": "ok1"}),
+                    FakeRecord({"ts": "2026-01-02", "value": "ok2"}),
+                ]
+
+        audit = FakeAuditLogger()
+        with TemporaryDirectory(prefix="aift-parser-test-") as temp_dir:
+            parser = self._create_parser(GoodTarget(), Path(temp_dir), audit)
+            result = parser.parse_artifact("runkeys")
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["record_count"], 2)
+            csv_path = Path(result["csv_path"])
+            self.assertTrue(csv_path.exists())
+
+
 class RecordToDictTests(unittest.TestCase):
     """Tests for ForensicParser._record_to_dict with various value types."""
 
