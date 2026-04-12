@@ -590,16 +590,16 @@ Data exfiltration investigation. Look for large file transfers, USB device conne
             <button
               id="chat-toggle"
               type="button"
-              aria-expanded="true"
+              aria-expanded="false"
               aria-controls="chat-panel"
             >
-              Hide Chat
+              Show Chat
             </button>
             <button id="clear-chat" type="button">Clear Chat</button>
           </div>
         </header>
 
-        <div id="chat-panel">
+        <div id="chat-panel" hidden>
           <div id="chat-thread" aria-live="polite">
             <p id="chat-empty-state">Chat history will appear here.</p>
           </div>
