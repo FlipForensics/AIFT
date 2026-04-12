@@ -24,6 +24,8 @@ from .base import (
     DEFAULT_LOCAL_MODEL,
     DEFAULT_MAX_TOKENS,
     DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS,
+    RATE_LIMIT_MAX_RETRIES,
+    _extract_retry_after_seconds,
     _is_attachment_unsupported_error,
     _normalize_api_key_value,
     _normalize_openai_compatible_base_url,
@@ -162,14 +164,16 @@ class LocalProvider(AIProvider):
             AIProviderError: On empty response or API failure.
         """
         def _stream() -> Iterator[str]:
-            try:
-                prompt_for_completion = self._build_chat_completion_prompt(
-                    user_prompt=user_prompt,
-                    attachments=None,
-                )
+            """Inner generator with rate-limit retry around create + iterate."""
+            prompt_for_completion = self._build_chat_completion_prompt(
+                user_prompt=user_prompt,
+                attachments=None,
+            )
+            last_rate_limit_error: Exception | None = None
+            for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
                 try:
-                    stream = _run_with_rate_limit_retries(
-                        request_fn=lambda: self.client.chat.completions.create(
+                    try:
+                        stream = self.client.chat.completions.create(
                             model=self.model,
                             max_tokens=max_tokens,
                             messages=[
@@ -177,57 +181,74 @@ class LocalProvider(AIProvider):
                                 {"role": "user", "content": prompt_for_completion},
                             ],
                             stream=True,
-                        ),
-                        rate_limit_error_type=self._openai.RateLimitError,
-                        provider_name="Local provider",
-                    )
-                except self._openai.BadRequestError as error:
-                    lowered_error = str(error).lower()
-                    if "stream" in lowered_error and ("unsupported" in lowered_error or "not support" in lowered_error):
-                        fallback_text = self._request_non_stream(
-                            system_prompt=system_prompt,
-                            user_prompt=user_prompt,
-                            max_tokens=max_tokens,
-                            attachments=None,
                         )
-                        if fallback_text:
-                            yield fallback_text
-                            return
+                    except self._openai.BadRequestError as error:
+                        lowered_error = str(error).lower()
+                        if "stream" in lowered_error and ("unsupported" in lowered_error or "not support" in lowered_error):
+                            fallback_text = self._request_non_stream(
+                                system_prompt=system_prompt,
+                                user_prompt=user_prompt,
+                                max_tokens=max_tokens,
+                                attachments=None,
+                            )
+                            if fallback_text:
+                                yield fallback_text
+                                return
+                        raise
+
+                    emitted = False
+                    for chunk in stream:
+                        choices = getattr(chunk, "choices", None)
+                        if not choices:
+                            continue
+                        choice = choices[0]
+                        delta = getattr(choice, "delta", None)
+                        if delta is None and isinstance(choice, dict):
+                            delta = choice.get("delta")
+                        # Only yield from the content field, skipping
+                        # reasoning/thinking fields so streaming output
+                        # matches the non-streaming path which strips
+                        # leading <think> blocks via
+                        # _strip_leading_reasoning_blocks().
+                        chunk_text = (
+                            getattr(delta, "content", None)
+                            if not isinstance(delta, dict)
+                            else (delta.get("content") if delta else None)
+                        )
+                        if not chunk_text:
+                            continue
+                        emitted = True
+                        yield chunk_text
+
+                    if not emitted:
+                        raise AIProviderError(
+                            "Local AI provider returned an empty streamed response. "
+                            "Try a different local model or increase max tokens."
+                        )
+                    return
+                except self._openai.RateLimitError as rate_error:
+                    last_rate_limit_error = rate_error
+                    if attempt >= RATE_LIMIT_MAX_RETRIES:
+                        break
+                    retry_after = _extract_retry_after_seconds(rate_error)
+                    if retry_after is None:
+                        retry_after = float(2 ** attempt)
+                    logger.warning(
+                        "Local provider stream rate limited (attempt %d/%d), retrying in %.1fs",
+                        attempt + 1,
+                        RATE_LIMIT_MAX_RETRIES,
+                        retry_after,
+                    )
+                    time.sleep(retry_after)
+                except AIProviderError:
                     raise
+                except Exception as error:
+                    raise self._map_api_error(error) from error
 
-                emitted = False
-                for chunk in stream:
-                    choices = getattr(chunk, "choices", None)
-                    if not choices:
-                        continue
-                    choice = choices[0]
-                    delta = getattr(choice, "delta", None)
-                    if delta is None and isinstance(choice, dict):
-                        delta = choice.get("delta")
-                    # Only yield from the content field, skipping
-                    # reasoning/thinking fields so streaming output
-                    # matches the non-streaming path which strips
-                    # leading <think> blocks via
-                    # _strip_leading_reasoning_blocks().
-                    chunk_text = (
-                        getattr(delta, "content", None)
-                        if not isinstance(delta, dict)
-                        else (delta.get("content") if delta else None)
-                    )
-                    if not chunk_text:
-                        continue
-                    emitted = True
-                    yield chunk_text
-
-                if not emitted:
-                    raise AIProviderError(
-                        "Local AI provider returned an empty streamed response. "
-                        "Try a different local model or increase max tokens."
-                    )
-            except AIProviderError:
-                raise
-            except Exception as error:
-                raise self._map_api_error(error) from error
+            raise AIProviderError(
+                f"Local provider rate limit exceeded after {RATE_LIMIT_MAX_RETRIES} retries. "
+                f"Details: {last_rate_limit_error}"
+            )
 
         return _stream()
 

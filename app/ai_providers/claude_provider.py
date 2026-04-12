@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
@@ -22,6 +23,8 @@ from .base import (
     DEFAULT_CLAUDE_MODEL,
     DEFAULT_CLOUD_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_MAX_TOKENS,
+    RATE_LIMIT_MAX_RETRIES,
+    _extract_retry_after_seconds,
     _is_attachment_unsupported_error,
     _is_anthropic_streaming_required_error,
     _normalize_api_key_value,
@@ -151,6 +154,7 @@ class ClaudeProvider(AIProvider):
             AIProviderError: On empty response or API failure.
         """
         def _stream() -> Iterator[str]:
+            """Inner generator with rate-limit retry around create + iterate."""
             request_kwargs: dict[str, Any] = {
                 "model": self.model,
                 "max_tokens": max_tokens,
@@ -158,28 +162,46 @@ class ClaudeProvider(AIProvider):
                 "messages": [{"role": "user", "content": user_prompt}],
                 "stream": True,
             }
-            try:
-                stream = _run_with_rate_limit_retries(
-                    request_fn=lambda: self._with_token_limit_retry(
+            last_rate_limit_error: Exception | None = None
+            for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
+                try:
+                    stream = self._with_token_limit_retry(
                         lambda kw: self.client.messages.create(**kw),
                         request_kwargs,
-                    ),
-                    rate_limit_error_type=self._anthropic.RateLimitError,
-                    provider_name="Claude",
-                )
-                emitted = False
-                for event in stream:
-                    chunk_text = _extract_anthropic_stream_text(event)
-                    if not chunk_text:
-                        continue
-                    emitted = True
-                    yield chunk_text
-                if not emitted:
-                    raise AIProviderError("Claude returned an empty response.")
-            except AIProviderError:
-                raise
-            except Exception as error:
-                raise self._map_api_error(error) from error
+                    )
+                    emitted = False
+                    for event in stream:
+                        chunk_text = _extract_anthropic_stream_text(event)
+                        if not chunk_text:
+                            continue
+                        emitted = True
+                        yield chunk_text
+                    if not emitted:
+                        raise AIProviderError("Claude returned an empty response.")
+                    return
+                except self._anthropic.RateLimitError as rate_error:
+                    last_rate_limit_error = rate_error
+                    if attempt >= RATE_LIMIT_MAX_RETRIES:
+                        break
+                    retry_after = _extract_retry_after_seconds(rate_error)
+                    if retry_after is None:
+                        retry_after = float(2 ** attempt)
+                    logger.warning(
+                        "Claude stream rate limited (attempt %d/%d), retrying in %.1fs",
+                        attempt + 1,
+                        RATE_LIMIT_MAX_RETRIES,
+                        retry_after,
+                    )
+                    time.sleep(retry_after)
+                except AIProviderError:
+                    raise
+                except Exception as error:
+                    raise self._map_api_error(error) from error
+
+            raise AIProviderError(
+                f"Claude rate limit exceeded after {RATE_LIMIT_MAX_RETRIES} retries. "
+                f"Details: {last_rate_limit_error}"
+            )
 
         return _stream()
 

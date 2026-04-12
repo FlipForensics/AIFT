@@ -513,18 +513,44 @@ def generate_case_report(case_id: str) -> dict[str, Any]:
             # Fallback for cases created before evidence_file_hashes existed.
             verification_path = resolve_hash_verification_path(case_snapshot)
             if verification_path is None or not intake_sha256:
-                return {"success": False, "error": "Evidence integrity data is missing for this case. Please re-upload or re-reference the evidence file to generate verification hashes."}
-            if not verification_path.exists():
-                return {"success": False, "error": "Evidence file is no longer available for hash verification."}
-            hash_ok, computed_sha256 = verify_hash(
-                verification_path, intake_sha256, return_computed=True,
-            )
-            verify_details = [{
-                "path": str(verification_path),
-                "match": hash_ok,
-                "expected": intake_sha256,
-                "computed": computed_sha256,
-            }]
+                # No integrity data available — degrade gracefully so the
+                # report can still be generated (it will show verification
+                # as failed/missing).
+                hash_ok = False
+                computed_sha256 = "INTEGRITY_DATA_MISSING"
+                verify_details = []
+                LOGGER.warning(
+                    "Case %s: evidence integrity data missing; "
+                    "report will show hash verification failed.",
+                    case_id,
+                )
+            elif not verification_path.exists():
+                # Evidence file removed after intake — degrade gracefully,
+                # matching the behaviour of the file_hash_entries path.
+                hash_ok = False
+                computed_sha256 = "FILE_MISSING"
+                verify_details = [{
+                    "path": str(verification_path),
+                    "match": False,
+                    "expected": intake_sha256,
+                    "computed": "FILE_MISSING",
+                }]
+                LOGGER.warning(
+                    "Case %s: evidence file %s no longer on disk; "
+                    "report will show hash verification failed.",
+                    case_id,
+                    verification_path,
+                )
+            else:
+                hash_ok, computed_sha256 = verify_hash(
+                    verification_path, intake_sha256, return_computed=True,
+                )
+                verify_details = [{
+                    "path": str(verification_path),
+                    "match": hash_ok,
+                    "expected": intake_sha256,
+                    "computed": computed_sha256,
+                }]
 
         audit_logger.log(
             "hash_verification",

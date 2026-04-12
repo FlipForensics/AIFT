@@ -320,6 +320,31 @@ class ForensicParser:
             if self._is_evtx_artifact(function_name):
                 result["csv_paths"] = [str(p) for p in all_csv_paths]
             return result
+        except UnsupportedPluginError:
+            duration = perf_counter() - start_time
+            self._cleanup_partial_csv_files(created_csv_paths, artifact_key)
+            logger.info(
+                "Artifact '%s' (function '%s') not present in evidence image",
+                artifact_key, function_name,
+            )
+            self.audit_logger.log(
+                "parsing_completed",
+                {
+                    "artifact_key": artifact_key,
+                    "artifact_name": artifact.get("name", artifact_key),
+                    "function": function_name,
+                    "record_count": 0,
+                    "duration_seconds": round(duration, 6),
+                    "message": "Artifact not present in evidence image",
+                },
+            )
+            return {
+                "csv_path": "",
+                "record_count": 0,
+                "duration_seconds": duration,
+                "success": True,
+                "error": "Artifact not present in evidence image",
+            }
         except Exception as error:
             duration = perf_counter() - start_time
             error_message = str(error)
@@ -734,6 +759,8 @@ class ForensicParser:
         """
         if hasattr(record, "_asdict"):
             as_dict = record._asdict()
+            if as_dict is None:
+                return {}
             if isinstance(as_dict, dict):
                 return dict(as_dict)
 
@@ -828,6 +855,12 @@ class ForensicParser:
                 "progress_callback(dict) failed for %s: %s; trying (key, count)",
                 artifact_key, exc,
             )
+        except Exception as exc:
+            logger.warning(
+                "progress_callback(dict) raised %s for %s: %s",
+                type(exc).__name__, artifact_key, exc,
+            )
+            return
 
         try:
             progress_callback(artifact_key, record_count)  # type: ignore[misc]
@@ -837,6 +870,12 @@ class ForensicParser:
                 "progress_callback(key, count) failed for %s: %s; trying (count)",
                 artifact_key, exc,
             )
+        except Exception as exc:
+            logger.warning(
+                "progress_callback(key, count) raised %s for %s: %s",
+                type(exc).__name__, artifact_key, exc,
+            )
+            return
 
         try:
             progress_callback(record_count)  # type: ignore[misc]

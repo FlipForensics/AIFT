@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any, Iterator, Mapping
 
 from .base import (
@@ -23,6 +24,8 @@ from .base import (
     DEFAULT_KIMI_FILE_UPLOAD_PURPOSE,
     DEFAULT_KIMI_MODEL,
     DEFAULT_MAX_TOKENS,
+    RATE_LIMIT_MAX_RETRIES,
+    _extract_retry_after_seconds,
     _is_attachment_unsupported_error,
     _is_kimi_model_not_available_error,
     _normalize_api_key_value,
@@ -163,42 +166,62 @@ class KimiProvider(AIProvider):
             AIProviderError: On empty response or API failure.
         """
         def _stream() -> Iterator[str]:
-            stream = self._run_request(
-                lambda: self.client.chat.completions.create(
-                    model=self.model,
-                    max_tokens=max_tokens,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    stream=True,
-                )
-            )
-            emitted = False
-            try:
-                for chunk in stream:
-                    choices = getattr(chunk, "choices", None)
-                    if not choices:
-                        continue
-                    choice = choices[0]
-                    delta = getattr(choice, "delta", None)
-                    if delta is None and isinstance(choice, dict):
-                        delta = choice.get("delta")
-                    chunk_text = _extract_openai_delta_text(
-                        delta,
-                        ("content", "reasoning_content", "reasoning", "refusal"),
+            """Inner generator with rate-limit retry around create + iterate."""
+            last_rate_limit_error: Exception | None = None
+            for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
+                try:
+                    stream = self.client.chat.completions.create(
+                        model=self.model,
+                        max_tokens=max_tokens,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        stream=True,
                     )
-                    if not chunk_text:
-                        continue
-                    emitted = True
-                    yield chunk_text
-            except AIProviderError:
-                raise
-            except Exception as error:
-                raise self._map_api_error(error) from error
+                    emitted = False
+                    for chunk in stream:
+                        choices = getattr(chunk, "choices", None)
+                        if not choices:
+                            continue
+                        choice = choices[0]
+                        delta = getattr(choice, "delta", None)
+                        if delta is None and isinstance(choice, dict):
+                            delta = choice.get("delta")
+                        chunk_text = _extract_openai_delta_text(
+                            delta,
+                            ("content", "reasoning_content", "reasoning", "refusal"),
+                        )
+                        if not chunk_text:
+                            continue
+                        emitted = True
+                        yield chunk_text
+                    if not emitted:
+                        raise AIProviderError("Kimi returned an empty response.")
+                    return
+                except self._openai.RateLimitError as rate_error:
+                    last_rate_limit_error = rate_error
+                    if attempt >= RATE_LIMIT_MAX_RETRIES:
+                        break
+                    retry_after = _extract_retry_after_seconds(rate_error)
+                    if retry_after is None:
+                        retry_after = float(2 ** attempt)
+                    logger.warning(
+                        "Kimi stream rate limited (attempt %d/%d), retrying in %.1fs",
+                        attempt + 1,
+                        RATE_LIMIT_MAX_RETRIES,
+                        retry_after,
+                    )
+                    time.sleep(retry_after)
+                except AIProviderError:
+                    raise
+                except Exception as error:
+                    raise self._map_api_error(error) from error
 
-            if not emitted:
-                raise AIProviderError("Kimi returned an empty response.")
+            raise AIProviderError(
+                f"Kimi rate limit exceeded after {RATE_LIMIT_MAX_RETRIES} retries. "
+                f"Details: {last_rate_limit_error}"
+            )
 
         return _stream()
 

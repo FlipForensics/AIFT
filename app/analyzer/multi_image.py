@@ -208,35 +208,28 @@ def run_multi_image_analysis(
 
     # ------------------------------------------------------------------
     # Phase 1: Per-artifact analysis for each image
-    # Save original analyzer state under lock before the loop so we can
-    # restore it after all images are processed (or on failure).  Without
-    # this, Phase 2 summaries would see the last image's os_type / CSV
-    # paths instead of the caller's original values.
+    # Hold the lock for the entire Phase 1 loop.  Saving and restoring
+    # analyzer state happens inside the same lock acquisition so that a
+    # concurrent thread can never observe partially-swapped state
+    # (e.g. wrong os_type or empty artifact_csv_paths) between the
+    # moment an exception releases the lock and the finally-block
+    # re-acquires it.
     with _ANALYZER_LOCK:
         saved_os_type = analyzer.os_type
         saved_csv_paths = dict(analyzer.artifact_csv_paths)
         saved_date_range = analyzer.analysis_date_range
 
-    # ------------------------------------------------------------------
-    try:
-        for image in images:
-            image_id = str(image.get("image_id", "unknown"))
-            label = str(image.get("label", image_id))
-            metadata = image.get("metadata") or {}
-            artifact_keys = image.get("artifact_keys", [])
-            parsed_dir = image.get("parsed_dir", "")
+        try:
+            for image in images:
+                image_id = str(image.get("image_id", "unknown"))
+                label = str(image.get("label", image_id))
+                metadata = image.get("metadata") or {}
+                artifact_keys = image.get("artifact_keys", [])
+                parsed_dir = image.get("parsed_dir", "")
 
-            if cancel_check is not None and cancel_check():
-                raise AnalysisCancelledError("Analysis cancelled by user.")
+                if cancel_check is not None and cancel_check():
+                    raise AnalysisCancelledError("Analysis cancelled by user.")
 
-            # Swap analyzer state for the current image under lock and
-            # hold it through all analyze_artifact() calls.  Phase 1
-            # iterates images sequentially, so holding the lock for the
-            # full per-image pass does not reduce parallelism.  Releasing
-            # it earlier would allow a concurrent thread calling
-            # run_multi_image_analysis on the same ForensicAnalyzer to
-            # corrupt artifact_csv_paths / os_type mid-analysis.
-            with _ANALYZER_LOCK:
                 # Update the analyzer's os_type for the current image so
                 # that OS-specific analysis logic uses the correct
                 # operating system.
@@ -284,18 +277,17 @@ def run_multi_image_analysis(
                             {**result, "image_id": image_id, "image_label": label},
                         )
 
-            image_results[image_id] = {
-                "label": label,
-                "per_artifact": per_artifact_results,
-                "summary": "",
-                "metadata": metadata,
-            }
-    finally:
-        # Restore analyzer state under lock so the caller (and Phase 2
-        # summaries) always see the original os_type and
-        # artifact_csv_paths, regardless of whether the loop succeeded
-        # or raised.
-        with _ANALYZER_LOCK:
+                image_results[image_id] = {
+                    "label": label,
+                    "per_artifact": per_artifact_results,
+                    "summary": "",
+                    "metadata": metadata,
+                }
+        finally:
+            # Restore analyzer state before the lock is released so the
+            # caller (and Phase 2 summaries) always see the original
+            # os_type and artifact_csv_paths, regardless of whether the
+            # loop succeeded or raised.
             analyzer.os_type = saved_os_type
             analyzer.artifact_csv_paths = saved_csv_paths
             analyzer.analysis_date_range = saved_date_range

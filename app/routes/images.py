@@ -617,6 +617,42 @@ def start_image_parse(case_id: str, image_id: str) -> tuple[Response, int]:
         case["artifact_options"] = list(artifact_options)
         case["analysis_date_range"] = analysis_date_range
 
+        # Capture previous CSV output dir before clearing so we can
+        # remove stale on-disk data outside the lock.
+        image_states = case.get("image_states", {})
+        img_state_lock = image_states.get(image_id, {})
+        prev_csv_output_dir = str(img_state_lock.get("csv_output_dir", "")).strip()
+
+        # Invalidate prior parse-derived outputs for this image so a
+        # failed rerun cannot leave stale data usable by downstream
+        # analysis.
+        img_state_lock["parse_results"] = []
+        img_state_lock["artifact_csv_paths"] = {}
+        img_state_lock["csv_output_dir"] = ""
+
+        # Also invalidate case-level aggregated state.
+        case["parse_results"] = []
+        case["artifact_csv_paths"] = {}
+        case["analysis_results"] = {}
+        case["investigation_context"] = ""
+
+        case_dir = Path(case["case_dir"])
+
+    from .evidence_utils import cleanup_parsed_data
+
+    single_image_states: dict[str, dict[str, Any]] = {
+        image_id: {"dir": str(image_dir)},
+    }
+    cleanup_parsed_data(
+        case_dir=case_dir,
+        image_states=single_image_states,
+        prev_csv_output_dir=prev_csv_output_dir,
+        clean_default_parsed=False,
+    )
+    from .artifacts import _purge_stale_downstream_case_files
+
+    _purge_stale_downstream_case_files(case_dir)
+
     emit_progress(PARSE_PROGRESS, progress_key, {
         "type": "parse_started",
         "image_id": image_id,
@@ -849,14 +885,10 @@ def _run_image_parse(
             # both concurrent multi-image parses (merge) and re-parses of the
             # same image with different artifacts (replace stale entries).
             merged_results: list[dict[str, Any]] = []
-            merged_results_keys: set[str] = set()
             merged_csv_map: dict[str, Any] = {}
             for iid, ist in image_states.items():
                 for entry in ist.get("parse_results") or []:
-                    akey = str(entry.get("artifact_key", ""))
-                    if akey and akey not in merged_results_keys:
-                        merged_results.append(entry)
-                        merged_results_keys.add(akey)
+                    merged_results.append(entry)
                 ist_csv = ist.get("artifact_csv_paths") or {}
                 merged_csv_map.update(ist_csv)
             case["parse_results"] = merged_results

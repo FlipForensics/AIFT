@@ -55,6 +55,15 @@ DEFAULT_KIMI_MODEL = "kimi-k2-turbo-preview"
 DEFAULT_KIMI_FILE_UPLOAD_PURPOSE = "file-extract"
 DEFAULT_LOCAL_MODEL = "llama3.1:70b"
 
+
+class _NeverRaisedError(Exception):
+    """Sentinel exception that is never raised.
+
+    Used as the default for ``AIProvider._rate_limit_error_class`` so that
+    the ``except`` clause in ``_run_with_rate_limit_retries`` is syntactically
+    valid even when a subclass does not override the attribute.
+    """
+
 _KIMI_MODEL_ALIASES = {
     "kimi-v2.5": DEFAULT_KIMI_MODEL,
 }
@@ -171,12 +180,13 @@ class AIProvider(ABC):
             as file attachments rather than inlining them into the prompt.
         _provider_display_name (str): Human-readable provider name used in
             error messages and log entries.  Override in subclasses.
-        _rate_limit_error_class (type | None): The SDK exception class that
+        _rate_limit_error_class (type[Exception]): The SDK exception class that
             signals a rate-limit (HTTP 429) error.  Override in subclasses.
+            Defaults to ``_NeverRaisedError`` (a sentinel that is never raised).
     """
 
     _provider_display_name: str = "AI"
-    _rate_limit_error_class: type | None = None
+    _rate_limit_error_class: type[Exception] = _NeverRaisedError
 
     def analyze(
         self,

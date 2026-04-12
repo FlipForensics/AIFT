@@ -319,15 +319,13 @@ class ForensicAnalyzer:
             The AI provider's response string.
 
         Raises:
-            AIProviderError: If the provider raises a permanent error.
-            Exception: The last transient error after all retries.
+            Exception: The last transient error (including AIProviderError)
+                after all retries are exhausted.
         """
         last_error: Exception | None = None
         for attempt in range(AI_RETRY_ATTEMPTS):
             try:
                 return call()
-            except AIProviderError:
-                raise
             except Exception as error:
                 last_error = error
                 if attempt < AI_RETRY_ATTEMPTS - 1:
@@ -471,6 +469,9 @@ class ForensicAnalyzer:
                         artifact_key,
                         resolved,
                         self.case_dir.resolve(),
+                    )
+                    raise ValueError(
+                        f"Path {artifact_key} is outside case directory"
                     )
                 else:
                     return resolved
@@ -911,10 +912,17 @@ class ForensicAnalyzer:
                     ))
                 elif attachments:
                     # Provider doesn't support attachments in progress mode, use regular analyze
-                    analysis_text = self._call_ai_with_retry(lambda: self.ai_provider.analyze_with_attachments(
-                        system_prompt=self.system_prompt, user_prompt=artifact_prompt,
-                        attachments=attachments, max_tokens=self.ai_response_max_tokens,
-                    ))
+                    _attach_fn = getattr(self.ai_provider, "analyze_with_attachments", None)
+                    if callable(_attach_fn):
+                        analysis_text = self._call_ai_with_retry(lambda: _attach_fn(
+                            system_prompt=self.system_prompt, user_prompt=artifact_prompt,
+                            attachments=attachments, max_tokens=self.ai_response_max_tokens,
+                        ))
+                    else:
+                        analysis_text = self._call_ai_with_retry(lambda: self.ai_provider.analyze(
+                            system_prompt=self.system_prompt, user_prompt=artifact_prompt,
+                            max_tokens=self.ai_response_max_tokens,
+                        ))
                 else:
                     analysis_text = self._call_ai_with_retry(lambda: analyze_with_progress(
                         system_prompt=self.system_prompt,

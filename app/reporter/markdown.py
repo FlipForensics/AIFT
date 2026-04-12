@@ -174,7 +174,7 @@ def render_inline_markdown(value: str, *, escape_html: bool = False) -> str:
     for part in parts:
         if not part:
             continue
-        if part.startswith("`") and part.endswith("`"):
+        if len(part) >= 2 and part.startswith("`") and part.endswith("`"):
             output.append(f"<code>{part[1:-1]}</code>")
             continue
 

@@ -31,6 +31,7 @@ import logging
 import os
 import shutil
 import stat
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -49,7 +50,7 @@ def _utc_now_iso8601() -> str:
 
 
 def _remove_readonly(func: Any, path: str, exc_info: Any) -> None:
-    """Error handler for :func:`shutil.rmtree` to handle read-only files on Windows.
+    """``onerror`` handler for :func:`shutil.rmtree` (Python < 3.12).
 
     When ``shutil.rmtree`` encounters a read-only file it raises
     :class:`PermissionError`.  This handler clears the read-only
@@ -65,6 +66,37 @@ def _remove_readonly(func: Any, path: str, exc_info: Any) -> None:
     """
     os.chmod(path, stat.S_IWRITE)
     func(path)
+
+
+def _remove_readonly_onexc(func: Any, path: str, exc: BaseException) -> None:
+    """``onexc`` handler for :func:`shutil.rmtree` (Python 3.12+).
+
+    Equivalent to :func:`_remove_readonly` but uses the ``onexc``
+    callback signature introduced in Python 3.12.
+
+    Args:
+        func: The function that raised the exception.
+        path: The path to the file or directory that could not be
+            removed.
+        exc: The exception instance that was raised.
+    """
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def _rmtree_robust(path: str | Path) -> None:
+    """Remove a directory tree, handling read-only files on Windows.
+
+    Uses ``onexc`` on Python 3.12+ and ``onerror`` on older versions
+    to avoid the :class:`DeprecationWarning` introduced in Python 3.12.
+
+    Args:
+        path: Path to the directory tree to remove.
+    """
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(str(path), onexc=_remove_readonly_onexc)
+    else:
+        shutil.rmtree(str(path), onerror=_remove_readonly)
 
 
 class CaseManager:
@@ -218,7 +250,7 @@ class CaseManager:
                 f"Image directory not found: {image_dir}"
             )
 
-        shutil.rmtree(str(image_dir), onerror=_remove_readonly)
+        _rmtree_robust(image_dir)
 
         audit = AuditLogger(case_dir, session_id=self._session_id)
         audit.log("image_deleted", {
@@ -313,7 +345,7 @@ class CaseManager:
             FileNotFoundError: If the case directory does not exist.
         """
         case_dir = self._require_case_dir(case_id)
-        return (case_dir / "evidence").is_dir()
+        return (case_dir / "evidence").is_dir() and not (case_dir / "images").is_dir()
 
     # ------------------------------------------------------------------
     # Legacy migration

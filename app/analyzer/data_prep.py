@@ -378,8 +378,11 @@ def _flag_anomalous_rows(
     total = len(rows)
     min_count = max(1, int(total * threshold))
 
-    # Build per-column frequency counts.
-    columns = [c for c in rows[0].keys() if c not in ("_row_ref", DEDUP_COMMENT_COLUMN)]
+    # Build per-column frequency counts (union of all row keys for heterogeneous schemas).
+    all_keys: set[str] = set()
+    for row in rows:
+        all_keys.update(row.keys())
+    columns = [c for c in all_keys if c not in ("_row_ref", DEDUP_COMMENT_COLUMN)]
     counters: dict[str, Counter[str]] = {col: Counter() for col in columns}
     for row in rows:
         for col in columns:
