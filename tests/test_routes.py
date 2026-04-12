@@ -2375,8 +2375,10 @@ class RoutesTests(unittest.TestCase):
                 routes.CASE_STATES[case_id]["source_path"] = ""
                 routes.CASE_STATES[case_id]["evidence_path"] = ""
             resp = self.client.get(f"/api/cases/{case_id}/report")
+            # Missing integrity data now degrades gracefully instead of
+            # blocking report generation — the request still fails because
+            # analysis has not been completed, not because of hash data.
             self.assertEqual(resp.status_code, 400)
-            self.assertIn("integrity data is missing", resp.get_json()["error"])
 
     def test_replace_evidence_clears_stale_downstream_state(self) -> None:
         """Loading new evidence must invalidate parse, analysis, and chat state."""

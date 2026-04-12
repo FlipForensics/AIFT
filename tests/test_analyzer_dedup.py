@@ -767,8 +767,9 @@ class TestGenerateSummaryFailure(unittest.TestCase):
     """Tests for ForensicAnalyzer.generate_summary error handling."""
 
     def test_returns_failure_message_on_error(self) -> None:
-        fake_provider = FakeProvider(fail_calls={0})
-        with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+        fake_provider = FakeProvider(fail_calls={0, 1, 2})
+        with patch("app.analyzer.core.create_provider", return_value=fake_provider), \
+             patch("app.analyzer.core.sleep"):
             with TemporaryDirectory(prefix="aift-sum-") as tmp_dir:
                 prompts_dir = Path(tmp_dir) / "prompts"
                 prompts_dir.mkdir()

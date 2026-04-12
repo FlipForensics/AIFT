@@ -1303,11 +1303,13 @@ class AnalyzerTests(unittest.TestCase):
 
             fake_provider = FakeProvider(
                 responses=[
-                    "unused-for-first-call",
+                    "unused-retry-1",
+                    "unused-retry-2",
+                    "unused-retry-3",
                     "tasks-analysis",
                     "summary-analysis",
                 ],
-                fail_calls={0},
+                fail_calls={0, 1, 2},
             )
             audit = FakeAuditLogger()
             progress_events: list[tuple[str, str, dict[str, str]]] = []
@@ -1315,7 +1317,8 @@ class AnalyzerTests(unittest.TestCase):
             def progress_callback(artifact_key: str, status: str, result: dict[str, str]) -> None:
                 progress_events.append((artifact_key, status, result))
 
-            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider), \
+                 patch("app.analyzer.core.sleep"):
                 analyzer = ForensicAnalyzer(
                     case_dir=temp_dir,
                     config={"ai": {"provider": "local"}},
@@ -1331,7 +1334,7 @@ class AnalyzerTests(unittest.TestCase):
                 )
 
         self.assertEqual(len(output["per_artifact"]), 2)
-        self.assertTrue(output["per_artifact"][0]["analysis"].startswith("Analysis failed: provider-failure-0"))
+        self.assertTrue(output["per_artifact"][0]["analysis"].startswith("Analysis failed: provider-failure-"))
         self.assertEqual(output["per_artifact"][1]["analysis"], "tasks-analysis")
         self.assertEqual(output["summary"], "summary-analysis")
         self.assertEqual(output["model_info"]["model"], "fake-model-1")

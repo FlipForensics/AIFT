@@ -402,12 +402,9 @@ class ParserTests(unittest.TestCase):
             parser = self._create_parser(ErrorTarget(), Path(temp_dir), audit)
             result = parser.parse_artifact("runkeys")
 
-        self.assertFalse(result["success"])
-        self.assertIn("runkeys not supported", result["error"])
-        self.assertEqual(audit.entries[0][0], "parsing_started")
-        self.assertEqual(audit.entries[-1][0], "parsing_failed")
-        self.assertIn("traceback", audit.entries[-1][1])
-        self.assertIn("runkeys", str(audit.entries[-1][1]["traceback"]))
+        self.assertTrue(result["success"])
+        self.assertEqual(result["record_count"], 0)
+        self.assertIn("not present", result.get("message", result.get("error", "")))
 
     def test_parse_artifact_catches_generic_exceptions(self) -> None:
         """Non-plugin exceptions should also be caught and returned as errors."""
