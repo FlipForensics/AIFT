@@ -434,6 +434,8 @@ def stream_sse(store: dict[str, dict[str, Any]], case_id: str) -> Response:
 
                     status = str(state.get("status", "idle"))
                     all_events = state.get("events", [])
+                    if len(all_events) < last:
+                        last = 0
                     pending: list[dict[str, Any]] = list(all_events[last:])
                     last = len(all_events)
 

@@ -30,6 +30,7 @@ import csv
 from datetime import date, datetime, time
 from pathlib import Path
 import re
+import sys
 import traceback
 from types import TracebackType
 from time import perf_counter
@@ -266,6 +267,8 @@ class ForensicParser:
             },
         )
 
+        created_csv_paths: list[Path] = []
+
         try:
             records = self._call_target_function(function_name)
             if self._is_evtx_artifact(function_name):
@@ -273,6 +276,7 @@ class ForensicParser:
                     artifact_key=artifact_key,
                     records=records,
                     progress_callback=progress_callback,
+                    created_csv_paths=created_csv_paths,
                 )
                 if all_csv_paths:
                     csv_path = str(all_csv_paths[0])
@@ -281,8 +285,10 @@ class ForensicParser:
                     empty_output.touch(exist_ok=True)
                     csv_path = str(empty_output)
                     all_csv_paths = [empty_output]
+                    created_csv_paths.append(empty_output)
             else:
                 csv_output = self.parsed_dir / f"{self._sanitize_filename(artifact_key)}.csv"
+                created_csv_paths.append(csv_output)
                 record_count = self._write_records_to_csv(
                     records=records,
                     csv_output_path=csv_output,
@@ -318,6 +324,9 @@ class ForensicParser:
             duration = perf_counter() - start_time
             error_message = str(error)
             error_traceback = traceback.format_exc()
+
+            self._cleanup_partial_csv_files(created_csv_paths, artifact_key)
+
             self.audit_logger.log(
                 "parsing_failed",
                 {
@@ -336,6 +345,35 @@ class ForensicParser:
                 "success": False,
                 "error": error_message,
             }
+
+    def _cleanup_partial_csv_files(
+        self, csv_paths: list[Path], artifact_key: str,
+    ) -> None:
+        """Remove partial CSV files left behind by a failed parse attempt.
+
+        Called from the ``except`` block of :meth:`parse_artifact` to prevent
+        truncated or corrupt CSV files from being picked up by downstream
+        components (analyzer, chat retrieval).
+
+        Args:
+            csv_paths: List of CSV file paths that were created during the
+                failed parse attempt.
+            artifact_key: Artifact key for log messages.
+        """
+        for path in csv_paths:
+            try:
+                if path.exists():
+                    path.unlink()
+                    logger.info(
+                        "Removed partial CSV file '%s' for failed artifact '%s'",
+                        path, artifact_key,
+                    )
+            except OSError:
+                logger.warning(
+                    "Failed to remove partial CSV file '%s' for artifact '%s'",
+                    path, artifact_key,
+                    exc_info=True,
+                )
 
     def _safe_read_target_attribute(self, attribute_names: tuple[str, ...]) -> Any:
         """Read a target attribute by trying multiple candidate names.
@@ -466,6 +504,7 @@ class ForensicParser:
         artifact_key: str,
         records: Any,
         progress_callback: Callable[..., None] | None,
+        created_csv_paths: list[Path] | None = None,
     ) -> tuple[list[Path], int]:
         """Stream EVTX records into per-channel CSV files with automatic splitting.
 
@@ -477,6 +516,9 @@ class ForensicParser:
             artifact_key: Artifact key for filename construction.
             records: Iterable of Dissect EVTX record objects.
             progress_callback: Optional progress callback.
+            created_csv_paths: Optional list that will be populated with
+                paths of CSV files as they are created.  This allows the
+                caller to clean up partial files if the method raises.
 
         Returns:
             Tuple of ``(csv_paths, total_record_count)``.
@@ -508,6 +550,8 @@ class ForensicParser:
                     writer_state = self._open_evtx_writer(artifact_key=artifact_key, group_name=group_name, part=1)
                     writers[group_name] = writer_state
                     csv_paths.append(writer_state["path"])
+                    if created_csv_paths is not None:
+                        created_csv_paths.append(writer_state["path"])
                 elif writer_state["records_in_file"] >= EVTX_MAX_RECORDS_PER_FILE:
                     writer_state["handle"].close()
                     next_part = int(writer_state["part"]) + 1
@@ -531,6 +575,8 @@ class ForensicParser:
                         writer_state["writer"].writeheader()
                     writers[group_name] = writer_state
                     csv_paths.append(writer_state["path"])
+                    if created_csv_paths is not None:
+                        created_csv_paths.append(writer_state["path"])
 
                 if writer_state["fieldnames"] is None:
                     fieldnames = [str(key) for key in record_dict.keys()]
@@ -569,6 +615,10 @@ class ForensicParser:
                 if progress_callback is not None and record_count % 1000 == 0:
                     self._emit_progress(progress_callback, artifact_key, record_count)
         finally:
+            # Detect whether we are unwinding due to an existing exception
+            # so that a header-rewrite failure does not mask the original error.
+            has_pending_exception = sys.exc_info()[1] is not None
+
             for writer_state in writers.values():
                 writer_state["handle"].close()
 
@@ -587,7 +637,8 @@ class ForensicParser:
                             writer_state["path"],
                             exc_info=True,
                         )
-                        raise
+                        if not has_pending_exception:
+                            raise
 
         if progress_callback is not None:
             self._emit_progress(progress_callback, artifact_key, record_count)
