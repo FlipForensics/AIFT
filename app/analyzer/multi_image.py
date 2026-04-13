@@ -139,6 +139,56 @@ def build_cross_image_prompt(
     return prompt
 
 
+def _wrap_image_progress_callback(
+    callback: Any,
+    image_id: str,
+    image_label: str,
+) -> Callable[..., None]:
+    """Wrap a progress callback to inject image_id and image_label.
+
+    When ``analyze_artifact()`` emits "started" or "thinking" progress
+    events, it does not include image context.  This wrapper enriches the
+    payload dict so that the frontend can correctly group events by image
+    instead of falling back to ``__single__``.
+
+    Args:
+        callback: The original progress callback.
+        image_id: Image identifier to inject.
+        image_label: Human-readable image label to inject.
+
+    Returns:
+        A wrapped callback with the same calling convention.
+    """
+
+    def _enriched(*args: Any) -> None:
+        """Forward to the real callback with image fields injected."""
+        if len(args) >= 3:
+            # Three-arg convention: (artifact_key, status, payload_dict)
+            artifact_key, status, payload = args[0], args[1], args[2]
+            if isinstance(payload, dict):
+                payload = {
+                    **payload,
+                    "image_id": image_id,
+                    "image_label": image_label,
+                }
+            callback(artifact_key, status, payload)
+        elif len(args) == 1 and isinstance(args[0], dict):
+            # Single-dict convention
+            enriched = dict(args[0])
+            result = enriched.get("result")
+            if isinstance(result, dict):
+                enriched["result"] = {
+                    **result,
+                    "image_id": image_id,
+                    "image_label": image_label,
+                }
+            callback(enriched)
+        else:
+            callback(*args)
+
+    return _enriched
+
+
 def run_multi_image_analysis(
     analyzer: Any,
     images: list[dict[str, Any]],
@@ -257,6 +307,15 @@ def run_multi_image_analysis(
                     f"System: {label}\n\n{investigation_context}"
                 )
 
+                # Wrap the progress callback so that ALL events
+                # (started, thinking, complete) include image_id and
+                # image_label.  Without this, streaming "started" events
+                # from analyze_artifact() lack image context and the
+                # frontend groups them under "__single__".
+                image_cb = _wrap_image_progress_callback(
+                    progress_callback, image_id, label,
+                ) if progress_callback is not None else None
+
                 per_artifact_results: list[dict[str, Any]] = []
                 for artifact_key in artifact_keys:
                     if cancel_check is not None and cancel_check():
@@ -265,7 +324,7 @@ def run_multi_image_analysis(
                     result = analyzer.analyze_artifact(
                         artifact_key=str(artifact_key),
                         investigation_context=image_context,
-                        progress_callback=progress_callback,
+                        progress_callback=image_cb,
                     )
                     per_artifact_results.append(result)
 
@@ -308,7 +367,9 @@ def run_multi_image_analysis(
                 progress_callback,
                 f"summary_{image_id}",
                 "started",
-                {"image_id": image_id, "image_label": label,
+                {"artifact_key": f"summary_{image_id}",
+                 "artifact_name": f"Summary: {label}",
+                 "image_id": image_id, "image_label": label,
                  "status": "Generating per-image summary"},
             )
 
@@ -324,7 +385,9 @@ def run_multi_image_analysis(
                 progress_callback,
                 f"summary_{image_id}",
                 "complete",
-                {"image_id": image_id, "image_label": label,
+                {"artifact_key": f"summary_{image_id}",
+                 "artifact_name": f"Summary: {label}",
+                 "image_id": image_id, "image_label": label,
                  "summary": summary},
             )
 
@@ -460,7 +523,8 @@ def _run_cross_image_correlation(
             progress_callback,
             artifact_key,
             "started",
-            {"status": "Generating cross-image correlation analysis"},
+            {"artifact_key": artifact_key, "artifact_name": artifact_name,
+             "status": "Generating cross-image correlation analysis"},
         )
 
     model = analyzer.model_info.get("model", "unknown")
@@ -520,7 +584,8 @@ def _run_cross_image_correlation(
             progress_callback,
             artifact_key,
             "complete",
-            {"cross_image_summary": summary},
+            {"artifact_key": artifact_key, "artifact_name": artifact_name,
+             "cross_image_summary": summary},
         )
 
     return summary

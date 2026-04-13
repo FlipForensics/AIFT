@@ -141,6 +141,10 @@
     }
     if (t === "artifact_analysis_started") {
       const r = A.isObj(p.result) ? p.result : p;
+      // Carry over top-level fields that the result dict may lack.
+      if (!r.artifact_key && p.artifact_key) r.artifact_key = p.artifact_key;
+      if (!r.image_id && p.image_id) r.image_id = p.image_id;
+      if (!r.image_label && p.image_label) r.image_label = p.image_label;
       upsertAnalysisStarted(r);
       const name = String(r.artifact_name || A.artifactName(String(r.artifact_key || "")));
       const idx = st.analysis.order.length;
@@ -153,13 +157,21 @@
       return;
     }
     if (t === "artifact_analysis_thinking") {
-      upsertAnalysisThinking(A.isObj(p.result) ? p.result : p);
+      const rt = A.isObj(p.result) ? p.result : p;
+      if (!rt.artifact_key && p.artifact_key) rt.artifact_key = p.artifact_key;
+      if (!rt.image_id && p.image_id) rt.image_id = p.image_id;
+      if (!rt.image_label && p.image_label) rt.image_label = p.image_label;
+      upsertAnalysisThinking(rt);
       renderAnalysis();
       renderFindings();
       return;
     }
     if (t === "artifact_analysis_completed") {
-      upsertAnalysis(A.isObj(p.result) ? p.result : p);
+      const rc = A.isObj(p.result) ? p.result : p;
+      if (!rc.artifact_key && p.artifact_key) rc.artifact_key = p.artifact_key;
+      if (!rc.image_id && p.image_id) rc.image_id = p.image_id;
+      if (!rc.image_label && p.image_label) rc.image_label = p.image_label;
+      upsertAnalysis(rc);
       renderAnalysis();
       renderFindings();
       return;
@@ -389,15 +401,19 @@
     groupOrder.forEach(function(imgId) {
       const items = groups[imgId];
       if (!items || !items.length) return;
-      const label = items[0].imageLabel || imgId;
+      const label = items[0].imageLabel || (imgId === "__single__" ? "Analysis" : imgId);
 
       const section = document.createElement("div");
       section.className = "analysis-image-group";
 
-      const header = document.createElement("h4");
-      header.className = "analysis-image-group-header";
-      header.textContent = label;
-      section.appendChild(header);
+      // Only show the image group header when there are multiple groups
+      // (skip the header for __single__ fallback in single-image mode).
+      if (groupOrder.length > 1 || imgId !== "__single__") {
+        const header = document.createElement("h4");
+        header.className = "analysis-image-group-header";
+        header.textContent = label;
+        section.appendChild(header);
+      }
 
       items.forEach(function(r) {
         section.appendChild(buildAnalysisCard(r));
@@ -552,11 +568,19 @@
     groupOrder.forEach(function(imgId, gi) {
       const items = groups[imgId];
       if (!items || !items.length) return;
-      const label = items[0].imageLabel || imgId;
+      const label = items[0].imageLabel || (imgId === "__single__" ? "Analysis" : imgId);
 
       const imageSection = document.createElement("details");
       imageSection.className = "findings-image-group";
       imageSection.open = gi === 0;
+      // For single-group __single__ fallback, render as a plain div
+      // instead of a collapsible details to avoid showing the label.
+      if (groupOrder.length === 1 && imgId === "__single__") {
+        items.forEach(function(r, i) {
+          el.findings.appendChild(buildFindingsDetails(r, gi === 0 && i === 0));
+        });
+        return;
+      }
       const imageSummary = document.createElement("summary");
       imageSummary.className = "findings-image-group-header";
       imageSummary.textContent = label;
