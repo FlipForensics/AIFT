@@ -19,6 +19,7 @@ from app.analyzer.multi_image import (
     _build_image_metadata_table,
     _build_per_image_summaries_text,
     _register_image_csv_paths,
+    _wrap_image_progress_callback,
     build_cross_image_prompt,
     run_multi_image_analysis,
 )
@@ -573,4 +574,257 @@ class TestArtifactCsvPathsClearedBetweenImages:
             path2 = path2[0]
         assert str(path1) != str(path2), (
             f"img2 used the same CSV path as img1: {path1}"
+        )
+
+
+class TestWrapImageProgressCallback:
+    """Tests for _wrap_image_progress_callback helper.
+
+    Verifies that the wrapper injects image_id and image_label into
+    progress payloads for both three-arg and single-dict calling
+    conventions, preventing the frontend from falling back to
+    ``__single__`` grouping.
+    """
+
+    def test_three_arg_convention_injects_fields(self) -> None:
+        """Three-arg callback receives image_id/image_label in the payload."""
+        captured: list[tuple[str, str, dict]] = []
+
+        def raw_cb(key: str, status: str, payload: dict) -> None:
+            """Capture call arguments."""
+            captured.append((key, status, payload))
+
+        wrapped = _wrap_image_progress_callback(raw_cb, "img-42", "Server-DC01")
+        wrapped("prefetch", "started", {"artifact_key": "prefetch", "model": "test"})
+
+        assert len(captured) == 1
+        key, status, payload = captured[0]
+        assert key == "prefetch"
+        assert status == "started"
+        assert payload["image_id"] == "img-42"
+        assert payload["image_label"] == "Server-DC01"
+        # Original fields preserved
+        assert payload["artifact_key"] == "prefetch"
+        assert payload["model"] == "test"
+
+    def test_three_arg_does_not_overwrite_existing_image_id(self) -> None:
+        """Wrapper overwrites payload image_id with the wrapped value."""
+        captured: list[tuple[str, str, dict]] = []
+
+        def raw_cb(key: str, status: str, payload: dict) -> None:
+            captured.append((key, status, payload))
+
+        wrapped = _wrap_image_progress_callback(raw_cb, "img-new", "NewLabel")
+        wrapped("evtx", "complete", {"image_id": "old-id", "image_label": "OldLabel"})
+
+        payload = captured[0][2]
+        assert payload["image_id"] == "img-new"
+        assert payload["image_label"] == "NewLabel"
+
+    def test_single_dict_convention_injects_fields(self) -> None:
+        """Single-dict callback receives image_id/image_label inside result."""
+        captured: list[dict] = []
+
+        def raw_cb(event: dict) -> None:
+            captured.append(event)
+
+        # _wrap_image_progress_callback checks len(args): a single dict
+        # arg goes through the single-dict branch.
+        wrapped = _wrap_image_progress_callback(raw_cb, "img-99", "WS-PC01")
+        wrapped({
+            "artifact_key": "runkeys",
+            "status": "started",
+            "result": {"artifact_key": "runkeys", "model": "test"},
+        })
+
+        assert len(captured) == 1
+        result = captured[0]["result"]
+        assert result["image_id"] == "img-99"
+        assert result["image_label"] == "WS-PC01"
+        assert result["artifact_key"] == "runkeys"
+
+    def test_passthrough_for_unknown_convention(self) -> None:
+        """Non-standard call signatures are forwarded unchanged."""
+        captured: list[tuple] = []
+
+        def raw_cb(*args: Any) -> None:
+            captured.append(args)
+
+        wrapped = _wrap_image_progress_callback(raw_cb, "img-1", "Label")
+        wrapped("solo-string")
+
+        assert len(captured) == 1
+        assert captured[0] == ("solo-string",)
+
+    def test_non_dict_payload_forwarded(self) -> None:
+        """Three-arg call with non-dict payload is forwarded as-is."""
+        captured: list[tuple] = []
+
+        def raw_cb(key: str, status: str, payload: Any) -> None:
+            captured.append((key, status, payload))
+
+        wrapped = _wrap_image_progress_callback(raw_cb, "img-1", "L")
+        wrapped("key", "started", "not-a-dict")
+
+        assert len(captured) == 1
+        assert captured[0][2] == "not-a-dict"
+
+
+class TestProgressEventsIncludeImageContext:
+    """End-to-end test: all progress events carry image_id and artifact_key.
+
+    Regression test for the bugs where "started" events from
+    analyze_artifact() lacked image_id (causing __single__ grouping)
+    and summary events lacked artifact_key (causing artifact_N labels).
+    """
+
+    def test_all_started_events_have_image_id(self, tmp_path: Path) -> None:
+        """Every 'started' progress event must include image_id."""
+        provider = FakeProvider(responses=["resp"] * 10)
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.ai_provider = provider
+
+        img1 = _make_image(tmp_path, "img1", "WS01", ["runkeys"])
+
+        events: list[tuple[str, str, dict]] = []
+
+        def progress_cb(key: str, status: str, payload: dict) -> None:
+            events.append((key, status, payload))
+
+        analyzer.run_multi_image_analysis(
+            images=[img1],
+            investigation_context="Test",
+            progress_callback=progress_cb,
+        )
+
+        started_events = [e for e in events if e[1] == "started"]
+        assert len(started_events) >= 1, "Expected at least one 'started' event"
+
+        for key, status, payload in started_events:
+            # Artifact-level started events (not summary/cross) should
+            # have image_id injected by the wrapper.
+            if not key.startswith("summary_") and key != "cross_image_correlation":
+                assert payload.get("image_id") == "img1", (
+                    f"'started' event for {key!r} missing image_id: {payload}"
+                )
+
+    def test_all_started_events_have_image_label(self, tmp_path: Path) -> None:
+        """Every artifact 'started' event must include image_label."""
+        provider = FakeProvider(responses=["resp"] * 10)
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.ai_provider = provider
+
+        img1 = _make_image(tmp_path, "img1", "WorkStation-01", ["services"])
+
+        events: list[tuple[str, str, dict]] = []
+
+        def progress_cb(key: str, status: str, payload: dict) -> None:
+            events.append((key, status, payload))
+
+        analyzer.run_multi_image_analysis(
+            images=[img1],
+            investigation_context="Test",
+            progress_callback=progress_cb,
+        )
+
+        artifact_started = [
+            e for e in events
+            if e[1] == "started" and not e[0].startswith("summary_") and e[0] != "cross_image_correlation"
+        ]
+        for key, status, payload in artifact_started:
+            assert payload.get("image_label") == "WorkStation-01", (
+                f"'started' event for {key!r} missing image_label: {payload}"
+            )
+
+    def test_summary_events_have_artifact_key(self, tmp_path: Path) -> None:
+        """Summary progress events must include artifact_key in their payload."""
+        provider = FakeProvider(responses=["resp"] * 10)
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.ai_provider = provider
+
+        img1 = _make_image(tmp_path, "img1", "WS01", ["runkeys"])
+
+        events: list[tuple[str, str, dict]] = []
+
+        def progress_cb(key: str, status: str, payload: dict) -> None:
+            events.append((key, status, payload))
+
+        analyzer.run_multi_image_analysis(
+            images=[img1],
+            investigation_context="Test",
+            progress_callback=progress_cb,
+        )
+
+        summary_events = [e for e in events if e[0].startswith("summary_")]
+        assert len(summary_events) >= 1, "Expected at least one summary event"
+
+        for key, status, payload in summary_events:
+            assert "artifact_key" in payload, (
+                f"Summary event {key!r} ({status}) missing artifact_key: {payload}"
+            )
+            assert "artifact_name" in payload, (
+                f"Summary event {key!r} ({status}) missing artifact_name: {payload}"
+            )
+
+    def test_cross_image_events_have_artifact_key(self, tmp_path: Path) -> None:
+        """Cross-image correlation events must include artifact_key in payload."""
+        provider = FakeProvider(responses=["resp"] * 10)
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.ai_provider = provider
+
+        img1 = _make_image(tmp_path, "img1", "WS01", ["runkeys"])
+        img2 = _make_image(tmp_path, "img2", "SRV01", ["services"])
+
+        events: list[tuple[str, str, dict]] = []
+
+        def progress_cb(key: str, status: str, payload: dict) -> None:
+            events.append((key, status, payload))
+
+        analyzer.run_multi_image_analysis(
+            images=[img1, img2],
+            investigation_context="Test",
+            progress_callback=progress_cb,
+        )
+
+        cross_events = [e for e in events if e[0] == "cross_image_correlation"]
+        assert len(cross_events) >= 1, "Expected cross-image correlation events"
+
+        for key, status, payload in cross_events:
+            assert "artifact_key" in payload, (
+                f"Cross-image event ({status}) missing artifact_key: {payload}"
+            )
+            assert payload["artifact_key"] == "cross_image_correlation"
+
+    def test_multi_image_started_events_have_correct_image_ids(self, tmp_path: Path) -> None:
+        """With two images, each artifact's started event has the correct image_id."""
+        provider = FakeProvider(responses=["resp"] * 10)
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.ai_provider = provider
+
+        img1 = _make_image(tmp_path, "img1", "WS01", ["runkeys"])
+        img2 = _make_image(tmp_path, "img2", "SRV01", ["runkeys"])
+
+        events: list[tuple[str, str, dict]] = []
+
+        def progress_cb(key: str, status: str, payload: dict) -> None:
+            events.append((key, status, payload))
+
+        analyzer.run_multi_image_analysis(
+            images=[img1, img2],
+            investigation_context="Test",
+            progress_callback=progress_cb,
+        )
+
+        # Collect all "started" events for the "runkeys" artifact.
+        runkey_started = [
+            e for e in events
+            if e[0] == "runkeys" and e[1] == "started"
+        ]
+        assert len(runkey_started) == 2, (
+            f"Expected 2 started events for runkeys across 2 images, got {len(runkey_started)}"
+        )
+
+        image_ids = {e[2].get("image_id") for e in runkey_started}
+        assert image_ids == {"img1", "img2"}, (
+            f"Expected started events for img1 and img2, got {image_ids}"
         )

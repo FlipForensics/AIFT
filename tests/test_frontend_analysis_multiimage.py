@@ -510,5 +510,97 @@ class TestMultiImageExecSummaryJSCleanup(unittest.TestCase):
                         "Cleanup of old per-image-summaries should happen before appending new ones")
 
 
+class TestAnalysisJSFieldCarryOver(unittest.TestCase):
+    """Verify that analysis.js carries over artifact_key/image_id from parent events.
+
+    Regression tests for bugs where:
+    - ``p.result`` lacked ``artifact_key``, causing ``artifact_N`` fallback keys.
+    - ``p.result`` lacked ``image_id``, causing ``__single__`` grouping.
+
+    The fix adds defensive field carry-over in onAnalysisEvent for all
+    three event types: started, thinking, completed.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Read the analysis.js source file."""
+        js_path = Path(__file__).resolve().parents[1] / "static" / "js" / "analysis.js"
+        cls.js_content = js_path.read_text(encoding="utf-8")
+
+    def test_started_event_carries_over_artifact_key(self) -> None:
+        """artifact_analysis_started handler carries artifact_key from p to r."""
+        self.assertIn(
+            "if (!r.artifact_key && p.artifact_key) r.artifact_key = p.artifact_key",
+            self.js_content,
+        )
+
+    def test_started_event_carries_over_image_id(self) -> None:
+        """artifact_analysis_started handler carries image_id from p to r."""
+        self.assertIn(
+            "if (!r.image_id && p.image_id) r.image_id = p.image_id",
+            self.js_content,
+        )
+
+    def test_started_event_carries_over_image_label(self) -> None:
+        """artifact_analysis_started handler carries image_label from p to r."""
+        self.assertIn(
+            "if (!r.image_label && p.image_label) r.image_label = p.image_label",
+            self.js_content,
+        )
+
+    def test_thinking_event_carries_over_fields(self) -> None:
+        """artifact_analysis_thinking handler carries over all three fields."""
+        # Find the thinking block and verify it has the carry-over lines.
+        idx = self.js_content.index('"artifact_analysis_thinking"')
+        block = self.js_content[idx:idx + 500]
+        self.assertIn("rt.artifact_key = p.artifact_key", block)
+        self.assertIn("rt.image_id = p.image_id", block)
+        self.assertIn("rt.image_label = p.image_label", block)
+
+    def test_completed_event_carries_over_fields(self) -> None:
+        """artifact_analysis_completed handler carries over all three fields."""
+        idx = self.js_content.index('"artifact_analysis_completed"')
+        block = self.js_content[idx:idx + 500]
+        self.assertIn("rc.artifact_key = p.artifact_key", block)
+        self.assertIn("rc.image_id = p.image_id", block)
+        self.assertIn("rc.image_label = p.image_label", block)
+
+
+class TestAnalysisJSSingleFallbackHandling(unittest.TestCase):
+    """Verify that __single__ is not shown as a visible group header.
+
+    Regression tests for the bug where single-image entries without
+    image_id were grouped under a visible "__single__" header in the
+    multi-image renderer.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Read the analysis.js source file."""
+        js_path = Path(__file__).resolve().parents[1] / "static" / "js" / "analysis.js"
+        cls.js_content = js_path.read_text(encoding="utf-8")
+
+    def test_render_multi_image_analysis_suppresses_single_header(self) -> None:
+        """renderMultiImageAnalysis skips the header when the only group is __single__."""
+        # The renderer should check groupOrder.length before adding a header.
+        idx = self.js_content.index("function renderMultiImageAnalysis")
+        block = self.js_content[idx:idx + 1500]
+        self.assertIn('imgId !== "__single__"', block)
+        self.assertIn("groupOrder.length > 1", block)
+
+    def test_render_multi_image_findings_handles_single_gracefully(self) -> None:
+        """renderMultiImageFindings does not wrap __single__ group in a details/summary."""
+        idx = self.js_content.index("function renderMultiImageFindings")
+        block = self.js_content[idx:idx + 1500]
+        self.assertIn('imgId === "__single__"', block)
+
+    def test_single_fallback_label_is_analysis_not_raw(self) -> None:
+        """When __single__ is the only group, the label should be 'Analysis', not '__single__'."""
+        # Both renderers use: imgId === "__single__" ? "Analysis" : imgId
+        count = self.js_content.count('imgId === "__single__" ? "Analysis" : imgId')
+        self.assertGreaterEqual(count, 2,
+                                "Both renderers should map __single__ to 'Analysis'")
+
+
 if __name__ == "__main__":
     unittest.main()
