@@ -596,6 +596,7 @@ def prepare_artifact_data(
     case_dir: Path | None,
     audit_log_fn: Any = None,
     date_range: tuple[str, str] | None = None,
+    host_metadata: Mapping[str, Any] | None = None,
 ) -> tuple[str, Path, list[str]]:
     """Prepare one artifact CSV as an analysis-ready prompt.
 
@@ -626,6 +627,8 @@ def prepare_artifact_data(
         audit_log_fn: Optional callable ``(action, details)`` for audit.
         date_range: Optional 2-tuple of ``(start_date_str, end_date_str)``
             for date-based row filtering.  ``None`` skips date filtering.
+        host_metadata: Optional host metadata mapping with ``hostname``,
+            ``domain``, and ``ips`` keys for populating prompt context.
 
     Returns:
         A 3-tuple of ``(prompt_text, analysis_csv_path, analysis_columns)``.
@@ -740,10 +743,14 @@ def prepare_artifact_data(
         artifact_instruction_prompts=artifact_instruction_prompts,
     )
 
+    meta = host_metadata if isinstance(host_metadata, Mapping) else {}
     replacements = {
         "priority_directives": priority_directives,
         "investigation_context": investigation_context.strip() or "No investigation context provided.",
         "ioc_targets": ioc_targets,
+        "hostname": str(meta.get("hostname", "Unknown")),
+        "domain": str(meta.get("domain", "Unknown")),
+        "ips": str(meta.get("ips", "Unknown")),
         "artifact_key": artifact_key,
         "artifact_name": artifact_metadata.get("name", artifact_key),
         "artifact_description": artifact_metadata.get("description", "No artifact description available."),

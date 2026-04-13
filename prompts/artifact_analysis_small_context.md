@@ -3,6 +3,9 @@
 ## Investigation Context
 {{investigation_context}}
 
+## Host
+{{hostname}} | Domain: {{domain}} | IP(s): {{ips}}
+
 ## Artifact: {{artifact_name}}
 {{artifact_description}}
 

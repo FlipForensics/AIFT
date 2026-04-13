@@ -68,8 +68,8 @@ def _build_image_metadata_table(images: list[dict[str, Any]]) -> str:
         A Markdown-formatted table string.
     """
     lines = [
-        "| # | Image ID | Label | Hostname | OS | Domain |",
-        "|---|----------|-------|----------|----|--------|",
+        "| # | Image ID | Label | Hostname | OS | Domain | IP(s) |",
+        "|---|----------|-------|----------|----|--------|-------|",
     ]
     for index, image in enumerate(images, start=1):
         image_id = str(image.get("image_id", "unknown"))
@@ -78,8 +78,9 @@ def _build_image_metadata_table(images: list[dict[str, Any]]) -> str:
         hostname = str(meta.get("hostname", "Unknown"))
         os_version = str(meta.get("os_version", meta.get("os_type", "Unknown")))
         domain = str(meta.get("domain", "Unknown"))
+        ips = str(meta.get("ips", "Unknown"))
         lines.append(
-            f"| {index} | {image_id} | {label} | {hostname} | {os_version} | {domain} |"
+            f"| {index} | {image_id} | {label} | {hostname} | {os_version} | {domain} | {ips} |"
         )
     return "\n".join(lines)
 
@@ -280,12 +281,13 @@ def run_multi_image_analysis(
                 if cancel_check is not None and cancel_check():
                     raise AnalysisCancelledError("Analysis cancelled by user.")
 
-                # Update the analyzer's os_type for the current image so
-                # that OS-specific analysis logic uses the correct
-                # operating system.
+                # Update the analyzer's os_type and host metadata for
+                # the current image so that OS-specific analysis logic
+                # and prompt host context use the correct values.
                 analyzer.os_type = str(
                     metadata.get("os_type", "unknown")
                 )
+                analyzer._host_metadata = metadata
 
                 # Apply the user-configured date range filter so that
                 # per-artifact data preparation honours it, matching

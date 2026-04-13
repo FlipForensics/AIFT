@@ -793,6 +793,7 @@ class ForensicAnalyzer:
             case_dir=self.case_dir,
             audit_log_fn=self._audit_log,
             date_range=self.analysis_date_range,
+            host_metadata=getattr(self, "_host_metadata", None),
         )
         self._set_analysis_input_csv_path(artifact_key=artifact_key, csv_path=analysis_csv_path)
         return prompt_text
@@ -1069,6 +1070,7 @@ class ForensicAnalyzer:
             raise AIProviderError(self.ai_provider._error_message)
 
         self._register_artifact_paths_from_metadata(metadata)
+        self._host_metadata: Mapping[str, Any] | None = metadata
         per_artifact_results: list[dict[str, Any]] = []
         for artifact_key in artifact_keys:
             if cancel_check is not None and cancel_check():

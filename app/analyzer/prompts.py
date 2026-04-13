@@ -248,6 +248,7 @@ def build_summary_prompt(
         "os_version": str(metadata_map.get("os_version", "Unknown")),
         "os_type": str(metadata_map.get("os_type", "Unknown")),
         "domain": str(metadata_map.get("domain", "Unknown")),
+        "ips": str(metadata_map.get("ips", "Unknown")),
         "per_artifact_findings": findings_text,
     }
     for placeholder, value in replacements.items():
