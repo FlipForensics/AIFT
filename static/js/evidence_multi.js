@@ -750,7 +750,12 @@
    *
    * Reads the checked state and mode of every artifact checkbox in the
    * currently active tab panel, then mirrors that state across all other
-   * image panels.  Only visible in multi-image mode.
+   * image panels.  Only artifacts that exist in the source panel are
+   * synced — OS-specific artifacts that only appear in the target panel
+   * (e.g. Linux artifacts on a Windows source) are left untouched so
+   * that mixed-OS selections are not accidentally wiped out.
+   *
+   * Only visible in multi-image mode.
    */
   function applyCurrentSelectionToAllImages() {
     if (!isMultiImage()) return;
@@ -776,26 +781,25 @@
       });
     });
 
-    /* Apply to every other panel. */
+    /* Apply to every other panel.  Only touch artifacts that exist in the
+       source panel — OS-specific artifacts unique to the target are left
+       as-is so mixed-OS configurations are preserved. */
     panelsContainer.querySelectorAll(".artifact-image-panel").forEach((panel) => {
       if (panel.dataset.imageId === activeId) return;
       panel.querySelectorAll("input[type='checkbox'][data-artifact-key]").forEach((cb) => {
         const key = String(cb.dataset.artifactKey || "").trim();
         if (!key) return;
         const entry = selectionMap.get(key);
+        /* Artifact not in source panel — leave target state untouched. */
+        if (!entry) return;
         const select = A.ensureArtifactModeControl(cb, A.MODE_PARSE_AND_AI);
         if (cb.disabled) {
           cb.checked = false;
           if (select) select.value = A.MODE_PARSE_AND_AI;
           return A.syncArtifactModeControl(cb, select);
         }
-        if (entry) {
-          cb.checked = entry.checked;
-          if (select) select.value = entry.mode;
-        } else {
-          cb.checked = false;
-          if (select) select.value = A.MODE_PARSE_AND_AI;
-        }
+        cb.checked = entry.checked;
+        if (select) select.value = entry.mode;
         A.syncArtifactModeControl(cb, select);
       });
     });

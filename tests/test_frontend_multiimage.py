@@ -315,6 +315,20 @@ class TestApplyAllButtonsJsLogic(unittest.TestCase):
         self.assertIn("el.applyRecommendedAllBtn.hidden = false", self.js_multi)
         self.assertIn("el.applySelectionAllBtn.hidden = false", self.js_multi)
 
+    def test_apply_current_selection_skips_os_specific_artifacts(self) -> None:
+        """applyCurrentSelectionToAllImages should leave OS-specific artifacts untouched.
+
+        When the source panel is a Windows image and the target is Linux (or
+        vice-versa), artifacts that only exist in the target panel should not
+        be cleared.  The code should return early when the artifact key is
+        absent from selectionMap.
+        """
+        self.assertIn("if (!entry) return", self.js_multi)
+
+    def test_apply_current_selection_docstring_mentions_mixed_os(self) -> None:
+        """The docstring should document the mixed-OS safety behaviour."""
+        self.assertIn("OS-specific artifacts", self.js_multi)
+
 
 if __name__ == "__main__":
     unittest.main()
