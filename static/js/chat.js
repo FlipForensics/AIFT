@@ -540,10 +540,10 @@
     st.chat.displayedCount = 0;
     if (el.chatInput) { el.chatInput.disabled = false; el.chatInput.value = ""; }
     if (el.chatSend) el.chatSend.disabled = false;
-    if (el.chatPanel) el.chatPanel.hidden = true;
+    if (el.chatPanel) el.chatPanel.hidden = false;
     if (el.chatToggle) {
-      el.chatToggle.setAttribute("aria-expanded", "false");
-      el.chatToggle.textContent = "Show Chat";
+      el.chatToggle.setAttribute("aria-expanded", "true");
+      el.chatToggle.textContent = "Hide Chat";
     }
     renderChatEmptyState();
     syncChatControls();
