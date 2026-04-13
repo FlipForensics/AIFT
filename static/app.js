@@ -72,6 +72,8 @@
     el.profileSaveBtn = q("artifact-profile-save");
     el.quickBtn = q("preset-quick-triage");
     el.clearBtn = q("preset-clear-all");
+    el.applyRecommendedAllBtn = q("apply-recommended-all");
+    el.applySelectionAllBtn = q("apply-selection-all");
     el.parseBtn = q("parse-selected");
     el.analysisDateStart = q("analysis-date-start");
     el.analysisDateEnd = q("analysis-date-end");

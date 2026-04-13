@@ -134,6 +134,27 @@ class TestMultiImageTemplate(unittest.TestCase):
         """The remove button on the first card should be hidden."""
         self.assertIn('class="image-remove-btn" data-image-index="0" hidden', self.html)
 
+    def test_apply_recommended_all_button_exists(self) -> None:
+        """The 'Apply Recommended to All' button should be present and hidden."""
+        self.assertIn('id="apply-recommended-all"', self.html)
+        self.assertIn("Apply Recommended to All", self.html)
+
+    def test_apply_selection_all_button_exists(self) -> None:
+        """The 'Apply Current Selection to All' button should be present and hidden."""
+        self.assertIn('id="apply-selection-all"', self.html)
+        self.assertIn("Apply Current Selection to All", self.html)
+
+    def test_apply_all_buttons_hidden_by_default(self) -> None:
+        """Both apply-all buttons should be hidden by default (single-image mode)."""
+        self.assertRegex(
+            self.html,
+            r'id="apply-recommended-all"[^>]*hidden',
+        )
+        self.assertRegex(
+            self.html,
+            r'id="apply-selection-all"[^>]*hidden',
+        )
+
 
 class TestMultiImageJsExports(unittest.TestCase):
     """Verify that the JS modules expose multi-image management functions."""
@@ -170,6 +191,14 @@ class TestMultiImageJsExports(unittest.TestCase):
         self.assertIn("/images", self.js_multi_content)
         self.assertIn("/evidence", self.js_multi_content)
 
+    def test_apply_recommended_to_all_exported(self) -> None:
+        """The applyRecommendedToAllImages function should be exported."""
+        self.assertIn("A.applyRecommendedToAllImages", self.js_multi_content)
+
+    def test_apply_current_selection_to_all_exported(self) -> None:
+        """The applyCurrentSelectionToAllImages function should be exported."""
+        self.assertIn("A.applyCurrentSelectionToAllImages", self.js_multi_content)
+
 
 class TestMultiImageCss(unittest.TestCase):
     """Verify that the CSS includes styles for multi-image elements."""
@@ -203,6 +232,88 @@ class TestMultiImageCss(unittest.TestCase):
     def test_evidence_summaries_styled(self) -> None:
         """The #evidence-summaries-list should be styled."""
         self.assertIn("#evidence-summaries-list", self.css_content)
+
+    def test_apply_recommended_all_styled(self) -> None:
+        """The #apply-recommended-all button should be styled."""
+        self.assertIn("#apply-recommended-all", self.css_content)
+
+    def test_apply_selection_all_styled(self) -> None:
+        """The #apply-selection-all button should be styled."""
+        self.assertIn("#apply-selection-all", self.css_content)
+
+
+class TestApplyAllButtonsJsLogic(unittest.TestCase):
+    """Verify that the JS code for apply-all buttons has the expected logic."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Read the JS files for logic inspection."""
+        js_dir = Path(__file__).resolve().parent.parent / "static" / "js"
+        cls.js_multi = (js_dir / "evidence_multi.js").read_text(encoding="utf-8")
+        cls.js_evidence = (js_dir / "evidence.js").read_text(encoding="utf-8")
+        app_js_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        cls.app_js = app_js_path.read_text(encoding="utf-8")
+
+    def test_apply_recommended_all_checks_multi_image(self) -> None:
+        """applyRecommendedToAllImages should guard on isMultiImage()."""
+        self.assertIn("if (!isMultiImage()) return", self.js_multi)
+
+    def test_apply_recommended_all_iterates_panels(self) -> None:
+        """applyRecommendedToAllImages should iterate all image panels."""
+        self.assertIn('panels.forEach', self.js_multi)
+
+    def test_apply_recommended_all_uses_exclusion_set(self) -> None:
+        """applyRecommendedToAllImages should use RECOMMENDED_PRESET_EXCLUDED_ARTIFACTS."""
+        # The function should reference the exclusion set to decide which artifacts to check
+        self.assertIn("RECOMMENDED_PRESET_EXCLUDED_ARTIFACTS", self.js_multi)
+
+    def test_apply_current_selection_reads_active_panel(self) -> None:
+        """applyCurrentSelectionToAllImages should read from the active tab panel."""
+        self.assertIn("activeArtifactTabImageId()", self.js_multi)
+
+    def test_apply_current_selection_builds_selection_map(self) -> None:
+        """applyCurrentSelectionToAllImages should build a map of selections."""
+        self.assertIn("selectionMap", self.js_multi)
+
+    def test_apply_current_selection_skips_active_panel(self) -> None:
+        """applyCurrentSelectionToAllImages should skip the source (active) panel."""
+        self.assertIn("panel.dataset.imageId === activeId", self.js_multi)
+
+    def test_apply_current_selection_applies_mode(self) -> None:
+        """applyCurrentSelectionToAllImages should copy both checked state and mode."""
+        self.assertIn("entry.checked", self.js_multi)
+        self.assertIn("entry.mode", self.js_multi)
+
+    def test_both_functions_call_update_parse_button(self) -> None:
+        """Both apply-all functions should call updateParseButton after applying."""
+        # Count occurrences of updateParseButton in the apply-all functions
+        # Both applyRecommendedToAllImages and applyCurrentSelectionToAllImages call it
+        self.assertGreaterEqual(
+            self.js_multi.count("A.updateParseButton()"),
+            2,
+            "Both apply-all functions should call A.updateParseButton()",
+        )
+
+    def test_buttons_cached_in_app_js(self) -> None:
+        """The apply-all buttons should be cached in app.js DOM cache."""
+        self.assertIn('q("apply-recommended-all")', self.app_js)
+        self.assertIn('q("apply-selection-all")', self.app_js)
+
+    def test_buttons_wired_in_setup_artifacts(self) -> None:
+        """The apply-all buttons should have click handlers wired in evidence.js."""
+        self.assertIn("applyRecommendedToAllImages", self.js_evidence)
+        self.assertIn("applyCurrentSelectionToAllImages", self.js_evidence)
+
+    def test_visibility_toggled_for_single_image(self) -> None:
+        """buildMultiImageArtifactTabs should hide buttons for single-image mode."""
+        self.assertIn("applyRecommendedAllBtn", self.js_multi)
+        self.assertIn("applySelectionAllBtn", self.js_multi)
+
+    def test_visibility_toggled_for_multi_image(self) -> None:
+        """buildMultiImageArtifactTabs should show buttons for multi-image mode."""
+        # Both el.applyRecommendedAllBtn.hidden = false and el.applySelectionAllBtn.hidden = false
+        self.assertIn("el.applyRecommendedAllBtn.hidden = false", self.js_multi)
+        self.assertIn("el.applySelectionAllBtn.hidden = false", self.js_multi)
 
 
 if __name__ == "__main__":

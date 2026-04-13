@@ -676,6 +676,12 @@
       if (A.isMultiImage()) return A.applyPresetMultiAware("clear");
       return applyPreset("clear");
     });
+    if (el.applyRecommendedAllBtn) {
+      el.applyRecommendedAllBtn.addEventListener("click", () => A.applyRecommendedToAllImages());
+    }
+    if (el.applySelectionAllBtn) {
+      el.applySelectionAllBtn.addEventListener("click", () => A.applyCurrentSelectionToAllImages());
+    }
     if (el.profileLoadBtn) el.profileLoadBtn.addEventListener("click", () => applySelectedProfile());
     if (el.profileSaveBtn) el.profileSaveBtn.addEventListener("click", async () => saveCurrentProfile());
     el.artifactsForm.addEventListener("submit", async (e) => {

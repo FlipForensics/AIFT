@@ -519,12 +519,18 @@
       panelsContainer.innerHTML = "";
       /* Show the main artifact form for single-image. */
       if (el.artifactsForm) el.artifactsForm.hidden = false;
+      /* Hide multi-image-only buttons. */
+      if (el.applyRecommendedAllBtn) el.applyRecommendedAllBtn.hidden = true;
+      if (el.applySelectionAllBtn) el.applySelectionAllBtn.hidden = true;
       return;
     }
 
     /* Hide the main artifact form — each tab has its own copy. */
     if (el.artifactsForm) el.artifactsForm.hidden = true;
     tabContainer.hidden = false;
+    /* Show multi-image-only buttons. */
+    if (el.applyRecommendedAllBtn) el.applyRecommendedAllBtn.hidden = false;
+    if (el.applySelectionAllBtn) el.applySelectionAllBtn.hidden = false;
 
     st.images.forEach((img, idx) => {
       const imgId = img.image_id;
@@ -709,6 +715,93 @@
     A.updateParseButton();
   }
 
+  /**
+   * Apply the recommended preset to every image tab panel.
+   *
+   * Iterates all per-image panels and checks/unchecks artifacts according
+   * to the recommended preset rules (excludes MFT, USN Journal, EVTX,
+   * Defender Logs).  Only visible in multi-image mode.
+   */
+  function applyRecommendedToAllImages() {
+    if (!isMultiImage()) return;
+    const panelsContainer = q("artifact-image-panels");
+    if (!panelsContainer) return;
+    const panels = panelsContainer.querySelectorAll(".artifact-image-panel");
+    panels.forEach((panel) => {
+      panel.querySelectorAll("input[type='checkbox'][data-artifact-key]").forEach((cb) => {
+        const select = A.ensureArtifactModeControl(cb, A.MODE_PARSE_AND_AI);
+        if (cb.disabled) {
+          cb.checked = false;
+          if (select) select.value = A.MODE_PARSE_AND_AI;
+          return A.syncArtifactModeControl(cb, select);
+        }
+        cb.checked = !A.RECOMMENDED_PRESET_EXCLUDED_ARTIFACTS.has(
+          String(cb.dataset.artifactKey || "").trim().toLowerCase(),
+        );
+        if (select) select.value = A.MODE_PARSE_AND_AI;
+        A.syncArtifactModeControl(cb, select);
+      });
+    });
+    A.updateParseButton();
+  }
+
+  /**
+   * Apply the current active tab's artifact selection to all other image tabs.
+   *
+   * Reads the checked state and mode of every artifact checkbox in the
+   * currently active tab panel, then mirrors that state across all other
+   * image panels.  Only visible in multi-image mode.
+   */
+  function applyCurrentSelectionToAllImages() {
+    if (!isMultiImage()) return;
+    const activeId = activeArtifactTabImageId();
+    if (!activeId) return;
+    const panelsContainer = q("artifact-image-panels");
+    if (!panelsContainer) return;
+
+    /* Build a map of artifact_key → {checked, mode} from the active panel. */
+    const activePanel = panelsContainer.querySelector(
+      `.artifact-image-panel[data-image-id="${CSS.escape(activeId)}"]`,
+    );
+    if (!activePanel) return;
+    const selectionMap = new Map();
+    activePanel.querySelectorAll("input[type='checkbox'][data-artifact-key]").forEach((cb) => {
+      const key = String(cb.dataset.artifactKey || "").trim();
+      if (!key) return;
+      const li = cb.closest("li");
+      const select = li ? li.querySelector("select.artifact-mode-select") : null;
+      selectionMap.set(key, {
+        checked: cb.checked,
+        mode: A.artifactModeValue(select ? select.value : A.MODE_PARSE_AND_AI),
+      });
+    });
+
+    /* Apply to every other panel. */
+    panelsContainer.querySelectorAll(".artifact-image-panel").forEach((panel) => {
+      if (panel.dataset.imageId === activeId) return;
+      panel.querySelectorAll("input[type='checkbox'][data-artifact-key]").forEach((cb) => {
+        const key = String(cb.dataset.artifactKey || "").trim();
+        if (!key) return;
+        const entry = selectionMap.get(key);
+        const select = A.ensureArtifactModeControl(cb, A.MODE_PARSE_AND_AI);
+        if (cb.disabled) {
+          cb.checked = false;
+          if (select) select.value = A.MODE_PARSE_AND_AI;
+          return A.syncArtifactModeControl(cb, select);
+        }
+        if (entry) {
+          cb.checked = entry.checked;
+          if (select) select.value = entry.mode;
+        } else {
+          cb.checked = false;
+          if (select) select.value = A.MODE_PARSE_AND_AI;
+        }
+        A.syncArtifactModeControl(cb, select);
+      });
+    });
+    A.updateParseButton();
+  }
+
   // ── Public API ─────────────────────────────────────────────────────────
   A.submitEvidence = submitEvidence;
   A.addImageForm = addImageForm;
@@ -721,4 +814,6 @@
   A.allImageArtifactSelections = allImageArtifactSelections;
   A.isMultiImage = isMultiImage;
   A.applyPresetMultiAware = applyPresetMultiAware;
+  A.applyRecommendedToAllImages = applyRecommendedToAllImages;
+  A.applyCurrentSelectionToAllImages = applyCurrentSelectionToAllImages;
 })();

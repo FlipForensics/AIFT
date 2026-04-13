@@ -361,7 +361,9 @@ button:disabled {
 #preset-quick-triage,
 #artifact-profile-load,
 #download-csvs,
-#new-analysis {
+#new-analysis,
+#apply-recommended-all,
+#apply-selection-all {
   background: transparent;
   border-color: var(--accent);
   color: var(--accent);
