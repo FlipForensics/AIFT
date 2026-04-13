@@ -11,6 +11,7 @@
  *  - validateAnalysisDateRange validation logic
  *  - updateParseButton button state and label
  *  - clearDynamicArtifacts removes dynamic category
+ *  - parse button visibility in multi-image mode
  *
  * @jest-environment jsdom
  */
@@ -643,6 +644,120 @@ describe("buildMultiImageArtifactTabs", () => {
     A.buildMultiImageArtifactTabs();
     if (A.el.artifactsForm) {
       expect(A.el.artifactsForm.hidden).toBe(false);
+    }
+  });
+});
+
+// ── Parse button visibility in multi-image mode ─────────────────────────────
+
+describe("parse button visibility in multi-image mode", () => {
+  afterEach(() => {
+    A.st.images = [];
+  });
+
+  test("parse button exists outside the artifacts form", () => {
+    const btn = A.el.parseBtn;
+    if (!btn || !A.el.artifactsForm) return;
+    expect(A.el.artifactsForm.contains(btn)).toBe(false);
+  });
+
+  test("parse button is not hidden when multi-image tabs are built", () => {
+    A.st.images = [
+      { image_id: "img1", label: "Image A", available_artifacts: [{ key: "evtx", available: true }] },
+      { image_id: "img2", label: "Image B", available_artifacts: [{ key: "evtx", available: true }] },
+    ];
+    A.buildMultiImageArtifactTabs();
+    if (!A.el.parseBtn) return;
+    expect(A.el.parseBtn.hidden).toBe(false);
+  });
+
+  test("parse button remains visible even though artifacts form is hidden in multi-image mode", () => {
+    A.st.images = [
+      { image_id: "img1", label: "A", available_artifacts: [] },
+      { image_id: "img2", label: "B", available_artifacts: [] },
+    ];
+    A.buildMultiImageArtifactTabs();
+    if (!A.el.parseBtn || !A.el.artifactsForm) return;
+    /* The form itself is hidden for multi-image… */
+    expect(A.el.artifactsForm.hidden).toBe(true);
+    /* …but the parse button must still be visible. */
+    expect(A.el.parseBtn.hidden).toBe(false);
+  });
+
+  test("parse button is visible for single-image mode", () => {
+    A.st.images = [{ image_id: "img1", label: "A", available_artifacts: [] }];
+    A.buildMultiImageArtifactTabs();
+    if (!A.el.parseBtn) return;
+    expect(A.el.parseBtn.hidden).toBe(false);
+  });
+
+  test("parse button stays visible when switching from multi to single image", () => {
+    A.st.images = [
+      { image_id: "img1", label: "A", available_artifacts: [] },
+      { image_id: "img2", label: "B", available_artifacts: [] },
+    ];
+    A.buildMultiImageArtifactTabs();
+    /* Revert to single image. */
+    A.st.images = [{ image_id: "img1", label: "A", available_artifacts: [] }];
+    A.buildMultiImageArtifactTabs();
+    if (!A.el.parseBtn) return;
+    expect(A.el.parseBtn.hidden).toBe(false);
+  });
+
+  test("updateParseButton enables button in multi-image mode with selections", () => {
+    A.st.images = [
+      { image_id: "img1", label: "A", available_artifacts: [{ key: "evtx", available: true }] },
+      { image_id: "img2", label: "B", available_artifacts: [{ key: "evtx", available: true }] },
+    ];
+    A.setCaseId("test-case");
+    A.buildMultiImageArtifactTabs();
+
+    /* Check an artifact in the first image panel. */
+    const panelsContainer = document.getElementById("artifact-image-panels");
+    if (!panelsContainer || !A.el.parseBtn) return;
+    const panel = panelsContainer.querySelector('.artifact-image-panel[data-image-id="img1"]');
+    if (!panel) return;
+    const cb = panel.querySelector("input[type='checkbox'][data-artifact-key]:not(:disabled)");
+    if (!cb) return;
+    cb.checked = true;
+
+    A.updateParseButton();
+    expect(A.el.parseBtn.disabled).toBe(false);
+    expect(A.el.parseBtn.hidden).toBe(false);
+  });
+
+  test("updateParseButton disables button in multi-image mode with no selections", () => {
+    A.st.images = [
+      { image_id: "img1", label: "A", available_artifacts: [{ key: "evtx", available: true }] },
+      { image_id: "img2", label: "B", available_artifacts: [{ key: "evtx", available: true }] },
+    ];
+    A.setCaseId("test-case");
+    A.buildMultiImageArtifactTabs();
+
+    /* Ensure no artifacts are checked. */
+    const panelsContainer = document.getElementById("artifact-image-panels");
+    if (!panelsContainer || !A.el.parseBtn) return;
+    panelsContainer.querySelectorAll("input[type='checkbox']").forEach((cb) => { cb.checked = false; });
+
+    A.updateParseButton();
+    expect(A.el.parseBtn.disabled).toBe(true);
+    /* Button should still be visible even when disabled. */
+    expect(A.el.parseBtn.hidden).toBe(false);
+  });
+
+  test("parse button has click listener that calls submitParse", async () => {
+    if (!A.el.parseBtn) return;
+    /* Stub submitParse to track invocation. */
+    let called = false;
+    const original = A.submitParse;
+    A.submitParse = async () => { called = true; };
+    try {
+      A.el.parseBtn.dispatchEvent(new Event("click"));
+      /* Allow microtask to resolve. */
+      await new Promise((r) => setTimeout(r, 0));
+      expect(called).toBe(true);
+    } finally {
+      A.submitParse = original;
     }
   });
 });

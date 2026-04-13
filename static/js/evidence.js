@@ -451,7 +451,7 @@
         ul.appendChild(li);
       });
       fs.appendChild(ul);
-      el.artifactsForm.insertBefore(fs, el.parseBtn);
+      el.artifactsForm.appendChild(fs);
     }
     ensureArtifactModeControls();
     updateParseButton();
@@ -686,6 +686,9 @@
     if (el.profileSaveBtn) el.profileSaveBtn.addEventListener("click", async () => saveCurrentProfile());
     el.artifactsForm.addEventListener("submit", async (e) => {
       e.preventDefault();
+      await A.submitParse();
+    });
+    if (el.parseBtn) el.parseBtn.addEventListener("click", async () => {
       await A.submitParse();
     });
     if (el.cancelParse) el.cancelParse.addEventListener("click", A.cancelParse);

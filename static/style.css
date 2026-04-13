@@ -707,8 +707,9 @@ input[type="radio"] {
   gap: var(--space-3);
 }
 
-#artifacts-form > #parse-selected {
-  grid-column: 1 / -1;
+#artifact-selection-content > #parse-selected {
+  margin-top: var(--space-3);
+  width: 100%;
 }
 
 .artifact-category {
