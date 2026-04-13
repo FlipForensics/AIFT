@@ -559,13 +559,24 @@
       panel.role = "tabpanel";
       if (idx === 0) panel.classList.add("is-active");
 
-      /* Clone artifact fieldsets from the main form into this panel. */
+      /* Clone artifact fieldsets from the main form into this panel.
+         Use this image's own os_type to decide which OS-specific fieldsets
+         to include, instead of relying on the main form's hidden state
+         (which only reflects the first image's OS). */
+      const imgIsLinux = String(img.os_type || "").trim().toLowerCase() === "linux";
       if (el.artifactsForm) {
         const fieldsets = el.artifactsForm.querySelectorAll("fieldset.artifact-category");
         fieldsets.forEach((fs) => {
-          /* Skip hidden OS-specific fieldsets. */
-          if (fs.hidden) return;
+          const fsOs = String(fs.dataset.os || "").trim().toLowerCase();
+          /* Include fieldsets that match this image's OS:
+             - Linux fieldsets (data-os="linux") only for Linux images
+             - Windows fieldsets (no data-os) only for non-Linux images */
+          if (fsOs === "linux" && !imgIsLinux) return;
+          if (!fsOs && imgIsLinux) return;
           const clone = fs.cloneNode(true);
+          /* Ensure the cloned fieldset is visible (the main form may
+             have hidden it based on the first image's OS). */
+          clone.hidden = false;
           /* Update checkboxes for this image's availability. */
           clone.querySelectorAll("input[type='checkbox'][data-artifact-key]").forEach((cb) => {
             const key = String(cb.dataset.artifactKey || "");
