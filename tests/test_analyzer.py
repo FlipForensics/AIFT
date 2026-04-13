@@ -35,6 +35,9 @@ class AnalyzerTests(unittest.TestCase):
         template = (
             "Priority={{priority_directives}}\n"
             "IOC={{ioc_targets}}\n"
+            "Host={{hostname}}\n"
+            "Domain={{domain}}\n"
+            "IPs={{ips}}\n"
             "Key={{artifact_key}}\n"
             "Artifact={{artifact_name}}\n"
             "Desc={{artifact_description}}\n"
@@ -62,6 +65,7 @@ class AnalyzerTests(unittest.TestCase):
                 "Host={{hostname}}\n"
                 "OS={{os_version}}\n"
                 "Domain={{domain}}\n"
+                "IPs={{ips}}\n"
                 "Findings:\n{{per_artifact_findings}}\n"
             ),
             encoding="utf-8",
@@ -1382,6 +1386,187 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("SummaryContext=Investigate persistence", fake_provider.calls[0]["user_prompt"])
         self.assertIn("### Run/RunOnce Keys (runkeys)", fake_provider.calls[0]["user_prompt"])
 
+    def test_generate_summary_includes_ips_in_prompt(self) -> None:
+        """Summary prompt includes the IPs field from host metadata."""
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            prompts_dir = Path(temp_dir) / "prompts"
+            self._write_prompt_template(prompts_dir)
+
+            fake_provider = FakeProvider(responses=["summary-output"])
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(
+                    case_dir=temp_dir,
+                    config={"ai": {"provider": "local"}},
+                    audit_logger=FakeAuditLogger(),
+                    prompts_dir=prompts_dir,
+                )
+
+                analyzer.generate_summary(
+                    per_artifact_results=[
+                        {
+                            "artifact_key": "runkeys",
+                            "artifact_name": "Run/RunOnce Keys",
+                            "analysis": "Found suspicious entry.",
+                            "model": "fake-model-1",
+                        }
+                    ],
+                    investigation_context="Investigate persistence",
+                    metadata={
+                        "hostname": "WS01",
+                        "os_version": "Windows 10",
+                        "domain": "corp.local",
+                        "ips": "10.0.0.5, 192.168.1.10",
+                    },
+                )
+
+        user_prompt = fake_provider.calls[0]["user_prompt"]
+        self.assertIn("IPs=10.0.0.5, 192.168.1.10", user_prompt)
+        self.assertIn("Host=WS01", user_prompt)
+        self.assertIn("Domain=corp.local", user_prompt)
+
+    def test_generate_summary_defaults_ips_to_unknown(self) -> None:
+        """Summary prompt defaults IPs to Unknown when not in metadata."""
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            prompts_dir = Path(temp_dir) / "prompts"
+            self._write_prompt_template(prompts_dir)
+
+            fake_provider = FakeProvider(responses=["summary-output"])
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(
+                    case_dir=temp_dir,
+                    config={"ai": {"provider": "local"}},
+                    audit_logger=FakeAuditLogger(),
+                    prompts_dir=prompts_dir,
+                )
+
+                analyzer.generate_summary(
+                    per_artifact_results=[],
+                    investigation_context="Test",
+                    metadata={"hostname": "H1"},
+                )
+
+        user_prompt = fake_provider.calls[0]["user_prompt"]
+        self.assertIn("IPs=Unknown", user_prompt)
+
+    def test_prepare_artifact_data_includes_host_metadata(self) -> None:
+        """Artifact prompt includes hostname, domain, and IPs from host metadata."""
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            prompts_dir = temp_path / "prompts"
+            self._write_prompt_template(prompts_dir)
+
+            csv_path = temp_path / "runkeys.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "name", "command", "key"])
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "ts": "2026-01-15T12:00:00+00:00",
+                        "name": "EntryA",
+                        "command": r"C:\Users\Public\tool.exe",
+                        "key": r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    }
+                )
+
+            analyzer = ForensicAnalyzer(
+                artifact_csv_paths={"runkeys": csv_path},
+                prompts_dir=prompts_dir,
+                random_seed=7,
+            )
+            analyzer._host_metadata = {
+                "hostname": "DC01",
+                "domain": "example.local",
+                "ips": "10.1.2.3, 172.16.0.5",
+            }
+            filled_prompt = analyzer._prepare_artifact_data(
+                artifact_key="runkeys",
+                investigation_context="Investigate persistence.",
+            )
+
+        self.assertIn("Host=DC01", filled_prompt)
+        self.assertIn("Domain=example.local", filled_prompt)
+        self.assertIn("IPs=10.1.2.3, 172.16.0.5", filled_prompt)
+
+    def test_prepare_artifact_data_defaults_host_metadata_when_absent(self) -> None:
+        """Artifact prompt defaults hostname/domain/IPs to Unknown without host metadata."""
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            prompts_dir = temp_path / "prompts"
+            self._write_prompt_template(prompts_dir)
+
+            csv_path = temp_path / "runkeys.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "name", "command", "key"])
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "ts": "2026-01-15T12:00:00+00:00",
+                        "name": "EntryA",
+                        "command": r"C:\tool.exe",
+                        "key": r"HKCU\Run",
+                    }
+                )
+
+            analyzer = ForensicAnalyzer(
+                artifact_csv_paths={"runkeys": csv_path},
+                prompts_dir=prompts_dir,
+                random_seed=7,
+            )
+            # No _host_metadata set — getattr falls back to None
+            filled_prompt = analyzer._prepare_artifact_data(
+                artifact_key="runkeys",
+                investigation_context="Test.",
+            )
+
+        self.assertIn("Host=Unknown", filled_prompt)
+        self.assertIn("Domain=Unknown", filled_prompt)
+        self.assertIn("IPs=Unknown", filled_prompt)
+
+    def test_run_full_analysis_passes_host_metadata_to_artifact_prompts(self) -> None:
+        """run_full_analysis stores host metadata so artifact prompts include it."""
+        with TemporaryDirectory(prefix="aift-analyzer-test-") as temp_dir:
+            temp_path = Path(temp_dir)
+            prompts_dir = temp_path / "prompts"
+            self._write_prompt_template(prompts_dir)
+
+            csv_path = temp_path / "runkeys.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["ts", "name", "command", "key"])
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "ts": "2026-01-15T12:00:00+00:00",
+                        "name": "EntryA",
+                        "command": r"C:\tool.exe",
+                        "key": r"HKCU\Run",
+                    }
+                )
+
+            fake_provider = FakeProvider(responses=["analysis-output", "summary-output"])
+            with patch("app.analyzer.core.create_provider", return_value=fake_provider):
+                analyzer = ForensicAnalyzer(
+                    case_dir=temp_dir,
+                    config={"ai": {"provider": "local"}},
+                    audit_logger=FakeAuditLogger(),
+                    artifact_csv_paths={"runkeys": csv_path},
+                    prompts_dir=prompts_dir,
+                    random_seed=7,
+                )
+                analyzer.run_full_analysis(
+                    artifact_keys=["runkeys"],
+                    investigation_context="Investigate persistence.",
+                    metadata={
+                        "hostname": "SRV01",
+                        "domain": "ad.corp",
+                        "ips": "192.168.10.1",
+                    },
+                )
+
+        # First call is the artifact analysis prompt
+        artifact_prompt = fake_provider.calls[0]["user_prompt"]
+        self.assertIn("Host=SRV01", artifact_prompt)
+        self.assertIn("Domain=ad.corp", artifact_prompt)
+        self.assertIn("IPs=192.168.10.1", artifact_prompt)
 
     def test_dedup_does_not_collapse_rows_differing_only_in_eventid(self) -> None:
         """EventID is a semantic field — rows with different EventIDs are distinct events."""

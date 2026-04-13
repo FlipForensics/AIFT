@@ -190,6 +190,46 @@ class TestMultiImageAnalysis:
         first_call_prompt = provider.calls[0]["user_prompt"]
         assert "WS-PC01" in first_call_prompt
 
+    def test_multi_image_host_metadata_in_artifact_prompts(self, tmp_path: Path) -> None:
+        """Per-image host metadata (hostname, domain, IPs) appears in artifact prompts."""
+        provider = FakeProvider(responses=["resp"] * 10)
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.ai_provider = provider
+
+        img1 = _make_image(
+            tmp_path, "img1", "WS01", ["runkeys"],
+            metadata={
+                "hostname": "WS01",
+                "os_version": "Windows 10",
+                "domain": "CORP.LOCAL",
+                "ips": "10.0.0.5",
+            },
+        )
+        img2 = _make_image(
+            tmp_path, "img2", "DC01", ["services"],
+            metadata={
+                "hostname": "DC01",
+                "os_version": "Windows Server 2019",
+                "domain": "CORP.LOCAL",
+                "ips": "10.0.0.1, 10.0.0.2",
+            },
+        )
+
+        analyzer.run_multi_image_analysis(
+            images=[img1, img2],
+            investigation_context="Investigate breach",
+        )
+
+        # First call = img1 artifact prompt, should have img1's metadata
+        img1_prompt = provider.calls[0]["user_prompt"]
+        assert "WS01" in img1_prompt
+        assert "10.0.0.5" in img1_prompt
+
+        # Second call = img2 artifact prompt, should have img2's metadata
+        img2_prompt = provider.calls[1]["user_prompt"]
+        assert "DC01" in img2_prompt
+        assert "10.0.0.1, 10.0.0.2" in img2_prompt
+
 
 class TestProgressCallback:
     """Tests for progress callback invocation."""
@@ -302,6 +342,46 @@ class TestBuildCrossImagePrompt:
         assert "suspicious activity" in result
         assert "lateral movement" in result
 
+    def test_prompt_includes_ips_in_metadata_table(self) -> None:
+        """Cross-image prompt metadata table includes IPs for each image."""
+        images = [
+            {
+                "image_id": "a",
+                "label": "WS01",
+                "metadata": {
+                    "hostname": "WS01",
+                    "os_version": "Win10",
+                    "domain": "CORP",
+                    "ips": "10.0.0.5",
+                },
+            },
+            {
+                "image_id": "b",
+                "label": "DC01",
+                "metadata": {
+                    "hostname": "DC01",
+                    "os_version": "WinSrv2019",
+                    "domain": "CORP",
+                    "ips": "10.0.0.1, 10.0.0.2",
+                },
+            },
+        ]
+        summaries = {
+            "a": {"label": "WS01", "summary": "Clean."},
+            "b": {"label": "DC01", "summary": "Suspicious."},
+        }
+        template = "{{image_metadata_table}}\n{{per_image_summaries}}"
+
+        result = build_cross_image_prompt(
+            template=template,
+            investigation_context="Test",
+            images=images,
+            image_summaries=summaries,
+        )
+
+        assert "10.0.0.5" in result
+        assert "10.0.0.1, 10.0.0.2" in result
+
     def test_prompt_with_empty_summaries(self) -> None:
         """Cross-image prompt handles empty summaries gracefully."""
         result = build_cross_image_prompt(
@@ -353,6 +433,45 @@ class TestBuildImageMetadataTable:
         images = [{"image_id": "z", "label": "L", "metadata": {"os_type": "Linux"}}]
         result = _build_image_metadata_table(images)
         assert "Linux" in result
+
+    def test_ips_column_present_in_header(self) -> None:
+        """Metadata table header includes the IP(s) column."""
+        result = _build_image_metadata_table([])
+        assert "IP(s)" in result
+
+    def test_ips_rendered_from_metadata(self) -> None:
+        """IPs from image metadata appear in the table row."""
+        images = [
+            {
+                "image_id": "a",
+                "label": "WS01",
+                "metadata": {
+                    "hostname": "WS01",
+                    "os_version": "Win10",
+                    "domain": "CORP",
+                    "ips": "10.0.0.5, 192.168.1.10",
+                },
+            }
+        ]
+        result = _build_image_metadata_table(images)
+        assert "10.0.0.5, 192.168.1.10" in result
+
+    def test_ips_defaults_to_unknown(self) -> None:
+        """IPs column defaults to Unknown when not in metadata."""
+        images = [
+            {
+                "image_id": "b",
+                "label": "DC01",
+                "metadata": {"hostname": "DC01", "os_version": "WinSrv"},
+            }
+        ]
+        result = _build_image_metadata_table(images)
+        # The row should contain "Unknown" for the IPs column
+        lines = result.strip().split("\n")
+        data_row = lines[-1]
+        # Hostname and OS are set, so the Unknown must be from IPs (or domain)
+        assert data_row.count("Unknown") >= 1
+        assert "DC01" in data_row
 
 
 class TestBuildPerImageSummariesText:
