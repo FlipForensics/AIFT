@@ -430,6 +430,162 @@ describe("analysis status banner", () => {
   });
 });
 
+// ── upsertAnalysis: summary field support ──────────────────────────────────
+
+describe("upsertAnalysis picks up summary field from per-image summary events", () => {
+  test("artifact_analysis_completed with 'analysis' key populates text", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 1, sequence: 0 });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_completed",
+      artifact_key: "evtx",
+      result: { artifact_key: "evtx", artifact_name: "Event Logs", analysis: "Found lateral movement." },
+      sequence: 1,
+    });
+
+    const entry = A.st.analysis.byKey["evtx"];
+    expect(entry).toBeDefined();
+    expect(entry.text).toBe("Found lateral movement.");
+  });
+
+  test("artifact_analysis_completed with 'result' key populates text", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 1, sequence: 0 });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_completed",
+      artifact_key: "mft",
+      result: { artifact_key: "mft", artifact_name: "MFT", result: "File system anomaly detected." },
+      sequence: 1,
+    });
+
+    const entry = A.st.analysis.byKey["mft"];
+    expect(entry).toBeDefined();
+    expect(entry.text).toBe("File system anomaly detected.");
+  });
+
+  test("artifact_analysis_completed with 'summary' key populates text (per-image summary fix)", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 1, sequence: 0 });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_completed",
+      artifact_key: "summary_img1",
+      result: {
+        artifact_key: "summary_img1",
+        artifact_name: "Summary: Workstation-PC01",
+        image_id: "img1",
+        image_label: "Workstation-PC01",
+        summary: "This system shows evidence of compromise via phishing.",
+      },
+      sequence: 1,
+    });
+
+    const entry = A.st.analysis.byKey["img1::summary_img1"];
+    expect(entry).toBeDefined();
+    expect(entry.text).toBe("This system shows evidence of compromise via phishing.");
+    expect(entry.text).not.toBe("");
+  });
+
+  test("per-image summary card renders text instead of empty placeholder", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 1, sequence: 0 });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_completed",
+      artifact_key: "summary_img2",
+      result: {
+        artifact_key: "summary_img2",
+        artifact_name: "Summary: Server-DC01",
+        image_id: "img2",
+        image_label: "Server-DC01",
+        summary: "No suspicious activity found on this server.",
+      },
+      sequence: 1,
+    });
+
+    A.st.analysis.multiImage = true;
+    A.renderAnalysis();
+
+    if (A.el.analysisList) {
+      const text = A.el.analysisList.textContent;
+      expect(text).toContain("No suspicious activity found on this server.");
+      expect(text).not.toContain("No analysis text returned");
+    }
+  });
+
+  test("summary field is not used when analysis field is present", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 1, sequence: 0 });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_completed",
+      artifact_key: "evtx",
+      result: {
+        artifact_key: "evtx",
+        artifact_name: "Event Logs",
+        analysis: "Primary analysis text.",
+        summary: "Should not be used.",
+      },
+      sequence: 1,
+    });
+
+    const entry = A.st.analysis.byKey["evtx"];
+    expect(entry.text).toBe("Primary analysis text.");
+  });
+
+  test("empty analysis and result fields fall through to summary", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 1, sequence: 0 });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_completed",
+      artifact_key: "summary_img3",
+      result: {
+        artifact_key: "summary_img3",
+        artifact_name: "Summary: Image 3",
+        image_id: "img3",
+        image_label: "Image 3",
+        analysis: "",
+        result: "",
+        summary: "Fallback summary text.",
+      },
+      sequence: 1,
+    });
+
+    const entry = A.st.analysis.byKey["img3::summary_img3"];
+    expect(entry).toBeDefined();
+    expect(entry.text).toBe("Fallback summary text.");
+  });
+
+  test("all three fields empty produces empty text", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 1, sequence: 0 });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_completed",
+      artifact_key: "empty_test",
+      result: { artifact_key: "empty_test", artifact_name: "Empty" },
+      sequence: 1,
+    });
+
+    const entry = A.st.analysis.byKey["empty_test"];
+    expect(entry).toBeDefined();
+    expect(entry.text).toBe("");
+  });
+
+  test("per-image summary finding renders in findings section", () => {
+    A._onAnalysisEvent({ type: "analysis_started", analysis_artifact_count: 1, sequence: 0 });
+    A._onAnalysisEvent({
+      type: "artifact_analysis_completed",
+      artifact_key: "summary_imgA",
+      result: {
+        artifact_key: "summary_imgA",
+        artifact_name: "Summary: Laptop-01",
+        image_id: "imgA",
+        image_label: "Laptop-01",
+        summary: "Malware indicators found in prefetch data.",
+      },
+      sequence: 1,
+    });
+
+    A.renderFindings();
+
+    if (A.el.findings) {
+      const text = A.el.findings.textContent;
+      expect(text).toContain("Malware indicators found in prefetch data.");
+      expect(text).not.toContain("No analysis text returned");
+    }
+  });
+});
+
 // ── Analysis navigation prerequisites ───────────────────────────────────────
 
 describe("analysis navigation prerequisites", () => {

@@ -492,6 +492,121 @@ class TestCrossImageCorrelationFailure:
         assert "AI service unavailable" in result["cross_image_summary"]
 
 
+class TestPerImageSummaryProgressPayload:
+    """Regression test: per-image summary completion events must carry the
+    ``summary`` key so the frontend can display the text.
+
+    Before the fix, the frontend ``upsertAnalysis`` only checked ``analysis``
+    and ``result`` keys, but per-image summary events used ``summary``.
+    """
+
+    def test_summary_complete_event_includes_summary_key(self, tmp_path: Path) -> None:
+        """The 'complete' progress event for a per-image summary carries a non-empty summary."""
+        provider = FakeProvider(responses=[
+            "artifact-analysis-1",
+            "per-image-summary-text",
+        ])
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.ai_provider = provider
+
+        image = _make_image(tmp_path, "img1", "WS-PC01", ["runkeys"])
+
+        events: list[tuple[str, str, dict]] = []
+
+        def progress_cb(key: str, status: str, payload: dict) -> None:
+            """Collect progress events."""
+            events.append((key, status, payload))
+
+        analyzer.run_multi_image_analysis(
+            images=[image],
+            investigation_context="Test summary payload",
+            progress_callback=progress_cb,
+        )
+
+        summary_complete = [
+            e for e in events
+            if e[0].startswith("summary_") and e[1] == "complete"
+        ]
+        assert len(summary_complete) == 1, (
+            f"Expected exactly 1 summary complete event, got {len(summary_complete)}"
+        )
+
+        _key, _status, payload = summary_complete[0]
+        assert "summary" in payload, (
+            f"Summary complete event payload missing 'summary' key: {payload}"
+        )
+        assert payload["summary"] != "", "Summary text should not be empty"
+        assert payload["summary"] == "per-image-summary-text"
+
+    def test_summary_complete_event_includes_image_context(self, tmp_path: Path) -> None:
+        """Summary completion events include image_id, image_label, and artifact_name."""
+        provider = FakeProvider(responses=["resp"] * 10)
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.ai_provider = provider
+
+        image = _make_image(tmp_path, "img1", "Server-DC01", ["services"])
+
+        events: list[tuple[str, str, dict]] = []
+
+        def progress_cb(key: str, status: str, payload: dict) -> None:
+            events.append((key, status, payload))
+
+        analyzer.run_multi_image_analysis(
+            images=[image],
+            investigation_context="Test",
+            progress_callback=progress_cb,
+        )
+
+        summary_complete = [
+            e for e in events
+            if e[0].startswith("summary_") and e[1] == "complete"
+        ]
+        assert len(summary_complete) == 1
+
+        _key, _status, payload = summary_complete[0]
+        assert payload.get("image_id") == "img1"
+        assert payload.get("image_label") == "Server-DC01"
+        assert "Summary:" in payload.get("artifact_name", ""), (
+            f"artifact_name should contain 'Summary:', got: {payload.get('artifact_name')}"
+        )
+
+    def test_multi_image_summary_events_carry_correct_image_ids(self, tmp_path: Path) -> None:
+        """With two images, each summary completion event has the correct image_id."""
+        provider = FakeProvider(responses=["resp"] * 10)
+        analyzer = _build_analyzer(tmp_path)
+        analyzer.ai_provider = provider
+
+        img1 = _make_image(tmp_path, "img1", "WS01", ["runkeys"])
+        img2 = _make_image(tmp_path, "img2", "SRV01", ["services"])
+
+        events: list[tuple[str, str, dict]] = []
+
+        def progress_cb(key: str, status: str, payload: dict) -> None:
+            events.append((key, status, payload))
+
+        analyzer.run_multi_image_analysis(
+            images=[img1, img2],
+            investigation_context="Test",
+            progress_callback=progress_cb,
+        )
+
+        summary_complete = [
+            e for e in events
+            if e[0].startswith("summary_") and e[1] == "complete"
+        ]
+        assert len(summary_complete) == 2
+
+        image_ids = {e[2].get("image_id") for e in summary_complete}
+        assert image_ids == {"img1", "img2"}, (
+            f"Expected summary events for img1 and img2, got {image_ids}"
+        )
+
+        for _key, _status, payload in summary_complete:
+            assert payload.get("summary", "") != "", (
+                f"Summary text empty for image {payload.get('image_id')}"
+            )
+
+
 class TestBuildCrossImagePromptEdgeCases:
     """Additional edge case tests for build_cross_image_prompt."""
 
