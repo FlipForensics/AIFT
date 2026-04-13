@@ -2,11 +2,11 @@
   <img src="images/AIFT Logo - White Text.png" alt="AIFT Logo" width="400">
 </p>
 
-# AIFT - AI Forensic Triage V1.4.1
+# AIFT - AI Forensic Triage V1.5
 
 **Automated Windows and Linux forensic triage, powered by AI.**
 
-AIFT turns hours of manual artifact analysis into minutes. Upload a disk image, select what to parse, and get an AI-generated forensic report - all from your browser, all running locally on your machine. Supports both Windows and Linux disk images.
+AIFT turns hours of manual artifact analysis into minutes. Upload one or more disk images, select what to parse, and get an AI-generated forensic report - all from your browser, all running locally on your machine. Supports both Windows and Linux disk images, and can correlate findings across multiple systems in a single case.
 
 Built for incident responders who need fast answers, and simple enough for non-forensic team members to operate.
 
@@ -21,9 +21,9 @@ Upload Evidence → Select Artifacts → Parse → AI Analysis → HTML Report
 ```
 
 1. **Run the app** - a local web interface opens in your browser.
-2. **Upload evidence** - drag-and-drop an E01, VMDK, VHD, raw image, or archive, or point to a local path for large images.
-3. **Pick artifacts** - choose from 25+ Windows or 19 Linux forensic artifacts, which will be parsed by [Dissect](https://github.com/fox-it/dissect).
-4. **Get results** - AI analyzes each artifact for indicators of compromise, correlates findings across artifacts, and generates a self-contained HTML report with evidence hashes and full audit trail.
+2. **Upload evidence** - drag-and-drop an E01, VMDK, VHD, raw image, or archive, or point to a local path for large images. Add multiple images to a single case for cross-system analysis.
+3. **Pick artifacts** - choose from 25+ Windows or 19 Linux forensic artifacts per image, which will be parsed by [Dissect](https://github.com/fox-it/dissect).
+4. **Get results** - AI analyzes each artifact for indicators of compromise, correlates findings across artifacts and across systems, and generates a self-contained HTML report with evidence hashes and full audit trail.
 
 No Elasticsearch. No Docker. No database. One Python script, one command.
 
@@ -85,11 +85,12 @@ Click **Test Connection** to verify everything works. That's it - you're ready t
 ### 4. Analyze your first image
 
 - Upload evidence by dragging it into the upload area (E01, VMDK, VHD, raw images, ZIP, 7z, tar), or switch to **Path Mode** and enter the file path for large images or directories.
-- AIFT opens the image or Triage Package.
-- Select artifacts manually or click **Recommended**. You have the option to save your selected artifacts as a profile, and load them in future cases.
-- Click **Parse**. Progress is shown in real time.
+- To analyze multiple systems, click **Add Image** to add more evidence sources to the same case. Each image is labeled and processed independently.
+- AIFT opens each image or Triage Package.
+- Select artifacts manually or click **Recommended**. Each image has its own artifact tab with OS-specific options. Use **Apply to All** to replicate a selection across all images. You can also save and load artifact profiles.
+- Click **Parse**. Per-image progress is shown in real time.
 - Enter your investigation context (e.g., "Suspected unauthorized access between Jan 1-15, 2026. Look for new accounts and remote access tools. IOC identified: abc.exe").
-- Click **Analyze**. Per-artifact findings stream in as the AI completes each one, followed by a cross-artifact summary.
+- Click **Analyze**. Per-artifact findings stream in for each image, followed by per-image summaries and (for multi-image cases) a cross-system correlation identifying lateral movement, shared IOCs, and incident timeline across all systems.
 - Download the HTML report and/or the raw CSV data.
 - **Chat with the AI** about the results - ask follow-up questions, request correlations, or drill into specific artifacts without re-running the analysis.
 
@@ -198,11 +199,29 @@ For images over 2 GB, use **Path Mode** instead of uploading - enter the local f
 
 ---
 
+## Multi-Image Analysis
+
+AIFT supports analyzing multiple evidence sources in a single case - for example, a workstation, a server, and a domain controller from the same incident.
+
+- **Add images** to a case using the **Add Image** button on the evidence page. Each image gets its own label, metadata summary, and hash verification.
+- **Per-image artifact selection** with tabbed UI. Select different artifacts for each image based on OS type and investigative focus. Use **Apply Recommended to All** or **Apply Current Selection to All** to bulk-configure artifacts across images.
+- **Parallel parsing** with independent per-image progress tracking via SSE.
+- **Three-phase AI analysis:**
+  1. Per-artifact analysis for each image (same pipeline as single-image).
+  2. Per-image cross-artifact summary.
+  3. **Cross-system correlation** - the AI identifies lateral movement paths, shared accounts, network connections between systems, a multi-system timeline, patient zero assessment, and shared IOCs across all images.
+- **Reports** include per-image evidence summaries with individual hash verification, per-image findings sections, and a dedicated cross-system analysis panel.
+- **Chat** context includes findings from all images for cross-system follow-up questions.
+- **CSV downloads** are organized into subdirectories by image label.
+
+Single-image cases work exactly as before - the multi-image features activate only when multiple images are added.
+
+---
+
 ## Roadmap
 
 Features under active development:
 
-- **Multi-Image Support**: Analyze multiple evidence sources in a single case (e.g., workstation + server + domain controller). Includes cross-system correlation to identify lateral movement and shared IOCs.
 - **Mobile Support**: iOS and Android device analysis using [iLEAPP](https://github.com/abrignoni/iLEAPP) and [ALEAPP](https://github.com/abrignoni/ALEAPP). Covers call logs, SMS, browser history, installed apps, location data, and more.
 
 ---
@@ -224,13 +243,14 @@ AIFT is built with forensic defensibility in mind:
 
 AIFT generates a **self-contained HTML report** - all CSS inlined, no external dependencies. Open it in any browser, print it, or archive it. The report includes:
 
-- Evidence metadata and hash verification
+- Evidence metadata and hash verification (per-image in multi-image cases)
 - Executive summary with confidence assessment
 - Per-artifact findings with cited evidence
+- Cross-system analysis panel (multi-image cases)
 - Investigation gaps and recommended next steps
 - Complete audit trail
 
-Parsed artifact data is also available as a downloadable CSV bundle for further analysis.
+Parsed artifact data is also available as a downloadable CSV bundle for further analysis (organized by image label in multi-image cases).
 
 ---
 
