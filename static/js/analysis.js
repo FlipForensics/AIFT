@@ -283,7 +283,7 @@
   /** Record a completed artifact analysis result. */
   function upsertAnalysis(r) {
     const { key, name, model, imageId, imageLabel } = extractAnalysisIdentifiers(r);
-    const rawText = String(r.analysis || r.result || "");
+    const rawText = String(r.analysis || r.result || r.summary || "");
     const text = A.stripLeadingReasoningBlocks(rawText) || rawText;
     st.analysis.byKey[key] = {
       key, name, text, model, imageId, imageLabel,
