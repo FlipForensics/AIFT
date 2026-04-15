@@ -4,9 +4,8 @@ Exposes a Flask Blueprint that allows external tools to trigger, monitor,
 cancel, and retrieve results of automated analysis runs via JSON HTTP.
 
 Run state is held in a module-level dictionary protected by a reentrant
-lock.  Only one automation run may execute at a time; additional requests
-receive a 409 Conflict response.  Completed/failed runs are evicted from
-memory after :data:`RUN_TTL_SECONDS` (1 hour).
+lock.  Multiple runs may execute concurrently.  Completed/failed runs are
+evicted from memory after :data:`RUN_TTL_SECONDS` (1 hour).
 
 Attributes:
     AUTOMATION_RUNS: In-memory dict mapping run IDs to state dicts.
@@ -75,21 +74,6 @@ def _cleanup_expired_runs() -> None:
         ]
         for rid in expired:
             AUTOMATION_RUNS.pop(rid, None)
-
-
-def _has_running_run() -> bool:
-    """Check whether an automation run is currently in progress.
-
-    Thread-safe: acquires :data:`RUNS_LOCK`.
-
-    Returns:
-        ``True`` if any run has status ``"running"`` or ``"started"``.
-    """
-    with RUNS_LOCK:
-        return any(
-            run.get("status") in ("running", "started")
-            for run in AUTOMATION_RUNS.values()
-        )
 
 
 def _get_run(run_id: str) -> dict[str, Any] | None:
@@ -306,13 +290,6 @@ def start_run() -> tuple[Response, int]:
     params, error_msg = _validate_run_request(payload)
     if params is None:
         return error_response(error_msg, 400)
-
-    if _has_running_run():
-        return error_response(
-            "An automation run is already in progress. "
-            "Only one concurrent run is allowed.",
-            409,
-        )
 
     run_id = str(uuid4())
     case_id = ""  # Populated by the background thread once the case is created.

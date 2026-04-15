@@ -211,11 +211,14 @@ class TestStartRunSuccess(AutomationRoutesTestBase):
         self.assertIn(run_id, automation_mod.AUTOMATION_RUNS)
 
 
-class TestConcurrencyLimit(AutomationRoutesTestBase):
-    """Tests for the single-concurrent-run limit."""
+class TestConcurrentRuns(AutomationRoutesTestBase):
+    """Tests that multiple concurrent runs are allowed."""
 
-    def test_second_run_returns_409(self) -> None:
-        """Starting a second run while one is active returns 409."""
+    @patch("app.routes.automation.run_automation")
+    def test_second_run_allowed_while_first_running(self, mock_run: MagicMock) -> None:
+        """Starting a second run while one is active returns 202."""
+        mock_run.return_value = _make_successful_result()
+
         # Manually inject a running run.
         with automation_mod.RUNS_LOCK:
             automation_mod.AUTOMATION_RUNS["fake-run"] = {
@@ -233,9 +236,7 @@ class TestConcurrencyLimit(AutomationRoutesTestBase):
             "/api/automation/run",
             {"evidence_path": "/other/path.E01", "prompt": "test"},
         )
-        self.assertEqual(resp.status_code, 409)
-        body = resp.get_json()
-        self.assertIn("already in progress", body["error"])
+        self.assertEqual(resp.status_code, 202)
 
 
 class TestGetRunStatus(AutomationRoutesTestBase):
