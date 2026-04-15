@@ -107,6 +107,9 @@ def _register_csrf_protection(app: Flask) -> None:
             return None
         if request.path == "/api/csrf-token":
             return None
+        # Automation API is for programmatic access; no CSRF required.
+        if request.path.startswith("/api/automation/"):
+            return None
         token = request.headers.get(CSRF_HEADER, "")
         if not secrets.compare_digest(token, app.config["CSRF_TOKEN"]):
             return jsonify({"error": "CSRF token missing or invalid."}), 403

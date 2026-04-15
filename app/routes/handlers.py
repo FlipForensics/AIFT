@@ -88,6 +88,7 @@ from .evidence import evidence_bp
 from .artifacts import artifact_bp
 from .analysis import analysis_bp
 from .chat import chat_bp
+from .automation import automation_bp
 from .images import images_bp
 
 __all__ = ["register_routes"]
@@ -432,3 +433,4 @@ def register_routes(app: Flask) -> None:
     app.register_blueprint(analysis_bp)
     app.register_blueprint(chat_bp)
     app.register_blueprint(images_bp)
+    app.register_blueprint(automation_bp)
