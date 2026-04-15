@@ -127,27 +127,28 @@ def _deduplicate_segments(paths: list[Path]) -> list[Path]:
 
 
 def discover_evidence(source_path: str | Path) -> list[Path]:
-    """Discover all forensic evidence files at the given path.
+    """Discover all forensic evidence targets at the given path.
 
     If *source_path* is a file, validate it has a supported extension and
     return it in a single-element list.  If *source_path* is a directory,
-    recursively walk it and collect all files whose extension is in
-    ``DISSECT_EVIDENCE_EXTENSIONS``.
+    scan its **direct children only** (no recursive walk):
+
+    - Child **files** with a supported extension are included as evidence.
+    - Child **directories** are included as-is — Dissect can open certain
+      directory structures (e.g. ``acquire`` tar extractions) as targets.
+    - Hidden entries and common system files are skipped.
 
     Segment handling: when multiple segments of the same split image are
     found (e.g. ``image.E01``, ``image.E02``), only the first segment
     (lowest numbered) is included.
 
-    Archive files are included as-is for later extraction during intake.
-
-    Hidden files and common system files are skipped.
-
     Args:
         source_path: Path to a single evidence file or a directory to scan.
 
     Returns:
-        Sorted list of unique Path objects pointing to viable evidence files.
-        Empty list if no evidence found.
+        Sorted list of unique Path objects, each pointing to a viable
+        evidence file or a subdirectory that should be opened as a Dissect
+        target.  Empty list if no evidence found.
 
     Raises:
         FileNotFoundError: If source_path does not exist.
@@ -166,24 +167,22 @@ def discover_evidence(source_path: str | Path) -> list[Path]:
             )
         return [resolved]
 
-    # Directory scan.
-    candidates: list[Path] = []
-    for child in resolved.rglob("*"):
-        if not child.is_file():
-            continue
+    # Shallow directory scan — direct children only.
+    file_candidates: list[Path] = []
+    dir_candidates: list[Path] = []
+
+    for child in resolved.iterdir():
         if _is_hidden_or_skipped(child):
             continue
-        # Also skip files inside hidden/skipped directories.
-        if any(_is_hidden_or_skipped(part) for part in child.relative_to(resolved).parents
-               if str(part) != "."):
-            continue
-        if _has_supported_extension(child):
-            candidates.append(child)
+        if child.is_dir():
+            dir_candidates.append(child)
+        elif child.is_file() and _has_supported_extension(child):
+            file_candidates.append(child)
 
-    deduplicated = _deduplicate_segments(candidates)
+    deduplicated_files = _deduplicate_segments(file_candidates)
 
-    # Sort by string representation for deterministic ordering.
-    deduplicated.sort(key=lambda p: str(p))
+    result = deduplicated_files + dir_candidates
+    result.sort(key=lambda p: str(p))
 
-    LOGGER.info("Discovered %d evidence file(s) in %s", len(deduplicated), resolved)
-    return deduplicated
+    LOGGER.info("Discovered %d evidence target(s) in %s", len(result), resolved)
+    return result
