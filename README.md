@@ -56,7 +56,7 @@ A [publicly available test image](https://cfreds.nist.gov/all/BenjaminDonnachie/
 ### 1. Install
 
 ```bash
-git clone https://github.com/<your-repo>/aift.git
+git clone https://github.com/FlipForensics/AIFT.git
 cd aift
 pip install -r requirements.txt
 ```
@@ -222,6 +222,7 @@ Single-image cases work exactly as before - the multi-image features activate on
 
 Features under active development:
 
+- **CLI and API Support**: Support for a headless CLI mode and the usage of API's for automations. 
 - **Mobile Support**: iOS and Android device analysis using [iLEAPP](https://github.com/abrignoni/iLEAPP) and [ALEAPP](https://github.com/abrignoni/ALEAPP). Covers call logs, SMS, browser history, installed apps, location data, and more.
 
 ---
